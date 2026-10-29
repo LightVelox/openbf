@@ -241,8 +241,13 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/tactic/tests.rs` 1474 — position-table/Tactician regressions: generation/reachability, candidate scoring, reservations/spacing, cover cycle, arrivals/deadlines and friend/grenade safety (TPOS/TPOSR); cases and constants live in the tests.
 - `core/src/ai/team.rs` 557 — derived think-window unit grid, follow spacing and team Cover/Flank roles · `UnitGrid`, `Sim::units_within`, `follow_ease`, `board`, `flank_cap`; shared perception stays in `perception::tell`. Grid lifetime/order, role rules and constants are specified in the header and `analysis/bot-design.md` 4.1/4.3/6.2; derived grid is not hashed.
 - `core/src/ai/team/tests.rs` 471 — unit-grid equivalence/lifetime, follow spacing and Cover/Flank role regressions, including diamond-route behavior.
+<<<<<<< HEAD
 - `core/src/ai/behave.rs` 76 — foot-bot behavior facade, shared `Tick`, and the `think` / `lost_jump` exports; see `analysis/bot-design.md` 3.
 - `core/src/ai/behave/brain.rs` 944 — foot-bot tick priority chain, next-think call delivery and explicit human boarding over retained commands, valid boarding maintenance, guard goal, failed-walk recovery and hub arrival; hands one aim request to the gunner and one move request to the mover, writing no sticks.
+=======
+- `core/src/ai/behave.rs` 77 — foot-bot behavior facade, shared `Tick`, and the `think` / `lost_jump` exports; see `analysis/bot-design.md` 3.
+- `core/src/ai/behave/brain.rs` 946 — foot-bot tick priority chain, next-think call delivery and explicit human boarding over retained commands, valid boarding maintenance, guard goal, failed-walk recovery and hub arrival; hands one aim request to the gunner and one move request to the mover, writing no sticks.
+>>>>>>> e2fe8b2a (Follow-up to PR #64: a seen droid goes through the sniper distance table)
 - `core/src/ai/behave/position.rs` 590 — fight and hold positions, hit reactions, grenade escape and lost-bot jump probes.
 - `core/src/ai/behave/position/tests.rs` 1153 — the 24 behavior regressions spanning tick dispatch, fight positions, reactions, grenades and return to the level.
 - `core/src/ai/abilities.rs` 177 — pure officer support, remote-droid and auto-turret (the BF2 cluster rule) selection through secondary fire and switch inputs · `ability_input`.
@@ -649,10 +654,17 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `game/src/roster/mines.rs` 15 — mine entity and trigger/expiry/destroyed explosion resolution through baked class chains.
 - `core/src/remote.rs` 465 — the remote droid's class data, launcher, destruct (salvo / burst), flight step, drain and replay state · DroidClass, RemoteWeapon, Destruct, Salvo, Droid, StrikeRun; `analysis/re-remote-droid.md`.
 - `core/src/remote/tests.rs` 183 — droid class parsing, hover, steering, drain and salvo geometry tests.
+<<<<<<< HEAD
 - `core/src/sim/remotes.rs` 641 — droid launch, control routing and hand-back (exit or a weapon switch forward), flight over the world, blaster, destruct, damage, salvo runs and the bot's droid pad; `free_shots`, the ownerless-gun bolts the auto-turret fires too, and `is_item_gun`, which keeps their draw off the owner's hand.
 - `core/src/sim/remotes/tests.rs` 1043 — remote droid control, expiry, combat, destruct, bot, weapon-switch hand-back, bots shooting droids (and not friendly, hidden, lost or destroyed ones; seated gunners), yaw wrap, shared item weapons and replay regression tests.
 - `game/src/roster/remotes.rs` 163 — the remote weapon's droid, blaster and destruct (salvo shell or burst) resolution through baked class chains.
 - `core/src/autoturret.rs` 288 — the BF2 sniper's portable auto-turret: class data with the portableturret constructor defaults, fall / land / bounce, lifetime, the hover-stick aim turn and replay state · TurretBody, TurretClass, Turret, TurretEnd, Aim; `analysis/re-portable-turret.md`.
+=======
+- `core/src/sim/remotes.rs` 646 — droid launch, control routing and hand-back (exit or a weapon switch forward), flight over the world, blaster, destruct, damage, salvo runs and the bot's droid pad; `free_shots`, the ownerless-gun bolts the auto-turret fires too, and `is_item_gun`, which keeps their draw off the owner's hand.
+- `core/src/sim/remotes/tests.rs` 1080 — remote droid control, expiry, combat, destruct, bot, weapon-switch hand-back, bots shooting droids (and not friendly, hidden, lost or destroyed ones; seated gunners), yaw wrap, shared item weapons and replay regression tests.
+- `game/src/roster/remotes.rs` 166 — the remote weapon's droid, blaster and destruct (salvo shell or burst) resolution through baked class chains.
+- `core/src/autoturret.rs` 304 — the BF2 sniper's portable auto-turret: class data with the portableturret constructor defaults, fall / land / bounce, lifetime, the hover-stick aim turn and replay state · TurretBody, TurretClass, Turret, TurretEnd, Aim; `analysis/re-portable-turret.md`.
+>>>>>>> e2fe8b2a (Follow-up to PR #64: a seen droid goes through the sniper distance table)
 - `core/src/autoturret/tests.rs` 99 — turret class parsing, lifetime, landing / bounce and turn-law tests.
 - `core/src/sim/turrets.rs` 268 — turret throw and MaxItems replacement, fall over the world, the stationary controller's target choice, aim and fire, and its end and explosion.
 - `core/src/sim/turrets/tests.rs` 434 — auto-turret deploy, range, kill credit, BuildingScale damage, expiry, replacement, the bot cluster rule, a long bot fight and replay regression tests.

@@ -115,7 +115,8 @@ pub(super) fn track_error(sim: &Sim, st: &mut AiState, skill: &crate::skill::Ski
 
 /// The AI sniper distance table's spread for this tick
 /// ([`AiState::dispersion`]), written on every tick of a bot on foot.
-pub(super) fn range_table(tk: &Tick, st: &mut AiState, enemy: Option<&Unit>) {
+/// `seen` is the point of the seen target (a soldier or a droid).
+pub(super) fn range_table(tk: &Tick, st: &mut AiState, seen: Option<Vec3>) {
     let Tick { eye, wc, skill, .. } = *tk;
     // D9 (LEAD ADDENDUM 4b): the AI SNIPER DISTANCE TABLE. `think` runs for
     // AI units only, so the PS2's "fire point owner index < 0" is given; the
@@ -124,10 +125,9 @@ pub(super) fn range_table(tk: &Tick, st: &mut AiState, enemy: Option<&Unit>) {
     // presses FIRE, so a remembered one could not spend the value anyway.
     // Written every tick, not every think: the PS2 asks its getter at the
     // shot, from the range at that moment. `re-ai-sniper.md` §2.
-    st.dispersion = enemy.and_then(|e| {
+    st.dispersion = seen.and_then(|p| {
         wc.ai_distance_table().then(|| {
-            crate::weapon::ai_sniper_yaw((e.capsule().center() - eye).length_squared())
-                * skill.dispersion_mult
+            crate::weapon::ai_sniper_yaw((p - eye).length_squared()) * skill.dispersion_mult
         })
     });
 }

@@ -1047,3 +1047,34 @@ fn a_seated_gunner_takes_a_droid_without_the_weapon_test() {
     assert!(sim.seat_unit(bot, v, 1));
     assert!(sees(&sim), "a seated unit is not asked the weapon choice");
 }
+
+#[test]
+fn a_seen_droid_gets_the_sniper_distance_spread() {
+    // A scoped single-shot rifle with no authored spread still gets the
+    // distance table's spread against a seen droid, as against a soldier.
+    let (mut sim, _, _) = setup(true);
+    sim.ground_rules = crate::soldier::GroundRules::Bf2;
+    launch(&mut sim);
+    sim.droids[0].health = f32::MAX;
+    let mut rifle = WeaponClass::bf1_rifle();
+    rifle.trigger_single = true;
+    rifle.zoom_max = 8.0;
+    rifle.yaw_spread = 0.0;
+    assert!(rifle.ai_distance_table());
+    let weapon = sim.add_weapon_class(rifle);
+    let bot = droid_watcher(&mut sim, Some(weapon));
+    until_droid_target(&mut sim, bot);
+    let u = sim.unit(bot).unwrap();
+    let c =
+        u.ai.contacts
+            .iter()
+            .flatten()
+            .find(|c| c.handle.droid().is_some());
+    assert!(c.is_some_and(|c| c.seen_now), "the droid is not seen");
+    let d = sim.droids[0].pos.distance_squared(u.soldier.pos);
+    assert!(
+        u.ai.dispersion.is_some_and(|s| s > 0.0),
+        "no distance spread against a seen droid {d:.0} m^2 away: {:?}",
+        u.ai.dispersion
+    );
+}

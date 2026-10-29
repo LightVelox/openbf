@@ -311,7 +311,10 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         skill,
     };
     // D9: the AI sniper distance table's spread, every tick (the gunner's).
-    gunner_foot::range_table(&tk, st, enemy);
+    let seen_at = enemy
+        .map(|e| e.capsule().center())
+        .or(droid.map(|(d, _)| d.pos));
+    gunner_foot::range_table(&tk, st, seen_at);
     // Card GRAI: the weapon for this target, once a think (the gunner's).
     if thinking {
         match droid {
