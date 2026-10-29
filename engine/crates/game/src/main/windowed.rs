@@ -403,10 +403,8 @@ struct App {
     /// The bits pressed since the last frame read them: a tap that is let
     /// go inside one frame still counts.
     keys_tapped: u32,
-    /// Latest window-space pointer location for shell hit-testing.
-    mouse_position: Option<[f64; 2]>,
-    /// A left click waiting for the next shell frame.
-    mouse_shell_click: bool,
+    /// The shell pointer: position, fresh motion and a waiting click.
+    shell_pointer: ui::cursor::Pointer,
     kbm: game::kbm::Kbm,
     /// The PS2 shell's front screens (`None` until the shell first draws).
     front: Option<FrontShell>,
@@ -618,8 +616,7 @@ impl App {
             active_pad: input::ActivePad::default(),
             keys_held: 0,
             keys_tapped: 0,
-            mouse_position: None,
-            mouse_shell_click: false,
+            shell_pointer: ui::cursor::Pointer::default(),
             kbm,
             front: None,
             sprint_latch: input::SprintLatch::default(),

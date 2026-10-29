@@ -24,18 +24,18 @@ impl App {
         self.kbm.window_event(event, battle, can_grab);
         match event {
             WindowEvent::CursorMoved { position, .. } => {
-                self.mouse_position = Some([position.x, position.y]);
+                self.shell_pointer
+                    .moved_to([position.x as f32, position.y as f32]);
             }
             WindowEvent::MouseInput {
                 button: winit::event::MouseButton::Left,
                 state: winit::event::ElementState::Pressed,
                 ..
-            } if matches!(self.screen, Screen::Shell) => self.mouse_shell_click = true,
+            } if matches!(self.screen, Screen::Shell) => self.shell_pointer.click(),
             WindowEvent::Focused(false) => {
                 self.kbm.release_keys();
                 self.release_mouse();
-                self.mouse_position = None;
-                self.mouse_shell_click = false;
+                self.shell_pointer.clear();
                 if let Some(w) = &self.window {
                     w.set_cursor_visible(true);
                 }

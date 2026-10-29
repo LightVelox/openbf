@@ -482,9 +482,11 @@ impl App {
                     .ok();
             }
         }
-        let click = std::mem::take(&mut self.mouse_shell_click);
-        if let (Some(point), Some((w, h)), Some(view)) = (
-            self.mouse_position.map(|p| [p[0] as f32, p[1] as f32]),
+        // Hover acts only on fresh pointer motion or a click (`Pointer`).
+        let pointer = self.shell_pointer.take_frame();
+        let click = pointer.is_some_and(|(_, c)| c);
+        if let (Some((point, _)), Some((w, h)), Some(view)) = (
+            pointer,
             self.renderer.as_ref().map(|r| r.size()),
             front.view.as_ref(),
         ) {
@@ -511,10 +513,9 @@ impl App {
                 l1: edges & game::kbm::MENU_L1 != 0,
                 r1: edges & game::kbm::MENU_R1 != 0,
             };
-            if let (Some(point), Some((w, h))) = (
-                self.mouse_position.map(|p| [p[0] as f32, p[1] as f32]),
-                self.renderer.as_ref().map(|r| r.size()),
-            ) {
+            if let (Some((point, _)), Some((w, h))) =
+                (pointer, self.renderer.as_ref().map(|r| r.size()))
+            {
                 if let Some(target) = front
                     .view
                     .as_ref()

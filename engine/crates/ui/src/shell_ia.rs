@@ -115,10 +115,10 @@ pub fn pointer_target(
     let y = point[1] / (size[1] / 448.0);
     match ia.page {
         Page::Missions => {
-            if x >= STACK_X[0] && x <= STACK_X[1] {
-                for k in 0..COMMANDS.len() {
+            if (STACK_X[0]..=STACK_X[1]).contains(&x) {
+                for (k, &command) in COMMANDS.iter().enumerate() {
                     let y0 = STACK_TOP + STACK_PITCH * k as f32;
-                    if y >= y0 && y <= y0 + STACK_ROW && ia.command_live(COMMANDS[k]) {
+                    if (y0..=y0 + STACK_ROW).contains(&y) && ia.command_live(command) {
                         return Some(crate::shell::PointerTarget::Command(k));
                     }
                 }
