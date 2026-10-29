@@ -212,12 +212,17 @@ impl Chunks {
         }
     }
 
-    pub(super) fn draws(&self, assets: &mut dyn FxAssets, out: &mut Vec<render::ParticleDraw>) {
+    pub(super) fn draws(
+        &self,
+        era: super::Era,
+        assets: &mut dyn FxAssets,
+        out: &mut Vec<render::ParticleDraw>,
+    ) {
         for p in &self.live {
             if let Some(model) = assets.model(&p.spec.model.to_ascii_lowercase()) {
                 let m = Mat4::from_rotation_translation(p.rot, p.pos)
                     * Mat4::from_translation(-p.spec.centre);
-                model.draws(m, [255; 4], p.pos, false, out);
+                model.draws(m, [255; 4], p.pos, false, era, out);
             }
         }
     }

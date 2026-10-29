@@ -505,6 +505,7 @@ impl LiveEffect {
                                 draw::bytes(p, terms.alpha(p.idx)),
                                 self.frame.pos,
                                 em.geometry.blend == manifest::FxBlend::Additive,
+                                era,
                                 out,
                             );
                         }
@@ -570,7 +571,7 @@ impl FxAssets for Lookup<'_> {
         };
         let m = cpu.map(|cpu| {
             let mut parts = Vec::new();
-            for (start, count, material, _, _) in &cpu.submeshes {
+            for (start, count, material, _, flags) in &cpu.submeshes {
                 let tex = sheet(
                     self.r,
                     &self.lib.texture_dirs,
@@ -587,7 +588,7 @@ impl FxAssets for Lookup<'_> {
                         )
                     })
                     .collect();
-                parts.push((tex, tris));
+                parts.push((tex, tris, *flags));
             }
             Arc::new(draw::EffectModel { parts })
         });
@@ -919,7 +920,7 @@ impl Fx {
             for e in &self.live {
                 e.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
             }
-            self.chunks.draws(&mut assets, &mut out);
+            self.chunks.draws(lib.era, &mut assets, &mut out);
             for attached in &self.attached {
                 if let Some(effect) = &attached.live {
                     effect.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
@@ -1371,7 +1372,7 @@ mod tests {
             }
             fn model(&mut self, _: &str) -> Option<Arc<draw::EffectModel>> {
                 Some(Arc::new(draw::EffectModel {
-                    parts: vec![(None, vec![(Vec3::X, [0.0; 2]); 3])],
+                    parts: vec![(None, vec![(Vec3::X, [0.0; 2]); 3], 0)],
                 }))
             }
         }
@@ -1392,8 +1393,11 @@ mod tests {
                 &mut out,
             );
             assert_eq!(out.len(), 1, "nested={nested}");
-            let render::ParticleShape::Mesh { tris } = &out[0].shape else {
-                panic!("geometry became a sprite")
+            let render::ParticleShape::SolidMesh { tris } = &out[0].shape else {
+                panic!(
+                    "an opaque segment at full alpha draws solid: {:?}",
+                    out[0].shape
+                )
             };
             assert!(
                 (tris[0].0 - Vec3::new(0.0, 0.0, -2.0)).length() < 0.00001,
@@ -1401,6 +1405,72 @@ mod tests {
                 tris[0].0
             );
         }
+    }
+
+    #[test]
+    fn geometry_segments_follow_the_model_draw_rules() {
+        let c = [200, 100, 50, 255];
+        let faded = [200, 100, 50, 128];
+        assert_eq!(draw::geometry_look(Era::Bf2, false, 0x10000, c), None);
+        assert_eq!(
+            draw::geometry_look(Era::Bf2, false, 0x10000, faded),
+            Some((false, faded))
+        );
+        assert_eq!(draw::geometry_look(Era::Bf2, true, 0, c), Some((true, c)));
+        assert_eq!(
+            draw::geometry_look(Era::Bf1, false, 0x04, c),
+            Some((false, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf1, false, 0x06, c),
+            Some((false, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf1, false, 0x84, c),
+            Some((true, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf2, false, 0x44, c),
+            Some((true, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf2, false, 0x84, c),
+            Some((false, c))
+        );
+    }
+
+    #[test]
+    fn a_fading_lightning_model_blends_by_its_sheet_and_an_opaque_one_draws_solid() {
+        let model = draw::EffectModel {
+            parts: vec![(None, vec![(Vec3::X, [0.0; 2]); 3], 0x10000)],
+        };
+        let mut out = Vec::new();
+        model.draws(
+            Mat4::IDENTITY,
+            [255, 255, 255, 254],
+            Vec3::ZERO,
+            false,
+            Era::Bf2,
+            &mut out,
+        );
+        model.draws(
+            Mat4::IDENTITY,
+            [255, 255, 255, 255],
+            Vec3::ZERO,
+            false,
+            Era::Bf2,
+            &mut out,
+        );
+        assert!(matches!(out[0].shape, render::ParticleShape::Mesh { .. }));
+        assert_eq!(
+            (out[0].color, out[0].additive),
+            ([255, 255, 255, 254], false)
+        );
+        assert!(matches!(
+            out[1].shape,
+            render::ParticleShape::SolidMesh { .. }
+        ));
+        assert_eq!(out[1].color, [255; 4]);
     }
 
     fn puff(kind: Kind) -> Puff {

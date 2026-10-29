@@ -820,6 +820,11 @@ pub(super) fn bake_content(
                 .collect()
         })
         .unwrap_or_default();
+    let fx_model_named: std::collections::HashSet<String> = fx
+        .models()
+        .iter()
+        .flat_map(|m| alpha_usage.textures_of(m).map(str::to_owned))
+        .collect();
     let mut sky_textures: std::collections::HashSet<String> = sky_models
         .iter()
         .flat_map(|m| alpha_usage.textures_of(m).map(str::to_owned))
@@ -963,6 +968,7 @@ pub(super) fn bake_content(
             || flash_named.contains(&lower)
             || glow_named.contains(&lower)
             || fx_named.contains(&lower)
+            || fx_model_named.contains(&lower)
             || precip_named.as_deref() == Some(lower.as_str());
         // The pre-v2 OR of the material flag word over every model that draws
         // this texture: top-level ones, and since design D3 the mode layers'

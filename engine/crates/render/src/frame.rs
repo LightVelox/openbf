@@ -901,29 +901,39 @@ impl Renderer {
             // The laser bolts (card FXB) and the particles (card FXP2):
             // after the blend pass, far to near, each bolt's core (NORMAL)
             // then its glow (ADDITIVE), each particle by its blend.
-            if let (false, Some((vbuf, _)), Some((ibuf, _))) = (
-                bolts.runs.is_empty(),
-                &self.bolts.vertex_buf,
-                &self.bolts.instance_buf,
-            ) {
-                pass.set_bind_group(0, &self.globals_bg, &[]);
-                pass.set_vertex_buffer(0, vbuf.slice(..));
-                pass.set_vertex_buffer(1, ibuf.slice(..));
-                let mut bound_glow: Option<bool> = None;
-                for run in &bolts.runs {
-                    if bound_glow != Some(run.glow) {
-                        pass.set_pipeline(if run.glow {
-                            &self.bolt_glow_pipeline
-                        } else {
-                            &self.bolt_core_pipeline
-                        });
-                        bound_glow = Some(run.glow);
-                    }
-                    pass.set_bind_group(1, self.tex_bg(run.texture), &[]);
-                    pass.draw(run.vertices.clone(), 0..1);
-                    draw_calls += 1;
-                }
+            if self.particle_display.is_none() {
+                draw_calls += self.draw_particle_runs(&mut pass, &bolts.runs, false);
+                mark(&mut timer, &mut pass, "bolts+particles");
             }
+        }
+        if let (Some(display), false) = (&self.particle_display, bolts.runs.is_empty()) {
+            let display_view = frame_texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(display.format),
+                ..Default::default()
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("particle pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &display_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            draw_calls += self.draw_particle_runs(&mut pass, &bolts.runs, true);
             mark(&mut timer, &mut pass, "bolts+particles");
         }
         if bloom {
@@ -1036,6 +1046,47 @@ pub(super) fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> 
         (capacity * std::mem::size_of::<Instance>()) as u64,
         wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     )
+}
+
+impl Renderer {
+    fn draw_particle_runs(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        runs: &[crate::bolt::BoltRun],
+        display: bool,
+    ) -> u32 {
+        let (Some((vbuf, _)), Some((ibuf, _))) = (&self.bolts.vertex_buf, &self.bolts.instance_buf)
+        else {
+            return 0;
+        };
+        if runs.is_empty() {
+            return 0;
+        }
+        pass.set_bind_group(0, &self.globals_bg, &[]);
+        pass.set_vertex_buffer(0, vbuf.slice(..));
+        pass.set_vertex_buffer(1, ibuf.slice(..));
+        let shown = self.particle_display.as_ref().filter(|_| display);
+        let mut bound = None;
+        let mut calls = 0;
+        for run in runs {
+            let kind = (run.glow, run.solid);
+            if bound != Some(kind) {
+                pass.set_pipeline(match (shown, run.glow, run.solid) {
+                    (Some(d), true, _) => &d.glow,
+                    (Some(d), false, true) => &d.solid,
+                    (Some(d), false, false) => &d.core,
+                    (None, true, _) => &self.bolt_glow_pipeline,
+                    (None, false, true) => &self.bolt_solid_pipeline,
+                    (None, false, false) => &self.bolt_core_pipeline,
+                });
+                bound = Some(kind);
+            }
+            pass.set_bind_group(1, self.tex_bg(run.texture), &[]);
+            pass.draw(run.vertices.clone(), 0..1);
+            calls += 1;
+        }
+        calls
+    }
 }
 
 /// The GPU timer's mark at the end of section `label`, when the timer is on.

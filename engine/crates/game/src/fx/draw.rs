@@ -12,9 +12,9 @@
 //!   PARTICLE nearer than 1 m + size′ fades out toward the eye (B1
 //!   246005–246009).
 //! - **PARTICLE** (§6.1): a screen-aligned square √2·size′ wide (corners on
-//!   a circle of radius size′), turned by π·frac(0.00314·rot). BLUR ones go
-//!   down the CPU path (AGENT_B 1.5: half-width size′, unrotated) and are
-//!   drawn as a plain NORMAL sprite — PROVISIONAL, the blur pass itself is
+//!   a circle of radius size′), turned by π·frac(0.00314·rot). BLUR ones
+//!   write no colour (§16: pass 1 is ALPHA 0x40 = Cd, pass 2 lays a screen
+//!   copy through that mask): not drawn — PROVISIONAL, the haze of pass 2 is
 //!   §11 [H].
 //! - **ANIMATED** (§6.3, §8): BF1 the PARTICLE square over a fixed 4×4 atlas
 //!   (u = (f & 3)/4, v = ((f >> 2) & 3)/4); BF2 a CPU quad 2·size′ wide
@@ -162,7 +162,7 @@ fn cell_4x4(f: u32) -> [f32; 4] {
 /// sheet (`<layer>/models/<name>.glb`).
 #[derive(Debug, Clone, Default)]
 pub struct EffectModel {
-    pub parts: Vec<(Option<TextureHandle>, crate::soldier_vis::Tris)>,
+    pub parts: Vec<(Option<TextureHandle>, crate::soldier_vis::Tris, u32)>,
 }
 
 impl EffectModel {
@@ -173,16 +173,20 @@ impl EffectModel {
         color: [u8; 4],
         key: Vec3,
         additive: bool,
+        era: Era,
         out: &mut Vec<ParticleDraw>,
     ) {
-        for (tex, tris) in &self.parts {
+        for (tex, tris, flags) in &self.parts {
+            let tris = tris
+                .iter()
+                .map(|(p, uv)| (m.transform_point3(*p), *uv))
+                .collect();
+            let (shape, additive, color) = match geometry_look(era, additive, *flags, color) {
+                Some((additive, color)) => (ParticleShape::Mesh { tris }, additive, color),
+                None => (ParticleShape::SolidMesh { tris }, false, [255; 4]),
+            };
             out.push(ParticleDraw {
-                shape: ParticleShape::Mesh {
-                    tris: tris
-                        .iter()
-                        .map(|(p, uv)| (m.transform_point3(*p), *uv))
-                        .collect(),
-                },
+                shape,
                 key,
                 color,
                 texture: *tex,
@@ -190,6 +194,20 @@ impl EffectModel {
             });
         }
     }
+}
+
+pub fn geometry_look(
+    era: Era,
+    forced: bool,
+    flags: u32,
+    color: [u8; 4],
+) -> Option<(bool, [u8; 4])> {
+    let additive_bit = match era {
+        Era::Bf1 => 0x80,
+        Era::Bf2 => 0x40,
+    };
+    (forced || color[3] != 255 || flags & 0x06 != 0)
+        .then_some((forced || flags & additive_bit != 0, color))
 }
 
 /// A GEOMETRY particle's model matrix (§6.6): `T(pos)·basis·R_y(rot)·S(size)`
@@ -218,6 +236,9 @@ pub fn emitter_draws(
     out: &mut Vec<ParticleDraw>,
 ) {
     let g = &em.geometry;
+    if g.blend == FxBlend::Blur {
+        return;
+    }
     let additive = g.blend == FxBlend::Additive;
     let m = terms.size_mul;
     let push = |out: &mut Vec<ParticleDraw>, shape, key, color| {
@@ -242,7 +263,6 @@ pub fn emitter_draws(
                     a *= near / size;
                 }
                 let (half, angle, uv) = match (g.kind, g.blend, era) {
-                    (FxType::Particle, FxBlend::Blur, _) => (size, 0.0, FULL_UV),
                     (FxType::Particle, _, _) => (
                         size * std::f32::consts::FRAC_1_SQRT_2,
                         sprite_angle(p.rot),

@@ -343,6 +343,8 @@ pub struct Renderer {
     /// write) and this frame's bolts, set by [`Renderer::set_bolts`].
     bolt_core_pipeline: wgpu::RenderPipeline,
     bolt_glow_pipeline: wgpu::RenderPipeline,
+    bolt_solid_pipeline: wgpu::RenderPipeline,
+    particle_display: Option<bolt::DisplayPipelines>,
     bolts: bolt::BoltState,
     /// The sky's star field (`stars.rs`, issue #16): vs `grass.wgsl`, fs
     /// `fs_bolt_glow`, additive with no depth, in the sky pass; the

@@ -209,17 +209,15 @@ pub fn bake_side(lvl_path: &str, outdir: &str, game: &str) -> Result<Option<FxSe
         }
     }
     let table = crate::alpha::AlphaTable::new(&decoded);
-    let mut usage = crate::alpha::AlphaUsage::default();
     let mut have_models = Vec::new();
     for m in &models {
         let alphas = table.model(m);
-        usage.record_model(m, &alphas);
         let glb = crate::glb::model_to_glb(m, &alphas, false)?;
         std::fs::write(out.join("models").join(format!("{}.glb", m.name)), glb)?;
         have_models.push(m.name.to_ascii_lowercase());
     }
-    // An effect sheet keeps its alpha (the blend reads it); a model's sheet
-    // keeps it iff one of its drawn segments is MASK or BLEND (design D3).
+    // An effect sheet keeps its alpha (the blend reads it), and so does an
+    // effect model's: a segment blends by it whenever the tint is not opaque.
     let mut wanted = effect_tex.clone();
     for t in &model_tex {
         if !wanted.contains(t) {
@@ -228,17 +226,7 @@ pub fn bake_side(lvl_path: &str, outdir: &str, game: &str) -> Result<Option<FxSe
     }
     let flags: HashMap<String, u32> = wanted
         .iter()
-        .map(|t| {
-            let keep = effect_tex.contains(t) || usage.needs_alpha(t);
-            (
-                t.clone(),
-                if keep {
-                    crate::detail::ALPHA_IS_MEANINGFUL
-                } else {
-                    0
-                },
-            )
-        })
+        .map(|t| (t.clone(), crate::detail::ALPHA_IS_MEANINGFUL))
         .collect();
     let have_textures = crate::soldier::bake_textures_flagged(inner, &wanted, &flags, out, None)?;
     fx.write(out, game, &have_textures, &have_models)
