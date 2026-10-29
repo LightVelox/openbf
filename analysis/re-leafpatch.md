@@ -312,6 +312,11 @@ sin(phase)·amplitude to 3.5e-6. One template per class → every object of a cl
 their start phase.
 
 ## 8. Not drawn by LEAF (follow-ups)
+
+2026-10-29 correction: the tentative sound slot below is a **bird-particle anchor**,
+verified through RTTI, Lua bindings and a live BF2 Yavin update. Ground gusts,
+impulses and anchor birds are documented in `re-falling-leaves.md`.
+
 > **Superseded for the falling leaves (2026-10-29):** `re-falling-leaves.md` re-read the spawner — slots refill as they
 > free, positions are world-axis box samples, the motion is read [D]. The text below is kept as first written.
 

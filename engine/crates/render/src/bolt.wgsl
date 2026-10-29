@@ -37,6 +37,15 @@ fn fs_bloom_particle(in: GrassOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_leaf_particle(in: GrassOut) -> @location(0) vec4<f32> {
+    let c = bolt_texel(in);
+    if c.a <= 0.25 {
+        discard;
+    }
+    return c;
+}
+
+@fragment
 fn fs_bolt_solid(in: GrassOut) -> @location(0) vec4<f32> {
     return vec4<f32>(bolt_texel(in).rgb, 1.0);
 }
@@ -63,6 +72,15 @@ fn fs_bolt_glow_display(in: GrassOut) -> @location(0) vec4<f32> {
         discard;
     }
     return vec4<f32>(c.rgb * c.a, c.a);
+}
+
+@fragment
+fn fs_leaf_particle_display(in: GrassOut) -> @location(0) vec4<f32> {
+    let c = display_texel(in);
+    if c.a <= 0.25 {
+        discard;
+    }
+    return c;
 }
 
 @fragment

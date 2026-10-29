@@ -140,14 +140,7 @@ impl Renderer {
         clear: [f64; 4],
         overlay: Option<OverlayFn<'_>>,
     ) -> Result<(), RenderError> {
-        let extra = self.falling_draws(camera);
-        let all;
-        let draws = if extra.is_empty() {
-            draws
-        } else {
-            all = draws.iter().copied().chain(extra).collect::<Vec<_>>();
-            &all
-        };
+        let leaves = self.falling_draws(camera);
         for d in skinned {
             let Some(mesh) = self.skinned_meshes.get(d.mesh.0 as usize) else {
                 return Err(RenderError::BadHandle(format!("skinned mesh {}", d.mesh.0)));
@@ -491,7 +484,11 @@ impl Renderer {
 
         // The laser bolts (`bolt.rs`) and the particle effects
         // (`particles.rs`): this view's ribbons and sprites, far to near.
-        let bolts = crate::particles::build(&self.bolts.bolts, &self.particles.particles, camera);
+        let mut particles = std::borrow::Cow::Borrowed(&self.particles.particles[..]);
+        if !leaves.is_empty() {
+            particles.to_mut().extend(leaves);
+        }
+        let bolts = crate::particles::build(&self.bolts.bolts, &particles, camera);
         if !bolts.runs.is_empty() {
             let vb = bytemuck::cast_slice(&bolts.vertices);
             let inst = [crate::bolt::identity_instance()];
@@ -1069,15 +1066,17 @@ impl Renderer {
         let mut bound = None;
         let mut calls = 0;
         for run in runs {
-            let kind = (run.glow, run.solid);
+            let kind = (run.glow, run.solid, run.cutout);
             if bound != Some(kind) {
-                pass.set_pipeline(match (shown, run.glow, run.solid) {
-                    (Some(d), true, _) => &d.glow,
-                    (Some(d), false, true) => &d.solid,
-                    (Some(d), false, false) => &d.core,
-                    (None, true, _) => &self.bolt_glow_pipeline,
-                    (None, false, true) => &self.bolt_solid_pipeline,
-                    (None, false, false) => &self.bolt_core_pipeline,
+                pass.set_pipeline(match (shown, kind) {
+                    (Some(d), (true, _, _)) => &d.glow,
+                    (Some(d), (false, true, _)) => &d.solid,
+                    (Some(d), (false, false, true)) => &d.cutout,
+                    (Some(d), (false, false, false)) => &d.core,
+                    (None, (true, _, _)) => &self.bolt_glow_pipeline,
+                    (None, (false, true, _)) => &self.bolt_solid_pipeline,
+                    (None, (false, false, true)) => &self.leaf_cutout_pipeline,
+                    (None, (false, false, false)) => &self.bolt_core_pipeline,
                 });
                 bound = Some(kind);
             }

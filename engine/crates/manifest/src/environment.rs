@@ -176,6 +176,8 @@ pub struct ManifestLeafClass {
     /// Airborne leaf slots per visible patch (`0xfd7fae90`, at most 50).
     #[serde(default)]
     pub falling_count: u8,
+    #[serde(default)]
+    pub bird_count: u8,
     /// `NumParticles` (NOT divided by the view count — LEAF's decision).
     pub particles: u32,
     pub min_size: f32,

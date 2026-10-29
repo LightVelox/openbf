@@ -443,6 +443,14 @@ impl Renderer {
             ..PipelineDesc::world("bolt solid pipeline", &pipeline_layout, &grass_vb)
         }
         .build(&device, &bolt_shader, format);
+        let leaf_cutout_pipeline = PipelineDesc {
+            vs: "vs_grass",
+            fs: "fs_leaf_particle",
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            depth_write: false,
+            ..PipelineDesc::world("leaf cutout pipeline", &pipeline_layout, &grass_vb)
+        }
+        .build(&device, &bolt_shader, format);
         let display_format = match &target {
             Target::Window { config, .. } => config.view_formats.first().copied(),
             Target::Headless { .. } => Some(crate::device::HEADLESS_FORMAT.remove_srgb_suffix()),
@@ -476,6 +484,12 @@ impl Renderer {
                     "fs_bolt_solid_display",
                     None,
                     true,
+                ),
+                cutout: twin(
+                    "leaf cutout display pipeline",
+                    "fs_leaf_particle_display",
+                    Some(wgpu::BlendState::ALPHA_BLENDING),
+                    false,
                 ),
                 format: display,
             }
@@ -641,6 +655,7 @@ impl Renderer {
             bolt_core_pipeline,
             bolt_glow_pipeline,
             bolt_solid_pipeline,
+            leaf_cutout_pipeline,
             particle_display,
             bolts: Default::default(),
             star_pipeline,

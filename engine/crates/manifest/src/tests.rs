@@ -388,6 +388,7 @@ fn full_manifest() -> Manifest {
             name: "nab2_prop_vine1".into(),
             texture: "nab2_leaf".into(),
             falling_count: 0,
+            bird_count: 0,
             particles: 50,
             min_size: 1.2,
             max_size: 1.4,

@@ -18,6 +18,7 @@ pub mod engine_sound;
 pub mod event_feed;
 pub mod event_sounds;
 pub mod foley;
+pub mod forest;
 pub mod frame_profile;
 pub mod fx;
 pub mod gallery;
