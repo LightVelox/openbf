@@ -488,7 +488,7 @@ fn quit_at() -> Option<u64> {
 fn open_pads(mapping: &input::Mapping) -> (Option<gilrs::Gilrs>, Option<String>) {
     match input::open_gilrs() {
         Ok(g) => {
-            let w = input::log_pads_with(&g, mapping);
+            let w = input::log_pads_with(&g, mapping, &input::ActivePad::default());
             (Some(g), w)
         }
         Err(e) => {
@@ -643,9 +643,13 @@ impl App {
     /// fly down/up, south button = speed boost.
     fn drive_fly_camera(&mut self, dt: f32) {
         let Some(g) = &mut self.gilrs else { return };
+        let was = self.active_pad.id;
+        let map = &self.profile.settings.controller_bindings;
         if input::pump_tracking(g, &mut self.active_pad) {
-            self.pad_warning = input::log_pads_with(g, &self.profile.settings.controller_bindings);
+            self.pad_warning = input::log_pads_with(g, map, &self.active_pad);
             self.gameplay_stick.select(None);
+        } else if self.active_pad.id != was {
+            self.pad_warning = input::active_pad_warning(g, map, &self.active_pad);
         }
         let Some((_, pad)) = input::active_gamepad(g, &self.active_pad) else {
             return;
@@ -1056,13 +1060,16 @@ impl App {
     fn menu_edges(&mut self) -> u32 {
         let mut now = 0u32;
         if let Some(g) = &mut self.gilrs {
+            let was = self.active_pad.id;
+            let map = &self.profile.settings.controller_bindings;
             if input::pump_tracking(g, &mut self.active_pad) {
-                self.pad_warning =
-                    input::log_pads_with(g, &self.profile.settings.controller_bindings);
+                self.pad_warning = input::log_pads_with(g, map, &self.active_pad);
                 self.gameplay_stick.select(None);
                 if let Some(front) = self.front.as_mut() {
                     front.reset_control_device();
                 }
+            } else if self.active_pad.id != was {
+                self.pad_warning = input::active_pad_warning(g, map, &self.active_pad);
             }
             if let Some((_, pad)) = input::active_gamepad(g, &self.active_pad) {
                 use gilrs::Button;
@@ -1116,10 +1123,14 @@ impl App {
             self.gameplay_stick.select(None);
             return PadState::default();
         };
+        let was = self.active_pad.id;
+        let map = &self.profile.settings.controller_bindings;
         if input::pump_tracking(g, &mut self.active_pad) {
-            self.pad_warning = input::log_pads_with(g, &self.profile.settings.controller_bindings);
+            self.pad_warning = input::log_pads_with(g, map, &self.active_pad);
             // A disconnect/reconnect can reuse the same gilrs ID between frames.
             self.gameplay_stick.select(None);
+        } else if self.active_pad.id != was {
+            self.pad_warning = input::active_pad_warning(g, map, &self.active_pad);
         }
         match input::active_gamepad(g, &self.active_pad) {
             Some((id, pad)) => {

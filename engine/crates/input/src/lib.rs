@@ -290,17 +290,22 @@ pub fn pad_warning_with(
 }
 
 /// Print one line per connected pad (name, GUID, mapping source, what did
-/// not resolve) — "0 pads" when none — and return the first pad's warning
-/// ([`pad_warning`]), which the caller also shows on screen.
+/// not resolve) — "0 pads" when none — and return the warning
+/// ([`pad_warning`]) of the pad that is read, which the caller shows on screen.
 pub fn log_pads(g: &gilrs::Gilrs) -> Option<String> {
-    log_pads_with(g, &Mapping::ps2_default())
+    log_pads_with(g, &Mapping::ps2_default(), &ActivePad::default())
 }
 
 /// Like [`log_pads`], using the player's active layout for missing controls.
-pub fn log_pads_with(g: &gilrs::Gilrs, map: &Mapping) -> Option<String> {
+/// Every pad is logged; only the pad `active` picks gives the returned warning.
+pub fn log_pads_with(
+    g: &gilrs::Gilrs,
+    map: &Mapping,
+    active: &ActivePad<gilrs::GamepadId>,
+) -> Option<String> {
     let mut n = 0;
-    let mut warning = None;
-    for (_, pad) in g.gamepads() {
+    let usable = usable_ids(g);
+    for (gid, pad) in g.gamepads() {
         n += 1;
         let (name, id) = (pad.name(), guid(&pad));
         let missing = unresolved(&pad, map);
@@ -314,15 +319,26 @@ pub fn log_pads_with(g: &gilrs::Gilrs, map: &Mapping) -> Option<String> {
                 missing.join(" ")
             }
         );
-        if let Some(w) = pad_warning_with(name, &id, &missing, map) {
+        if !usable.contains(&gid) {
+            println!("pad {n}: ignored, the twin of a standard-layout pad");
+        } else if let Some(w) = pad_warning_with(name, &id, &missing, map) {
             eprintln!("WARNING: {w}");
-            warning.get_or_insert(w);
         }
     }
     if n == 0 {
         println!("0 pads connected — controls need one (gilrs)");
     }
-    warning
+    active_pad_warning(g, map, active)
+}
+
+/// The on-screen warning for the pad that is read now, if any.
+pub fn active_pad_warning(
+    g: &gilrs::Gilrs,
+    map: &Mapping,
+    active: &ActivePad<gilrs::GamepadId>,
+) -> Option<String> {
+    let (_, pad) = active_gamepad(g, active)?;
+    pad_warning_with(pad.name(), &guid(&pad), &unresolved(&pad, map), map)
 }
 
 /// How long the active pad must be idle before input on another pad takes
@@ -409,23 +425,42 @@ pub fn pad_kind(pad: &gilrs::Gamepad<'_>) -> PadKind {
     }
 }
 
-/// The pads worth reading, in order. An unmapped raw pad is left out while a
-/// [`PadKind::Unified`] pad is connected: on Windows that is the HID twin
-/// of an XInput pad, whose raw buttons land on the wrong controls (its raw
-/// R3, button 9, reads as Start).
-pub fn usable_pads<Id>(pads: impl IntoIterator<Item = (Id, PadKind)>) -> Vec<(Id, PadKind)> {
-    let mut pads: Vec<_> = pads.into_iter().collect();
-    if pads.iter().any(|(_, k)| *k == PadKind::Unified) {
-        pads.retain(|(_, k)| *k != PadKind::Raw);
-    }
-    pads
+/// A pad's hardware identity: its USB vendor and product IDs, when the OS
+/// reports both.
+pub type HwId = (u16, u16);
+
+/// [`HwId`] of a connected pad.
+pub fn hw_id(pad: &gilrs::Gamepad<'_>) -> Option<HwId> {
+    Some((pad.vendor_id()?, pad.product_id()?))
+}
+
+/// The pads worth reading, in order. An unmapped raw pad is left out only when
+/// a [`PadKind::Unified`] pad with the same [`HwId`] is connected: on Windows
+/// that is the HID twin of an XInput pad, whose raw buttons land on the wrong
+/// controls (its raw R3, button 9, reads as Start). Any other raw pad stays.
+pub fn usable_pads<Id>(
+    pads: impl IntoIterator<Item = (Id, PadKind, Option<HwId>)>,
+) -> Vec<(Id, PadKind)> {
+    let pads: Vec<_> = pads.into_iter().collect();
+    let unified: Vec<HwId> = pads
+        .iter()
+        .filter(|(_, k, _)| *k == PadKind::Unified)
+        .filter_map(|(_, _, hw)| *hw)
+        .collect();
+    pads.into_iter()
+        .filter(|(_, k, hw)| *k != PadKind::Raw || !hw.is_some_and(|h| unified.contains(&h)))
+        .map(|(id, k, _)| (id, k))
+        .collect()
 }
 
 fn usable_ids(g: &gilrs::Gilrs) -> Vec<gilrs::GamepadId> {
-    usable_pads(g.gamepads().map(|(id, pad)| (id, pad_kind(&pad))))
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect()
+    usable_pads(
+        g.gamepads()
+            .map(|(id, pad)| (id, pad_kind(&pad), hw_id(&pad))),
+    )
+    .into_iter()
+    .map(|(id, _)| id)
+    .collect()
 }
 
 /// Drain gilrs's event queue (keeping the cached state fresh); true when a
@@ -630,13 +665,34 @@ mod tests {
             assert_eq!(a.id, Some(1));
         }
         // The raw HID twin is not even a candidate while its twin is there,
-        let pads = [(2, PadKind::Raw), (1, PadKind::Unified)];
+        let hw = Some((0x045e, 0x02ea));
+        let pads = [(2, PadKind::Raw, hw), (1, PadKind::Unified, hw)];
         let ids: Vec<_> = usable_pads(pads).into_iter().map(|(id, _)| id).collect();
         assert_eq!(ids, [1]);
         assert_eq!(a.pick(ids), Some(1));
         // but a raw pad alone, or beside an SDL-mapped one, is still read.
-        assert_eq!(usable_pads([(2, PadKind::Raw)]).len(), 1);
-        assert_eq!(usable_pads([(2, PadKind::Raw), (3, PadKind::Sdl)]).len(), 2);
+        assert_eq!(usable_pads([(2, PadKind::Raw, hw)]).len(), 1);
+        assert_eq!(
+            usable_pads([(2, PadKind::Raw, hw), (3, PadKind::Sdl, hw)]).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn independent_raw_pad_beside_a_standard_pad_is_still_read() {
+        let xbox = Some((0x045e, 0x02ea));
+        let other = Some((0x3537, 0x1022));
+        for raw_hw in [other, None] {
+            let pads = [(1u8, PadKind::Unified, xbox), (2, PadKind::Raw, raw_hw)];
+            let ids: Vec<_> = usable_pads(pads).into_iter().map(|(id, _)| id).collect();
+            assert_eq!(ids, [1, 2], "raw pad {raw_hw:?} is not a confirmed twin");
+        }
+        // A standard pad with no identity confirms no twin either.
+        let ids: Vec<_> = usable_pads([(1u8, PadKind::Unified, None), (2, PadKind::Raw, None)])
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(ids, [1, 2]);
     }
 
     #[test]

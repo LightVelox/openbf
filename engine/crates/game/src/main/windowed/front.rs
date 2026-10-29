@@ -309,7 +309,11 @@ impl App {
         self.kbm.follow(&self.profile.settings);
         self.kbm.release_keys();
         if let Some(g) = self.gilrs.as_ref() {
-            self.pad_warning = input::log_pads_with(g, &self.profile.settings.controller_bindings);
+            self.pad_warning = input::log_pads_with(
+                g,
+                &self.profile.settings.controller_bindings,
+                &self.active_pad,
+            );
         }
         if let Err(e) = self.profile.save() {
             eprintln!("profile autosave failed: {e:#}");
