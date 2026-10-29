@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: todo
 deps: DEKU
-files: engine/crates/core/src/droideka.rs,engine/crates/core/src/droideka/shield.rs,engine/crates/core/src/weapon.rs,engine/crates/core/src/projectile.rs,engine/crates/core/src/sim/combat.rs
+files: engine/crates/core/src/droideka.rs (new),engine/crates/core/src/droideka/shield.rs (new),engine/crates/core/src/weapon.rs,engine/crates/core/src/projectile.rs,engine/crates/core/src/sim/combat.rs
 declares:
 needs:
 effort:

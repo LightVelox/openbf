@@ -4,7 +4,7 @@
 //! counts, the event lines of `player1systemMessages` and the statistics
 //! pop-up (card EVMSG, `analysis/re-event-messages.md`), the target's name
 //! and health (card HTGT, `analysis/re-target-hud.md`) — and [`draw_hud`]
-//! paints in egui what that tree does not carry yet: the round banner, the
+//! paints in egui what that tree does not carry yet: the
 //! round timer, the pad warning.
 
 use crate::hud_tree::{EventValue, Hud, INFINITE};
@@ -320,6 +320,11 @@ pub fn feed(hud: &mut Hud, m: &HudModel, has_mesh: &dyn Fn(&str) -> bool) {
     }
     hud.spawn = m.spawn.clone();
     hud.scope = m.scope.clone().filter(|_| alive);
+    hud.banner = m
+        .round_end
+        .as_ref()
+        .filter(|r| r.stats.is_none())
+        .map(|r| r.result);
     hud.stats = m
         .round_end
         .as_ref()
@@ -657,37 +662,38 @@ pub struct RoundEndModel {
     pub stats: Option<crate::stats::StatsScreens>,
 }
 
-/// BF1's banner tints (B1 249961-249968): victory green, defeat red.
-const BANNER_GREEN: Color32 = Color32::from_rgb(64, 192, 64);
-const BANNER_RED: Color32 = Color32::from_rgb(192, 64, 64);
-
-/// The end of the round's banner at the screen's centre; the stats pages
-/// after it are the HUD pass's.
-fn draw_round_end(ctx: &egui::Context, r: &RoundEndModel) {
-    if r.stats.is_some() {
-        return;
-    }
-    let (text, color) = match r.result {
-        0 => ("VICTORY", BANNER_GREEN),
-        1 => ("DEFEAT", BANNER_RED),
-        _ => ("VICTORY", BANNER_GREEN),
+/// BF1's banner sheet, size and UV halves (`re-round-end.md` §2.1 [V]).
+/// [ours] Both games use BF1's green victory and the same baked art.
+pub(crate) fn draw_round_end(result: u8, size: [f32; 2]) -> crate::hud_draw::HudFrame {
+    use crate::hud_draw::{HudFrame, HudVertex};
+    let defeat = result == 1;
+    let color = if defeat {
+        [192.0, 64.0, 64.0]
+    } else {
+        [64.0, 192.0, 64.0]
     };
-    egui::Area::new(egui::Id::new("round_end_banner"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .show(ctx, |ui| {
-            ui.label(
-                RichText::new(text)
-                    .font(FontId::proportional(64.0))
-                    .strong()
-                    .color(color),
-            );
-        });
+    let color = [color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, 1.0];
+    let scale = crate::hud_draw::frame_scale(size);
+    let (hw, hh) = (128.0 * scale[0], 32.0 * scale[1]);
+    let (cx, cy) = (size[0] * 0.5, size[1] * 0.5);
+    let v = if defeat { 0.5 } else { 0.0 };
+    let mut frame = HudFrame::default();
+    frame.verts = [
+        ([cx - hw, cy - hh, 0.0], [0.0, v]),
+        ([cx + hw, cy - hh, 0.0], [1.0, v]),
+        ([cx + hw, cy + hh, 0.0], [1.0, v + 0.5]),
+        ([cx - hw, cy + hh, 0.0], [0.0, v + 0.5]),
+    ]
+    .map(|(pos, uv)| HudVertex { pos, uv, color })
+    .into();
+    frame.indices = vec![0, 1, 2, 0, 2, 3];
+    frame.batch("common_bf1/ig_victory_defeat", false, false, 0);
+    frame
 }
 
 /// The egui half of the HUD for this frame (module doc).
 pub fn draw_hud(ctx: &egui::Context, m: &HudModel) {
-    if let Some(r) = &m.round_end {
-        draw_round_end(ctx, r);
+    if m.round_end.is_some() {
         return;
     }
     // The round timer, top centre under the reinforcement counts.
@@ -773,8 +779,43 @@ mod tests {
         }
     }
 
-    /// The egui half lays out headless: every area produces shapes and nothing
-    /// depends on a fixed aspect (two viewport sizes both render).
+    /// The real feed selects the banner sheet and clears it on the next round.
+    #[test]
+    fn round_banner_uses_the_sheet_half_and_hides_the_battle_hud() {
+        for (result, v, rgb) in [
+            (0, 0.0, [64.0, 192.0, 64.0]),
+            (1, 0.5, [192.0, 64.0, 64.0]),
+            (2, 0.0, [64.0, 192.0, 64.0]),
+        ] {
+            let mut hud = crate::hud_tree::fixture::target_hud();
+            let mut model = model();
+            model.round_end = Some(RoundEndModel {
+                result,
+                stats: None,
+            });
+            feed(&mut hud, &model, &|_| false);
+            let frame = crate::hud_draw::draw(&hud, &Default::default(), [1280.0, 896.0]);
+            assert_eq!(frame.verts.len(), 4);
+            assert_eq!(frame.batches[0].texture, "common_bf1/ig_victory_defeat");
+            assert_eq!(frame.verts[0].uv, [0.0, v]);
+            assert_eq!(frame.verts[2].uv, [1.0, v + 0.5]);
+            let a = frame.verts[0].pos;
+            let b = frame.verts[2].pos;
+            assert!((a[0] + b[0] - 1280.0).abs() < 0.001);
+            assert!((a[1] + b[1] - 896.0).abs() < 0.001);
+            assert!((b[0] - a[0] - 605.6363).abs() < 0.001);
+            assert!((b[1] - a[1] - 134.1952).abs() < 0.001);
+            assert_eq!(
+                frame.verts[0].color,
+                [rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, 1.0]
+            );
+            model.round_end = None;
+            feed(&mut hud, &model, &|_| false);
+            assert_eq!(hud.banner, None);
+        }
+    }
+
+    /// The egui overlay also lays out at wide aspects.
     #[test]
     fn hud_lays_out_headless_at_two_aspects() {
         for (w, h) in [(1280.0, 720.0), (2560.0, 1080.0)] {

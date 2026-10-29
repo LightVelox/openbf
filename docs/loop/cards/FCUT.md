@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: todo
 deps: TBLD
-files: engine/crates/core/src/weapon.rs,engine/crates/core/src/sim/ordnance.rs,engine/crates/core/src/aim_assist.rs,engine/crates/core/src/sim/vehicles.rs,engine/crates/game/src/roster.rs,engine/crates/game/src/viewer/holo.rs,engine/crates/game/src/viewer/vehicles.rs
+files: engine/crates/core/src/weapon.rs,engine/crates/core/src/sim/ordnance.rs,engine/crates/core/src/aim_assist.rs,engine/crates/core/src/sim/vehicles.rs,engine/crates/game/src/roster.rs,engine/crates/game/src/viewer/holo.rs (new),engine/crates/game/src/viewer/vehicles.rs
 declares: sim; sweep; arena
 needs:
 effort:

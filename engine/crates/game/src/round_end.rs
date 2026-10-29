@@ -10,7 +10,7 @@
 use crate::spawn_backdrop::{CameraShot, ShotPicker};
 use ui::stats::{Command, Pad, StatsScreens};
 
-/// The banner's shortest and longest stay (BF1 `FUN_002ae6c8`, §2.1).
+/// The banner's shortest and longest stay (BF1 `FUN_002bec60`, §2.1).
 pub const BANNER_MIN_SECS: f32 = 5.0;
 pub const BANNER_MAX_SECS: f32 = 7.0;
 /// A stats screen with no input this long quits by itself (§3, both games).

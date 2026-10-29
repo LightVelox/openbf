@@ -1,6 +1,6 @@
 ---
 id: SPL10
-title: core/src/collision/walls.rs is 2,086 lines (over the 2,000 strict cap) and manifest/src/lib.rs 1,602, with no split card — split each where a seam yields two parts of 400+ lines (SPLIT_RECIPE), else keep the waiver
+title: walls.rs and manifest/src/lib.rs are both under the 1,500 cap now (10 and 1,291 lines) — only the original gates remain
 milestone: M0
 value: 2
 phase: cleanup
@@ -25,3 +25,6 @@ Cleanse CLNC (2026-09-30): `scripts/size_report.sh --strict` exited 1 on walls.r
 ## Independent remaining split (2026-10-26)
 SPLENV owns the remaining source extraction as a separate card. This preserves
 all original acceptance, scratch-bake equality and prior validation debt.
+
+## Cleanse note (2026-10-29)
+`wc -l`: core/src/collision/walls.rs 10 (queries.rs 1,211, tests.rs 1,164), manifest/src/lib.rs 1,291. Both files are under the 1,500 cap; nothing named here is over it. Status is left for the lead.

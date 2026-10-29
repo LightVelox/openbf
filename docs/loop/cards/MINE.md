@@ -11,15 +11,15 @@ declares: sim
 needs: review — local implementation and disc census available; fresh PCSX2 comparison and autoloop baseline gates remain outstanding
 effort:
 branch: main
-resume: 2026-10-28 local implementation committed on main; see docs/loop/reports/20261028_MINE.md. Preserve existing dispenser/grenade edits. No upstream landing or new live PCSX2 capture.
+resume: 2026-10-29 implementation is already in public main through PR 55; fresh class-data tests pass. Preserve the live mine/detpack comparison hold; see the implementation report and reports/20261029_CLEANSE.md.
 created: 2026-09-30
 ---
 ## Why
 `analysis/re-grenades.md` §5 (`[O]`, f0da5ad). The rocketeers' mines (both games), the engineers' detpacks and the
-Bothan's / Wookiee's time bombs are class equipment the PS2's class-select screen lists; the port has none. All of it is
+Bothan's / Wookiee's time bombs are class equipment the PS2's class-select screen lists; they were missing at this card's original baseline. All of it is
 one weapon class (`dispenser`, + BF2's `detonator`) and one entity class (`mine`).
 
-## What to build
+## Original build scope
 1. **The dispenser weapon** (§5.1): the grenade's cycle (GREN); at `InitialSalvoDelay` it drops the entity named by
    `OrdnanceName` at the fire point with velocity = aim x (MinStrength + (MaxStrength - MinStrength) x strength) x
    Velocity (default 10) + the owner's velocity; per-unit `MaxItems` (the oldest is destroyed).
@@ -63,6 +63,6 @@ What the pickup RE learned about the THROWN pickups (this card's dispenser weapo
   come in, and the HUD's second row and the R1 switch already follow whatever channel 1 holds.
 - 2026-10-06 planner: `engine/CRATES.md` taken out of `files:`. The picker refuses a card whose files overlap a card in progress, and 22 open cards listed the map, so any one of them held the other 21 (a chain card in progress held WADE and WTHR). The map's row for a new or moved source file is still owed in the same branch (`scripts/size_report.sh --check-map`); a rebase conflict in it is one line. Undo: add the path back.
 
-## Local implementation (2026-10-28)
+## Implementation status (2026-10-29)
 
-See [the implementation and original-game comparison report](../reports/20261028_MINE.md). The previously missing assets are present locally. All 53 carrying classes now retain their explosive equipment; the historical environment blocker is superseded by the review and comparison work described in the report.
+See [the implementation and comparison-status report](https://github.com/sprucey149/openbf/blob/main/docs/loop/reports/20261028_MINE.md). All 53 carrying classes retain their explosive equipment in the source and disc census. The report supersedes the old missing-input blocker, but explicitly leaves a fresh live PS2 mine/detpack comparison outstanding. Source presence and executable/data checks do not close that acceptance requirement.

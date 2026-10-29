@@ -6,7 +6,7 @@ value: 3
 phase: measure
 status: blocked
 deps:
-files: engine/crates/game/examples/floor_census.rs,engine/crates/core/src/collision/rays.rs
+files: engine/crates/game/examples/floor_census.rs (new),engine/crates/core/src/collision/rays.rs
 declares:
 needs: environment — restore census kit, 32 baked maps and PCSX2 render/drop-test inputs; see lead_tmp/grnc_cloud/preflight.json
 effort:

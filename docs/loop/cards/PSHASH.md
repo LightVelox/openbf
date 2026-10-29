@@ -6,7 +6,7 @@ value: 3
 phase: capture
 status: todo
 deps: SHASH,SHSRE,PSREC
-files: engine/artifacts/pcsx2/pstrace.py
+files: engine/artifacts/pcsx2/pstrace.py (new)
 declares:
 needs:
 effort:

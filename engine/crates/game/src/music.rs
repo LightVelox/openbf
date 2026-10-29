@@ -132,6 +132,23 @@ impl BattleMusic {
         self.tracks.get(music)
     }
 
+    /// Length of the listener's selected end-music take, even without a device.
+    pub fn end_music_secs(&self, listener: usize, winner: u8) -> Option<f32> {
+        let table = if usize::from(winner) == listener {
+            &self.ambient.victory
+        } else {
+            &self.ambient.defeat
+        };
+        let entry = table.get(listener)?.as_ref()?;
+        let music = self.player.musics.get(entry.music)?;
+        music
+            .def
+            .takes
+            .get(music.take)
+            .copied()
+            .filter(|s| s.is_finite() && *s > 0.0)
+    }
+
     /// The Music that sounds and its level 0..1: the fade times the stream
     /// property's gain times the volume option.
     pub fn level(&self) -> Option<(usize, f32)> {
@@ -315,6 +332,39 @@ mod tests {
             takes: Vec::new(),
             ids: vec![7],
         })
+    }
+
+    #[test]
+    fn banner_time_uses_the_listener_and_selected_end_take() {
+        use crate::round_end::{Phase, Result, RoundEnd};
+        let mut m = BattleMusic::new(&calls(), false, [200, 200]);
+        m.bind_with(|name| {
+            let mut t = track(name)?;
+            t.def.takes = vec![if name.ends_with("defeat") { 4.9 } else { 8.4 }];
+            Some(t)
+        });
+        for listener in [0, 1] {
+            for winner in [0, 1] {
+                let won = listener == usize::from(winner);
+                let secs = m.end_music_secs(listener, winner);
+                assert_eq!(secs, Some(if won { 8.4 } else { 4.9 }));
+                let mut r = RoundEnd::start(
+                    if won { Result::Victory } else { Result::Defeat },
+                    &[],
+                    1,
+                    secs,
+                );
+                r.step(4.99, ui::stats::Pad::default());
+                assert_eq!(r.phase, Phase::Banner);
+                r.step(0.02, ui::stats::Pad::default());
+                assert_eq!(r.phase, if won { Phase::Banner } else { Phase::Stats });
+            }
+        }
+        assert_eq!(m.end_music_secs(2, 0), None);
+        let entry = m.ambient.victory[0].unwrap();
+        m.player.musics[entry.music].def.takes = vec![8.4, 6.0];
+        m.player.musics[entry.music].take = 1;
+        assert_eq!(m.end_music_secs(0, 0), Some(6.0));
     }
 
     fn calls() -> MusicCalls {

@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: parked
 deps:
-files: engine/crates/game/src/kbm.rs,engine/crates/game/src/profile.rs,engine/crates/game/src/main/windowed.rs,engine/crates/ui/src/menu.rs,engine/crates/ui/src/menu
+files: engine/crates/game/src/kbm.rs,engine/crates/game/src/profile.rs,engine/crates/game/src/main/windowed.rs,engine/crates/ui/src/menu (new).rs,engine/crates/ui/src/menu (new)
 declares: ci=+20; goldens=shell_options.png
 needs: by-hand remapping playtest and remaining UI follow-up; implementation integrated
 effort:

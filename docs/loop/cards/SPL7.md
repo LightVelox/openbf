@@ -1,6 +1,6 @@
 ---
 id: SPL7
-title: The four files just over the 1,500-line cap — `core/src/nav.rs` (1,693), `core/src/weapon.rs` (1,665), `bake/src/map.rs` (1,598), `core/src/commander.rs` (1,618
+title: The files still over the 1,500-line cap — `core/src/weapon.rs` (1,624), `core/src/commander.rs` (2,339), `core/src/sim/vehicles.rs` (1,938)
 milestone: M0
 value: 2
 phase: cleanup
@@ -37,3 +37,6 @@ waive its remaining map split, scratch bake or unchanged behavior gates.
 ## Independent remaining split (2026-10-26)
 SPLMAP owns the remaining source extraction as a separate card. This preserves
 all original acceptance, scratch-bake equality and prior validation debt.
+
+## Cleanse note (2026-10-29)
+`wc -l`: core/src/weapon.rs 1,624, core/src/commander.rs 2,339, core/src/sim/vehicles.rs 1,938 (from the CLNM2 note) are over the cap. Under it: core/src/nav.rs 1,485, bake/src/map.rs 902. commander.rs was being trimmed by the same cleanse, so its count may drop.

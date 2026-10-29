@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: todo
 deps: DEKU,DEKD,SPL11
-files: engine/crates/game/src/roster.rs,engine/crates/core/src/ai/droideka.rs,engine/crates/core/src/ai/behave.rs,engine/crates/core/src/ai/mover.rs,engine/crates/core/src/sim/spawn.rs,engine/crates/game/src/walk.rs
+files: engine/crates/game/src/roster.rs,engine/crates/core/src/ai/droideka.rs (new),engine/crates/core/src/ai/behave.rs,engine/crates/core/src/ai/mover.rs,engine/crates/core/src/sim/spawn.rs,engine/crates/game/src/walk.rs
 declares: sweep; arena; sim; goldens=(any battle golden with a CIS team: list at build)
 needs:
 effort:

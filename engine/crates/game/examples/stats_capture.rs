@@ -4,6 +4,8 @@
 //!
 //!   cargo run -p game --example stats_capture -- <page> <w> <h> <out.png>
 //!
+//! `banner_victory` / `banner_defeat` show the round banner;
+//! `banner_before_victory` / `banner_before_defeat` reproduce the old text draw.
 //! `<page>`: `team` (Kamino `kam1_cw/20_teamstats.png`), `team_dag`
 //! (Dagobah `dag1_gcw/20_teamstats.png`), `personal` (a bot's page,
 //! `kam1_cw/308_after_K.png`), `personal_me` (`dag1_gcw/300_after_K.png`),
@@ -254,21 +256,47 @@ fn main() -> Result<()> {
     let base =
         game::round_stats::screens(&walk.sim, &Default::default(), walk.player, &career, &names);
     let st = pages(page, base);
+    let banner = page.starts_with("banner");
     let mut r = render::Renderer::new_headless(w, h).map_err(|e| anyhow!("{e}"))?;
     let mut hud = game::hud_feed::HudView::for_renderer(&root, &r)?;
     let model = ui::hud::HudModel {
         round_end: Some(ui::hud::RoundEndModel {
-            result: 0,
-            stats: Some(st),
+            result: u8::from(page.ends_with("defeat")),
+            stats: (!banner).then_some(st),
         }),
         ..Default::default()
     };
     hud.update(&model, 0.0, [w, h]);
+    let mut overlay = ui::overlay::EguiOverlay::headless(r.device(), render::HEADLESS_FORMAT);
+    let paint = overlay.begin_headless([w, h], 1.0, |ctx| {
+        if page.starts_with("banner_before") {
+            let defeat = page.ends_with("defeat");
+            ui::egui::Area::new(ui::egui::Id::new("round_end_banner"))
+                .anchor(ui::egui::Align2::CENTER_CENTER, ui::egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(
+                        ui::egui::RichText::new(if defeat { "DEFEAT" } else { "VICTORY" })
+                            .font(ui::egui::FontId::proportional(64.0))
+                            .strong()
+                            .color(if defeat {
+                                ui::egui::Color32::from_rgb(192, 64, 64)
+                            } else {
+                                ui::egui::Color32::from_rgb(64, 192, 64)
+                            }),
+                    );
+                });
+        }
+    });
     r.render_with_overlay(
         &camera_from(GOLDEN_CAM),
         &[],
         [0.0, 0.0, 0.0, 1.0],
-        Some(&mut |dev, q, enc, view, size| hud.paint(dev, q, enc, view, size)),
+        Some(&mut |dev, q, enc, view, size| {
+            if !page.starts_with("banner_before") {
+                hud.paint(dev, q, enc, view, size);
+            }
+            overlay.paint(&paint, dev, q, enc, view, size);
+        }),
     )
     .map_err(|e| anyhow!("render: {e}"))?;
     let (rgba, cw, ch) = r.capture_rgba().map_err(|e| anyhow!("{e}"))?;

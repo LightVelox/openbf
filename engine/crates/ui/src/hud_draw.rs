@@ -743,6 +743,9 @@ pub fn draw(hud: &Hud, art: &HudArt, size: [f32; 2]) -> HudFrame {
         }
         return ctx.out;
     }
+    if let Some(result) = hud.banner {
+        return crate::hud::draw_round_end(result, size);
+    }
     if let Some(st) = &hud.stats {
         ctx.stats_page(st, size);
         return ctx.out;

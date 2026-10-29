@@ -6,7 +6,7 @@ value: 3
 phase: re
 status: blocked
 deps:
-files: analysis/re-light-regions.md
+files: analysis/re-light-regions.md (new)
 declares:
 needs: Restore matching primary PS2 corpora/ELFs, FOLGL RAM tools and original MUS1/UTA1 paired states/captures; verify both games' region rules before build.
 effort:

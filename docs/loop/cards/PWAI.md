@@ -6,7 +6,7 @@ value: 3
 phase: build
 status: blocked
 deps: PWUP,BOTD,MOVR
-files: engine/crates/core/src/ai/pickup_seek.rs, engine/crates/core/src/ai.rs, engine/crates/core/src/ai/behave.rs, engine/crates/core/src/ai/state.rs, engine/crates/core/src/sim/pickups.rs
+files: engine/crates/core/src/ai/pickup_seek.rs (new), engine/crates/core/src/ai.rs, engine/crates/core/src/ai/behave.rs, engine/crates/core/src/ai/state.rs, engine/crates/core/src/sim/pickups.rs
 declares: sim; sweep
 needs: restore PWAI PS2 sampling kit, live BF2 state, baked maps and missions
 effort:

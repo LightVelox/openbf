@@ -673,6 +673,8 @@ pub struct Hud {
     /// The end of the round's stats page up this frame (`crate::stats_draw`,
     /// issue #50); it draws alone, over black.
     pub stats: Option<Box<crate::stats::StatsScreens>>,
+    /// The round-end banner result; drawn alone over the scene.
+    pub banner: Option<u8>,
     /// Per font: each glyph's pen advance in texels (what a MultiLineText
     /// wraps its words by). Empty until [`Hud::set_fonts`].
     advances: HashMap<String, HashMap<u32, f32>>,
@@ -801,6 +803,7 @@ impl Hud {
             shell: None,
             instant: None,
             stats: None,
+            banner: None,
             advances: HashMap::new(),
             clock: 0.0,
         };

@@ -1,6 +1,6 @@
 ---
 id: SPL14
-title: Split: game/src/soldier_vis.rs is 2,071 lines (over the 2,000 strict cap, no card; past it through USKN) - a pure move by SPLIT_RECIPE; then the four files over 1,500 with no card: core/src/ai/state.rs 1,787, game/src/walk.rs 1,664, bake/src/soldier.rs 1,637, core/src/sim/bounds.rs 1,501
+title: Split the two files still over the 1,500 cap: core/src/ai/state.rs 1,734 and game/src/walk.rs 1,669 - a pure move by SPLIT_RECIPE
 milestone: M0
 value: 2
 phase: cleanup
@@ -22,3 +22,6 @@ Cleanse 19 (2026-10-20, card CLN14): `scripts/size_report.sh --strict` exits 1 o
 ## Acceptance
 - `scripts/size_report.sh`: soldier_vis.rs not in the over-1,500 list, and its waiver line deleted; `--check-map` exit 0 with the new files in engine/CRATES.md; `--strict` exit 0.
 - Every gate PASS, nothing declared; goldens unchanged and the test count (gates.toml [ci] passed) unchanged.
+
+## Cleanse note (2026-10-29)
+`wc -l`: core/src/ai/state.rs 1,734, game/src/walk.rs 1,669 (both over the cap). Done or at it: game/src/soldier_vis.rs 667, bake/src/soldier.rs 1,244, core/src/sim/bounds.rs 1,500 (at the cap, not over).

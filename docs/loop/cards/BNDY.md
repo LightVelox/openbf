@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: blocked
 deps:
-files: engine/crates/bake/src/map.rs, engine/crates/manifest/src/lib.rs, engine/crates/game/src/layout.rs, engine/crates/core/src/sim/boundary.rs, engine/crates/core/src/sim/state.rs, engine/crates/core/src/sim/step.rs, engine/crates/core/src/announcer.rs, engine/crates/ui/src/hud.rs
+files: engine/crates/bake/src/map.rs, engine/crates/manifest/src/lib.rs, engine/crates/game/src/layout.rs, engine/crates/core/src/sim/boundary.rs (new), engine/crates/core/src/sim/state.rs, engine/crates/core/src/sim/step.rs, engine/crates/core/src/announcer.rs, engine/crates/ui/src/hud.rs
 declares: rebake=maps; sim; sweep; arena
 needs: maintainer - restore local BNDY PS2 fixture/captures, disc corpus, baked maps/missions and approved GPU validation environment
 effort:

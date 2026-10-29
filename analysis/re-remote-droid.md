@@ -137,7 +137,7 @@ h - a = LiftDamp 9.8 dt / (LiftSpring + 9.8 / (9a)): 0.092 m at 30 Hz for BF1 (1
   and score rules (`re-grenades.md` 7.1). The remote authors no AI range on the disc (census of the BF1 and BF2 side
   classes: `com_weap_inf_remotedroid` writes RoundsPerClip 1, ReloadTime 0, ShotDelay 1.4, OffhandWeapon 1), so the
   weapon class constructor's MinRange 0, OptimalRange 30, MaxRange 60 stand (B2 `FUN_00327e98` B2:307233-307234,
-  puVar1[0x45] = 30.0, [0x46] = 60.0; [0x44] = 0 at B2:307248). With 1 round it is never "plenty": a plenty weapon
+  a local[0x45] = 30.0, [0x46] = 60.0; [0x44] = 0 at B2:307248). With 1 round it is never "plenty": a plenty weapon
   in range keeps it out, and it is taken past the band of the weapons before it. The pick is applied by
   `FUN_002bbed0` and fired by the fire controller `FUN_002bb1b0` like any weapon in hand.
 - The other BF2 selectors of an AI weapon (the callers of `FUN_002bbed0`: B2 `FUN_002b8160` WeaponInvisibility,
@@ -147,7 +147,7 @@ h - a = LiftDamp 9.8 dt / (LiftSpring + 9.8 / (9a)): 0.092 m at 30 Hz for BF1 (1
 - **Launch, BF1: never** [V]. BF1's suitability `FUN_002380a8` (B1:151347) has one fixed 1000 for a class with no
   ordnance (+0x5c = 0), and its class id `DAT_005894c8` is WeaponMeleeClass (getter 0x291d80, name getter 0x291d90 ->
   "WeaponMeleeClass" 0x53c450), not WeaponRemoteClass (`DAT_005894d8`, getter 0x2926e0 -> 0x53c630; no other read of
-  that word in B1). Any other weapon with no ordnance ends at `if (iVar5 == 0) uVar4 = 0` and is refused. BF1's other
+  that word in B1). Any other weapon with no ordnance ends at *(decompiler detail omitted)* and is refused. BF1's other
   selectors (the callers of `FUN_0023d3f0`: `FUN_0023bc48` WeaponTowCable, `FUN_002456e0` the droideka's slot 1,
   `FUN_00254d60` a WeaponDispenser of EntityMineClass, `FUN_002566d8` WeaponRepairClass / PowerupItemClass) test no
   remote. So no BF1 bot launches a droid, and BF1's `UnitDroidController` serves droids piloted by AI in other ways.

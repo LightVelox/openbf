@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: todo
 deps: TBLD,FCUT,SPL11
-files: engine/crates/core/src/ai/serve.rs,engine/crates/core/src/ai/behave.rs,engine/crates/core/src/ai/state.rs,engine/crates/core/src/ai.rs,engine/crates/game/examples/round_to_outcome.rs
+files: engine/crates/core/src/ai/serve.rs (new),engine/crates/core/src/ai/behave.rs,engine/crates/core/src/ai/state.rs,engine/crates/core/src/ai.rs,engine/crates/game/examples/round_to_outcome.rs
 declares: sim; sweep; arena
 needs:
 effort:

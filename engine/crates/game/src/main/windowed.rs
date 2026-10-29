@@ -1761,7 +1761,11 @@ impl winit::application::ApplicationHandler for App {
                             r1: edges & game::kbm::MENU_R1 != 0,
                             square: edges & game::kbm::MENU_SQUARE != 0,
                         };
-                        if walk.follow_round_end(dt, pad, None) {
+                        let music_secs = walk.music.as_ref().and_then(|m| {
+                            let team = walk.sim.units.get(walk.player.index as usize)?.team;
+                            m.end_music_secs(usize::from(team), walk.sim.outcome?)
+                        });
+                        if walk.follow_round_end(dt, pad, music_secs) {
                             self.quit_clicked = true;
                             self.round_over = true;
                         }

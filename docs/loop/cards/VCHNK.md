@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: blocked
 deps: VDTH
-files: engine/crates/game/src/chunks.rs,engine/crates/game/src/viewer/vehicles.rs,engine/crates/game/src/vehicle_class.rs,engine/crates/manifest/src/lib.rs,engine/crates/bake/src/vehicle.rs
+files: engine/crates/game/src/fx/chunks.rs,engine/crates/game/src/viewer/vehicles.rs,engine/crates/game/src/vehicle_class.rs,engine/crates/manifest/src/lib.rs,engine/crates/bake/src/vehicle.rs
 declares: rebake=side
 needs: environment restoration — BF1/BF2 SIDE LVLs and vehicle/map bakes, missions and approved GPU acceptance; see lead_tmp/vchnk_cloud/inputs.json
 effort:
@@ -26,3 +26,10 @@ game-only presentation (chunks never touch the sim — the PS2's chunk-vs-vehicl
 
 ## Planner note (2026-09-30, M-ALPHA)
 `alpha: yes` — explosions: a destroyed vehicle's chunks. Value 4 (kept). Showcase maps: BF1 NAB1, BF1 TAT1 (the port's `tat1`), BF1 YAV2, BF2 UTA1, BF2 MYG1, BF2 HOT1 (PLAN §Milestones M-ALPHA).
+
+## Cleanse note (2026-10-29)
+Most of the launch/draw/lifetime is now in `game::fx::chunks` (night debris work, issue #49): the §6.1 launch law,
+floor contacts that settle after three bounces, BF2's 8 s rest on every map, a 30 s airborne bound, droid and
+vehicle death events. Its provisional deviations are in FEEL_NOTES (sphere contacts not rigid bodies, mesh-bound
+centres instead of ChunkNodeName, cosmetic spin). Still open for acceptance: the body model of §6.2, ChunkNodeName
+origins, ChunkTrail effects, the side rebake (`scripts/rebake.sh side`) and a capture after a scripted destroy.

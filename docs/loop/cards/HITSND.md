@@ -6,7 +6,7 @@ value: 3
 phase: build
 status: blocked
 deps: TESTEV
-files: engine/crates/game/src/event_sounds.rs, engine/crates/game/src/event_sounds/contact_tests.rs, engine/CRATES.md
+files: engine/crates/game/src/event_sounds.rs, engine/crates/game/src/event_sounds/contact_tests.rs (new), engine/CRATES.md
 declares:
 needs: listening to the named takes (the maintainer, windowed game); real-class census and mutations validated locally 2026-10-25
 effort:

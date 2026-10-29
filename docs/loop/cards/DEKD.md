@@ -6,7 +6,7 @@ value: 4
 phase: build
 status: todo
 deps: DEKU
-files: engine/crates/bake/src/droideka.rs,engine/crates/bake/src/main.rs,engine/crates/game/src/droideka_vis.rs,engine/crates/game/src/soldier_vis.rs,engine/crates/game/src/assets.rs,scripts/rebake.sh,engine/goldens/deps.toml
+files: engine/crates/bake/src/droideka.rs (new),engine/crates/bake/src/main.rs,engine/crates/game/src/droideka_vis.rs (new),engine/crates/game/src/soldier_vis.rs,engine/crates/game/src/assets.rs,scripts/rebake.sh,engine/goldens/deps.toml
 declares: rebake=side; goldens=(the new droideka sheet, named at build)
 needs:
 effort:
