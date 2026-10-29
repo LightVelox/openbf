@@ -167,7 +167,7 @@ fn tell(s: &mut Sim, e: UnitHandle) {
         .position(|u| u.alive && u.team == 0 && u.controller == Controller::Idle)
         .unwrap();
     s.units[mate].ai.contacts[0] = Some(crate::perception::Contact {
-        handle: e,
+        handle: e.into(),
         first_seen: tick,
         last_seen: tick,
         last_pos: at,
@@ -797,7 +797,7 @@ fn a_gunner_takes_the_target_inside_its_arc() {
         let tick = sc.s.tick;
         let st = &mut sc.s.units[b.index as usize].ai;
         st.contacts[3] = Some(crate::perception::Contact {
-            handle: behind,
+            handle: behind.into(),
             first_seen: 0,
             last_seen: tick,
             last_pos: at,
@@ -808,7 +808,11 @@ fn a_gunner_takes_the_target_inside_its_arc() {
         sc.s.step(&[]);
         // From its first think in the seat (it may have seen him on foot).
         if k > THINK_PERIOD {
-            assert_ne!(sc.s.unit(b).unwrap().ai.target, Some(behind), "tick {k}");
+            assert_ne!(
+                sc.s.unit(b).unwrap().ai.target,
+                Some(behind.into()),
+                "tick {k}"
+            );
         }
         hit |= hits_on(&sc.s, e) > 0;
     }

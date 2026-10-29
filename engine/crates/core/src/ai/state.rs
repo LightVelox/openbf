@@ -329,7 +329,7 @@ pub struct AiState {
     /// `contacts` — a bot may aim or fire only at a contact its perception
     /// holds, which is the rule that makes the top tiers fair. Was `engage`
     /// (the nearest visible enemy inside a 60 m constant) before Phase C.
-    pub target: Option<UnitHandle>,
+    pub target: Option<crate::perception::Foe>,
     /// The bounded contact memory this unit perceives the world through
     /// (`crate::perception`): six slots, oldest evicted, cleared 3 s after the
     /// last sighting or sound.
@@ -1596,10 +1596,14 @@ impl AiState {
         self.items.hash_into(eat);
         eat(&self.target_cp.unwrap_or(u32::MAX).to_le_bytes());
         match self.target {
-            Some(e) => {
+            Some(crate::perception::Foe::Unit(e)) => {
                 eat(&[1]);
                 eat(&e.index.to_le_bytes());
                 eat(&e.gen.to_le_bytes());
+            }
+            Some(crate::perception::Foe::Droid(id)) => {
+                eat(&[2]);
+                eat(&id.to_le_bytes());
             }
             None => eat(&[0]),
         }

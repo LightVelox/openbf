@@ -38,7 +38,7 @@ fn the_flag_is_hashed_only_when_set() {
 fn a_proxy_is_human_to_the_human_rules() {
     let (mut sim, a, b) = field(Difficulty::Normal);
     assert_eq!(humans_on(&sim, 0), 0);
-    sim.unit_mut(b).unwrap().ai.target = Some(a);
+    sim.unit_mut(b).unwrap().ai.target = Some(a.into());
     assert!(!crate::ai::tokn::bars(&sim, b, a), "a bot is not governed");
     sim.set_proxy(a, Some(Strength::Good.profile()));
     let u = sim.unit(a).unwrap();

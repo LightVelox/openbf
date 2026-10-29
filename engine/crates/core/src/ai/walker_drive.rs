@@ -278,8 +278,8 @@ pub(super) fn drive(
         .target
         .and_then(|h| perception::contact_of(st, h))
         .filter(|c| c.seen_now)
-        .and_then(|c| sim.unit(c.handle))
-        .map(|e| e.capsule().center());
+        .and_then(|c| perception::foe_motion(sim, c.handle))
+        .map(|(p, _)| p);
     let body = Body {
         pos,
         up: v.rot * Vec3::Y,

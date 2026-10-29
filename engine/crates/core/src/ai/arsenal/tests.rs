@@ -117,6 +117,7 @@ fn ask(d: f32) -> Ask {
         coin: false,
         vehicle: None,
         crowd: false,
+        droid: None,
     }
 }
 
@@ -1263,7 +1264,7 @@ fn a_bot_with_a_launcher_fires_it_at_a_tank_in_range_and_line() {
     assert!(got.len() >= 2, "{} rockets in 20 s", got.len());
     assert!(got.iter().all(|c| *c == l), "{got:?}");
     let u = sim.unit(bot).unwrap();
-    assert_eq!(u.ai.target, Some(rider));
+    assert_eq!(u.ai.target, Some(rider.into()));
     assert!(u.ai.arm.vehicle && !u.ai.arm.spare);
     assert!(u.ai.hold.is_some(), "a fight position against it");
     assert!(u.soldier.pos.length() < 3.0, "it stood: {}", u.soldier.pos);
@@ -1355,7 +1356,11 @@ fn a_rifleman_does_not_fire_at_a_walker_and_takes_the_soldier() {
     let (_, rider) = manned(&mut sim, VehicleKind::Walker, Vec3::new(0.0, 1.5, -30.0));
     assert_eq!(shots_of(&mut sim, bot, 15), Vec::<u32>::new());
     let u = sim.unit(bot).unwrap();
-    assert_eq!(u.ai.target, Some(rider), "the only contact is looked at");
+    assert_eq!(
+        u.ai.target,
+        Some(rider.into()),
+        "the only contact is looked at"
+    );
     assert!(u.ai.arm.spare && !u.ai.arm.vehicle && u.ai.arm.pick.is_none());
     assert!(u.ai.hold.is_none(), "no fight position against it");
     // The control: he gets out, and is shot at.
@@ -1367,13 +1372,13 @@ fn a_rifleman_does_not_fire_at_a_walker_and_takes_the_soldier() {
     manned(&mut sim, VehicleKind::Walker, Vec3::new(0.0, 1.5, -30.0));
     let foot = dummy(&mut sim, Vec3::new(8.0, 0.0, -42.0));
     assert!(shots_of(&mut sim, bot, 15).len() >= 5);
-    assert_eq!(sim.unit(bot).unwrap().ai.target, Some(foot));
+    assert_eq!(sim.unit(bot).unwrap().ai.target, Some(foot.into()));
     // The launcher's bot, a soldier at 20 m and the walker at 40: the walker.
     let (mut sim, bot, [l, _]) = heavy_scene(launcher(), rifle());
     let (_, rider) = manned(&mut sim, VehicleKind::Walker, Vec3::new(0.0, 1.5, -40.0));
     dummy(&mut sim, Vec3::new(8.0, 0.0, -20.0));
     let got = shots_of(&mut sim, bot, 15);
-    assert_eq!(sim.unit(bot).unwrap().ai.target, Some(rider));
+    assert_eq!(sim.unit(bot).unwrap().ai.target, Some(rider.into()));
     assert!(!got.is_empty() && got.iter().all(|c| *c == l), "{got:?}");
 }
 
@@ -1437,7 +1442,7 @@ fn a_rifleman_fires_at_a_vehicle_close_by() {
     let got = shots_of(&mut sim, bot, 15);
     assert!(got.len() >= 5 && got.iter().all(|c| *c == r), "{got:?}");
     let u = sim.unit(bot).unwrap();
-    assert_eq!(u.ai.target, Some(rider));
+    assert_eq!(u.ai.target, Some(rider.into()));
     assert!(!u.ai.arm.spare && !u.ai.arm.vehicle && u.ai.arm.pick.is_none());
     assert!(u.ai.hold.is_none(), "no fight position against it");
 }

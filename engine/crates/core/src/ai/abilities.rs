@@ -99,7 +99,7 @@ fn placed_slot(sim: &Sim, owner: UnitHandle) -> Option<usize> {
 /// in a group (BF2's grouping rule).
 fn turret_slot(sim: &Sim, owner: UnitHandle) -> Option<usize> {
     let u = sim.unit(owner)?;
-    let target = u.ai.target.and_then(|t| sim.unit(t))?;
+    let target = u.ai.target?.live_unit(sim)?;
     let cluster = || {
         let (own, foes) = arsenal::group_counts(sim, target);
         target.mount.is_none() && arsenal::is_group(GroundRules::Bf2, own, foes)
@@ -160,7 +160,7 @@ pub(crate) fn launch_ok(sim: &Sim, owner: UnitHandle) -> bool {
     }
     let pos = u.soldier.pos;
     let fight = u.ai.contacts.iter().flatten().any(|c| {
-        sim.unit(c.handle).is_some_and(|e| e.alive)
+        c.handle.live_unit(sim).is_some_and(|e| e.alive)
             && c.last_pos.distance_squared(pos) <= BOT_FIGHT * BOT_FIGHT
     });
     if !fight {

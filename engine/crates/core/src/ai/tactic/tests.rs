@@ -1118,9 +1118,9 @@ fn a_position_in_a_friends_line_of_fire_is_not_chosen() {
         .expect("mate");
     let t = sim.tick;
     let mu = sim.unit_mut(m).expect("mate");
-    mu.ai.target = Some(e);
+    mu.ai.target = Some(e.into());
     mu.ai.contacts[0] = Some(crate::perception::Contact {
-        handle: e,
+        handle: e.into(),
         first_seen: t,
         last_seen: t,
         last_pos: enemy,

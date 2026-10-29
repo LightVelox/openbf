@@ -19,7 +19,7 @@ fn a_last_leg_walks_at_an_unseen_enemy_in_the_capture_region() {
     let leg = |sim: &Sim, target: Option<UnitHandle>| {
         let mut st = AiState {
             target_cp: Some(0),
-            target,
+            target: target.map(Into::into),
             ..AiState::default()
         };
         let mut nt = NavTick::default();

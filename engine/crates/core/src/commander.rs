@@ -1869,7 +1869,7 @@ mod tests {
         let mut sim = fixture(10);
         // Unit 2 has an enemy to fight.
         let enemy = sim.handle(4);
-        sim.units[2].ai.target = Some(enemy);
+        sim.units[2].ai.target = Some(enemy.into());
         plans(&mut sim, 4);
         assert_eq!(
             assignments(&sim, 0)[..4],
@@ -2469,7 +2469,7 @@ mod tests {
         let mut sim = defs_world();
         assert!(!post_threatened(&sim, 0, 1, 30.0));
         let enemy = sim.handle(4);
-        sim.units[0].ai.target = Some(enemy);
+        sim.units[0].ai.target = Some(enemy.into());
         assert!(post_threatened(&sim, 0, 1, 30.0));
         assert!(!post_threatened(&sim, 0, 0, 30.0), "not cp0, 40 m off");
     }

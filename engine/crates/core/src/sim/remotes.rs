@@ -9,6 +9,11 @@ use crate::unit::{Controller, UnitHandle};
 use crate::weapon::{shot_direction, FireInput};
 use glam::Vec3;
 
+/// The presses that give a flown droid back to its soldier: the exit button or
+/// a weapon switch forward on either channel (B2 `FUN_001ee668` B2:101050-101103,
+/// B1 `FUN_001c9398` B1:73480-73540; `analysis/re-remote-droid.md` 6).
+const HAND_BACK: u32 = buttons::ACTION | buttons::SWITCH_WEAPON | buttons::SWITCH_SECONDARY;
+
 /// Card DROIDAI: what a bot's flight does this tick.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BotFlight {
@@ -25,6 +30,11 @@ enum BotFlight {
 impl Sim {
     pub fn controlled_droid(&self, h: UnitHandle) -> Option<&Droid> {
         self.droids.iter().find(|d| d.owner == h && d.controlled)
+    }
+
+    /// The droid `id`, while it flies.
+    pub fn live_droid(&self, id: u64) -> Option<&Droid> {
+        self.droids.iter().find(|d| d.id == id && d.alive())
     }
 
     pub fn droid_class(&self, d: &Droid) -> Option<&DroidClass> {
@@ -138,7 +148,7 @@ impl Sim {
         let owner = self.droids[k].owner;
         self.take_remote_pad(owner, unit_pads);
         let d = &mut self.droids[k];
-        let exit = pad.pressed(buttons::ACTION) && d.prev_buttons & buttons::ACTION == 0;
+        let exit = HAND_BACK & pad.buttons & !d.prev_buttons != 0;
         let bot_done = matches!(flight, BotFlight::Home | BotFlight::DestructHome);
         if exit || bot_done {
             d.controlled = false;
@@ -227,7 +237,7 @@ impl Sim {
             u.ai.contacts
                 .iter()
                 .flatten()
-                .filter(|c| self.unit(c.handle).is_some_and(|e| e.alive))
+                .filter(|c| c.handle.live_unit(self).is_some_and(|e| e.alive))
                 .map(|c| c.last_pos + Vec3::Y)
                 .filter(|p| p.distance_squared(u.soldier.pos) <= BOT_FIGHT * BOT_FIGHT)
                 .min_by(|a, b| a.distance_squared(eye).total_cmp(&b.distance_squared(eye)))
@@ -311,19 +321,17 @@ impl Sim {
         while k < self.droids.len() {
             let routed = pads.get(pad_at).copied().flatten();
             pad_at += 1;
-            let mut d = self.droids[k].clone();
+            let mut d = self.droids.remove(k);
             let Some(r) = self.weapon_classes[d.weapon_class].remote.as_deref() else {
-                self.droids.remove(k);
                 continue;
             };
-            let (c, blaster) = (r.droid.clone(), r.blaster_index);
+            let (c, blaster) = (&r.droid, r.blaster_index);
             let charge_time = r.destruct.as_ref().map(|x| x.charge_time);
             let owner = self
                 .unit(d.owner)
                 .map(|u| (u.is_player, u.look_scale(), u.controller));
             let Some((is_player, look, controller)) = owner else {
                 // [ours] The owner died: the droid vanishes, no explosion.
-                self.droids.remove(k);
                 self.droid_gone(&d, DroidEnd::OwnerDied);
                 continue;
             };
@@ -336,12 +344,17 @@ impl Sim {
                 };
             }
             d.yaw -= PadState::axis(pad.rx) * c.max_turn_speed * dt;
-            d.pitch += PadState::axis(pad.ry) * c.max_turn_speed * dt;
-            (d.yaw, d.pitch) = d.mouse_turned(&c, pad.look(), look);
+            let pitch_rate = if controller == Controller::Ai {
+                c.max_pitch_speed
+            } else {
+                c.max_turn_speed
+            };
+            d.pitch += PadState::axis(pad.ry) * pitch_rate * dt;
+            (d.yaw, d.pitch) = d.mouse_turned(c, pad.look(), look);
             let (floor, normal) = self.ground_point_under_n(d.pos, d.pos.y);
             let ground = (floor > crate::sticky::WORLD_FLOOR).then_some((d.pos.y - floor, normal));
             d.fly(
-                &c,
+                c,
                 dt,
                 PadState::axis(pad.ly),
                 PadState::axis(pad.lx),
@@ -398,7 +411,6 @@ impl Sim {
             if d.pos.y < crate::sticky::WORLD_FLOOR {
                 end = Some(DroidEnd::Destroyed);
             }
-            self.droids.remove(k);
             if let Some(end) = end {
                 if end == DroidEnd::Destruct {
                     self.destruct(&d);

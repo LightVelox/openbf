@@ -71,8 +71,9 @@ pub use rotating::PREVIOUS;
 /// blast (`core::sim::BLAST_AGE`); before it 0 was a blast OR a bolt that
 /// struck in its first update (a sniper's inside 66 m). 12 (playtest
 /// 2026-10-28, building turrets): every hit on a vehicle's or turret's pool
-/// the human deals or takes in his ride (`vhit`). An older file still reads.
-pub const SCHEMA: u32 = 12;
+/// the human deals or takes in his ride (`vhit`). 13 (issue #58): a unit's
+/// remote droid target (`target_droid`). An older file still reads.
+pub const SCHEMA: u32 = 13;
 /// Ticks between two unit frames (0.5 s).
 pub const UNIT_PERIOD: u64 = core::TICK_HZ as u64 / 2;
 /// Ticks between two world frames (2 s).

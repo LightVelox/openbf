@@ -294,8 +294,13 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     // fire; nothing perceived → the travelling look.
     let held = st.target.and_then(|h| perception::contact_of(st, h));
     let seen = held.filter(|c| c.seen_now);
-    let enemy = seen.and_then(|c| sim.unit(c.handle));
+    let enemy = seen.and_then(|c| c.handle.live_unit(sim));
     let memory = held.filter(|c| !c.seen_now).map(|c| c.last_pos);
+    let droid = seen.and_then(|c| {
+        let id = c.handle.droid()?;
+        let d = sim.live_droid(id)?;
+        Some((d, perception::fireable(&c, sim.tick, tier.reaction_ticks)))
+    });
     let pos = u.soldier.pos;
     let tk = Tick {
         me,
@@ -309,7 +314,10 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     gunner_foot::range_table(&tk, st, enemy);
     // Card GRAI: the weapon for this target, once a think (the gunner's).
     if thinking {
-        super::arsenal::think(sim, &tk, st, enemy);
+        match droid {
+            Some((d, _)) => super::arsenal::think_droid(sim, &tk, st, d),
+            None => super::arsenal::think(sim, &tk, st, enemy),
+        }
     }
 
     let leg_hub = st.route.filter(|r| !r.is_last()).map(|r| r.next_hub);
@@ -540,60 +548,64 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     // Where to look: the engaged enemy's lead point, else where we are
     // walking, else the target post (the last leg, and the no-graph
     // placeholder).
-    let aim = match (enemy.zip(seen), memory, corner, route_leg) {
-        // A seen enemy: the gunner's own aim point (its lead point under the
-        // D10 error), and the only target it fires on.
-        (Some((e, c)), _, _, _) => AimRequest::Enemy(e, c),
-        // A remembered contact is aimed at where it was last known to be —
-        // a point on the target, no lead (the PS2 aims at a point, and there
-        // is no velocity to lead with once the eyes are off it).
-        (None, Some(p), _, _) => AimRequest::Memory(p + Vec3::Y * 1.4),
-        // Card HOLD: a holder standing on its point with nobody in sight
-        // watches the way the nearest enemy is.
-        (None, None, _, _)
-            if holding.is_some_and(|h| {
-                h.look != Vec3::ZERO && nav::xz_dist(pos, h.goal) <= HOLD_ARRIVE
-            }) =>
-        {
-            AimRequest::Travel(holding.map_or(pos, |h| h.look))
-        }
-        (None, None, _, _) if item.is_some() => {
-            AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
-        }
-        (None, None, Some(_), _) => AimRequest::Travel(goal.unwrap_or(pos)),
-        // Running from a grenade, or walking back to the level: where it goes.
-        (None, None, None, _) if flee.is_some() || ret.is_some() => {
-            AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
-        }
-        // PILEIN can send an uncommanded bot to a vehicle without a post
-        // or graph. Its explicit approach must not take the idle fallback.
-        (None, None, None, None)
-            if boarding.is_some() && st.ride.is_some_and(|r| r.player_board.is_some()) =>
-        {
-            AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
-        }
-        // Card TBLD: a fixer with no route walks straight at its turret.
-        (None, None, None, None) if fixing.is_some() => {
-            AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
-        }
-        (None, None, None, Some(r)) => AimRequest::Travel(r.waypoint),
-        (None, None, None, None) => AimRequest::Travel(match post {
-            Some(cp) => cp.def.pos + Vec3::Y * 1.4,
-            // Hunting on the last leg: the destination hub itself.
-            None => match st.route {
-                Some(r) => r.waypoint,
-                // D6: a commanded unit LOOKS where it walks — the idle arm
-                // below is for a unit with no route, no post AND no order.
-                None => match st.cmd {
-                    Some(c) => c.goal + Vec3::Y * 1.4,
-                    None => {
-                        st.steer = SteerPick::Idle;
-                        st.behaviour = Behaviour::None;
-                        return (pad, nt);
-                    }
+    let aim = if let Some((d, ready)) = droid {
+        AimRequest::Droid(d, ready)
+    } else {
+        match (enemy.zip(seen), memory, corner, route_leg) {
+            // A seen enemy: the gunner's own aim point (its lead point under the
+            // D10 error), and the only target it fires on.
+            (Some((e, c)), _, _, _) => AimRequest::Enemy(e, c),
+            // A remembered contact is aimed at where it was last known to be —
+            // a point on the target, no lead (the PS2 aims at a point, and there
+            // is no velocity to lead with once the eyes are off it).
+            (None, Some(p), _, _) => AimRequest::Memory(p + Vec3::Y * 1.4),
+            // Card HOLD: a holder standing on its point with nobody in sight
+            // watches the way the nearest enemy is.
+            (None, None, _, _)
+                if holding.is_some_and(|h| {
+                    h.look != Vec3::ZERO && nav::xz_dist(pos, h.goal) <= HOLD_ARRIVE
+                }) =>
+            {
+                AimRequest::Travel(holding.map_or(pos, |h| h.look))
+            }
+            (None, None, _, _) if item.is_some() => {
+                AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
+            }
+            (None, None, Some(_), _) => AimRequest::Travel(goal.unwrap_or(pos)),
+            // Running from a grenade, or walking back to the level: where it goes.
+            (None, None, None, _) if flee.is_some() || ret.is_some() => {
+                AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
+            }
+            // PILEIN can send an uncommanded bot to a vehicle without a post
+            // or graph. Its explicit approach must not take the idle fallback.
+            (None, None, None, None)
+                if boarding.is_some() && st.ride.is_some_and(|r| r.player_board.is_some()) =>
+            {
+                AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
+            }
+            // Card TBLD: a fixer with no route walks straight at its turret.
+            (None, None, None, None) if fixing.is_some() => {
+                AimRequest::Travel(goal.unwrap_or(pos) + Vec3::Y * 1.4)
+            }
+            (None, None, None, Some(r)) => AimRequest::Travel(r.waypoint),
+            (None, None, None, None) => AimRequest::Travel(match post {
+                Some(cp) => cp.def.pos + Vec3::Y * 1.4,
+                // Hunting on the last leg: the destination hub itself.
+                None => match st.route {
+                    Some(r) => r.waypoint,
+                    // D6: a commanded unit LOOKS where it walks — the idle arm
+                    // below is for a unit with no route, no post AND no order.
+                    None => match st.cmd {
+                        Some(c) => c.goal + Vec3::Y * 1.4,
+                        None => {
+                            st.steer = SteerPick::Idle;
+                            st.behaviour = Behaviour::None;
+                            return (pad, nt);
+                        }
+                    },
                 },
-            },
-        }),
+            }),
+        }
     };
     // The gunner: the look sticks and the trigger. With nothing to turn to
     // (the aim point is the muzzle itself) the tick ends here.

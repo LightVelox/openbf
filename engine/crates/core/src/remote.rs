@@ -89,6 +89,9 @@ pub struct DroidClass {
     pub max_speed: f32,
     pub max_strafe_speed: f32,
     pub max_turn_speed: f32,
+    /// `MaxPitchSpeed` (B2 class +0x5d0, default 0.5): an AI pilot's pitch
+    /// rate (B2 `FUN_001ee668` B2:101233-101240).
+    pub max_pitch_speed: f32,
     pub pitch_limits: [f32; 2],
     pub level_spring: f32,
     pub level_damp: f32,
@@ -143,6 +146,7 @@ impl DroidClass {
             max_speed: f("MaxSpeed", 9.0),
             max_strafe_speed: f("MaxStrafeSpeed", 7.0),
             max_turn_speed: f("MaxTurnSpeed", 2.0),
+            max_pitch_speed: f("MaxPitchSpeed", 0.5),
             pitch_limits: pair(src, "PitchLimits")
                 .map(|p| p.map(|v| v * DEG))
                 .unwrap_or([-1.0, 1.0]),
@@ -340,7 +344,7 @@ impl Droid {
 
     pub fn mouse_turned(&self, c: &DroidClass, look: (f32, f32), scale: f32) -> (f32, f32) {
         (
-            self.yaw - look.0 * scale,
+            crate::vehicle::gun::wrap(self.yaw - look.0 * scale),
             (self.pitch + look.1 * scale).clamp(c.pitch_limits[0], c.pitch_limits[1]),
         )
     }

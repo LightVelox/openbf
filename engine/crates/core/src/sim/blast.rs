@@ -374,7 +374,7 @@ impl Sim {
         if let Some(a) = attacker.filter(|&a| victim_is_player && crate::ai::tokn::bars(self, a, h))
         {
             self.nav_stats.tokn_stray += 1;
-            if self.unit(a).is_some_and(|o| o.ai.target != Some(h)) {
+            if self.unit(a).is_some_and(|o| o.ai.target != Some(h.into())) {
                 self.nav_stats.tokn_cross += 1;
             }
         }

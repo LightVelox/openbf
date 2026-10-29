@@ -1353,13 +1353,13 @@ impl Sim {
             self.add_item_class(d.item.clone());
         }
         if let Some(r) = wc.remote.as_mut() {
-            r.blaster_index = self.add_weapon_class((*r.blaster).clone());
+            r.blaster_index = self.item_weapon_class(&r.blaster);
             if let Some(s) = r.destruct.as_ref().and_then(|d| d.salvo.as_ref()) {
-                r.shell_index = self.add_weapon_class((*s.shell).clone());
+                r.shell_index = self.item_weapon_class(&s.shell);
             }
         }
         if let Some(t) = wc.turret.as_mut() {
-            t.item.gun_index = self.add_weapon_class((*t.item.gun).clone());
+            t.item.gun_index = self.item_weapon_class(&t.item.gun);
         }
         self.weapon_classes.push(wc);
         self.weapon_classes.len() - 1
@@ -1373,6 +1373,23 @@ impl Sim {
             player && self.cheats.infinite_ammo,
             player && self.cheats.no_reload,
         )
+    }
+
+    fn item_weapon_class(&mut self, wc: &WeaponClass) -> usize {
+        let item = |i: usize| {
+            self.weapon_classes.iter().any(|w| {
+                w.remote
+                    .as_ref()
+                    .is_some_and(|r| r.blaster_index == i || r.shell_index == i)
+                    || w.turret.as_ref().is_some_and(|t| t.item.gun_index == i)
+            })
+        };
+        let found =
+            (0..self.weapon_classes.len()).find(|&i| self.weapon_classes[i] == *wc && item(i));
+        match found {
+            Some(i) => i,
+            None => self.add_weapon_class(wc.clone()),
+        }
     }
 
     pub fn unit(&self, h: UnitHandle) -> Option<&Unit> {

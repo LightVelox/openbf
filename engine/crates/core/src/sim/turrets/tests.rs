@@ -346,7 +346,7 @@ fn a_bot_throws_one_only_at_a_soldier_in_a_cluster_of_his_side() {
     sim.unit_mut(owner).unwrap().controller = Controller::Ai;
     let centre = Vec3::new(5.0, 0.0, -25.0);
     let enemies = enemies_at(&mut sim, centre, 1);
-    sim.unit_mut(owner).unwrap().ai.target = Some(enemies[0]);
+    sim.unit_mut(owner).unwrap().ai.target = Some(enemies[0].into());
     assert_eq!(crate::ai::ability_input(&sim, owner), None);
     enemies_at(&mut sim, centre + Vec3::Z, 4);
     assert!(crate::ai::ability_input(&sim, owner).is_some());

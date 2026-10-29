@@ -28,7 +28,7 @@
 //! own aim, `FUN_00236700`, B1:191963-191967); and it sees from its muzzle
 //! (`perception::scan`).
 
-use super::gunner_foot::{charge, fire_discipline, seen_aim, tap, Meter};
+use super::gunner_foot::{charge, droid_aim, fire_discipline, seen_aim, tap, Meter};
 use super::state::AiState;
 use super::AIM_TOLERANCE;
 use crate::fmath;
@@ -71,8 +71,15 @@ pub(super) fn aim(
     let skill = sim.skill_of(u);
     let tier = sim.unit_tier(u);
     let held = st.target.and_then(|h| perception::contact_of(st, h));
-    let enemy = held.filter(|c| c.seen_now).and_then(|c| sim.unit(c.handle));
-    let point = enemy.map(|e| seen_aim(sim, me, st, s.eye, e, wc.ordnance.velocity, wc));
+    let seen = held.filter(|c| c.seen_now);
+    let enemy = seen.and_then(|c| c.handle.live_unit(sim));
+    let droid = seen
+        .and_then(|c| c.handle.droid())
+        .and_then(|id| sim.live_droid(id));
+    let point = enemy
+        .map(|e| seen_aim(sim, me, st, s.eye, e, wc.ordnance.velocity, wc))
+        .or_else(|| droid.map(|d| droid_aim(sim, me, st, s.eye, d, wc.ordnance.velocity, wc)));
+    let centre = enemy.map(|e| e.capsule().center()).or(droid.map(|d| d.pos));
     let at = point.or(idle);
 
     if let (Look::Seat, Some(t)) = (look, s.gun.turn) {
@@ -115,15 +122,15 @@ pub(super) fn aim(
         unlimited: w.infinite || wc.infinite_ammo(),
     };
     fire_discipline(sim, me, u, st, wc, meter, &skill);
-    let shot = enemy.zip(point).is_some_and(|(e, p)| {
+    let shot = centre.zip(point).is_some_and(|(c, p)| {
         let on =
             (p - s.muzzle).normalize_or_zero().dot(s.barrel) >= fmath::sin_cos(AIM_TOLERANCE).1;
-        let range = (e.capsule().center() - s.muzzle).length();
+        let range = (c - s.muzzle).length();
         let ready = held.is_some_and(|c| perception::fireable(&c, sim.tick, tier.reaction_ticks));
         ready && on && range <= wc.ordnance.max_range()
     });
     if wc.max_pressed_time > 0.0 {
-        if enemy.is_some() {
+        if centre.is_some() {
             let want_fire = shot && st.burst > 0 && sim.tick >= st.pause_until;
             charge(sim, me, st, wc, &skill, want_fire, false, pad);
         } else {
