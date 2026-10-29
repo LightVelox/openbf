@@ -169,6 +169,9 @@ pub struct ManifestLeafClass {
     pub name: String,
     /// `Texture`, as the ODF spells it.
     pub texture: String,
+    /// Airborne leaf slots per visible patch (`0xfd7fae90`, at most 50).
+    #[serde(default)]
+    pub falling_count: u8,
     /// `NumParticles` (NOT divided by the view count — LEAF's decision).
     pub particles: u32,
     pub min_size: f32,

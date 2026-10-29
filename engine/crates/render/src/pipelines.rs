@@ -594,6 +594,7 @@ impl Renderer {
             grass_pipeline,
             grass: Default::default(),
             leaves: Default::default(),
+            falling: Default::default(),
             bolt_core_pipeline,
             bolt_glow_pipeline,
             bolts: Default::default(),

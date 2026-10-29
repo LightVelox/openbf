@@ -155,7 +155,8 @@ fn bloom_uses_preclip_marked_light_and_scene_depth() {
     );
     d.light = LightPath::Glow;
     d.texture = Some(tex);
-    let mut blocker = DrawCmd::textured(view_quad(&mut r, -1.0), white, Mat4::IDENTITY);
+    let dark = upload_tex(&mut r, 1, 1, &[0, 0, 0, 255], "dark occluder");
+    let mut blocker = DrawCmd::textured(view_quad(&mut r, -1.0), dark, Mat4::IDENTITY);
     blocker.light = LightPath::Unlit;
     r.set_bloom(None);
     r.render(&cam, &[d, blocker], [0.0; 4]).unwrap();
@@ -179,6 +180,20 @@ fn bloom_uses_preclip_marked_light_and_scene_depth() {
         texture: Some(white),
         additive: true,
     };
+    r.set_particles(vec![particle.clone()]);
+    r.set_bloom(None);
+    r.render(&cam, &[], [0.0; 4]).unwrap();
+    let single = r.capture_rgba().unwrap().0;
+    r.set_bloom(Some(Bloom {
+        threshold: 0.6,
+        ..settings
+    }));
+    r.render(&cam, &[], [0.0; 4]).unwrap();
+    assert_eq!(
+        r.capture_rgba().unwrap().0,
+        single,
+        "one half-scale additive source must stay below threshold"
+    );
     r.set_particles(vec![particle.clone(), particle]);
     r.set_bloom(None);
     r.render(&cam, &[], [0.0; 4]).unwrap();
@@ -202,4 +217,94 @@ fn bloom_uses_preclip_marked_light_and_scene_depth() {
         off,
         "disabled state must restore exact frame"
     );
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn airborne_leaf_draw_and_scene_clear() {
+    use glam::Vec3;
+    use render::{Camera, LeafEmitter, LeafObject};
+    let mut r = Renderer::new_headless(128, 128).unwrap();
+    let texture = upload_tex(&mut r, 1, 1, &[50, 170, 20, 255], "leaf control");
+    r.set_leaves(
+        Vec::new(),
+        vec![LeafObject {
+            class: 0,
+            matrix: Mat4::from_translation(Vec3::new(0.0, 0.0, -2.0)),
+            color: [1.0; 4],
+            distance: 100.0,
+        }],
+        None,
+    );
+    r.set_leaf_fall(
+        vec![LeafEmitter {
+            count: 1,
+            radius: 0.0,
+            height: 0.0,
+            scale: 1.0,
+            distance: 100.0,
+        }],
+        Some(texture),
+        Some(Box::new(|_, _| -10.0)),
+    );
+    let camera = Camera {
+        position: Vec3::new(0.0, 1.0, 0.0),
+        pitch: -0.3,
+        ..Default::default()
+    };
+    r.render(&camera, &[], [0.0; 4]).unwrap();
+    let rgba = r.capture_rgba().unwrap().0;
+    assert!(
+        rgba.chunks_exact(4).any(|p| p[1] > 10),
+        "airborne pool never reached the scene draw list"
+    );
+    r.clear_scene();
+    r.render(&camera, &[], [0.0; 4]).unwrap();
+    assert!(
+        r.capture_rgba()
+            .unwrap()
+            .0
+            .chunks_exact(4)
+            .all(|p| p[..3] == [0; 3]),
+        "leaf survived scene clear"
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn bloom_and_surface_keep_the_same_material_clock() {
+    use render::{Bloom, LightPath};
+    let mut r = Renderer::new_headless(128, 128).unwrap();
+    let pixels: Vec<u8> = (0..16)
+        .flat_map(|x| {
+            if x % 4 == 0 {
+                [255, 100, 10, 255]
+            } else {
+                [0, 0, 0, 255]
+            }
+        })
+        .collect();
+    let mut desc = common::tex_desc(16, 1, &[], "moving glow");
+    let mips = [pixels.as_slice()];
+    desc.mips = &mips;
+    desc.scroll = [5.0 / 255.0, 0.0];
+    let texture = r.add_texture(&desc).unwrap();
+    let mesh = view_quad(&mut r, -3.0);
+    let mut draw = DrawCmd::textured(mesh, texture, Mat4::IDENTITY);
+    draw.light = LightPath::Glow;
+    r.set_bloom(Some(Bloom {
+        passes: 3,
+        weight: 1.0,
+        threshold: 0.5,
+    }));
+    let mut at = |seconds: f64| {
+        r.time = (seconds % f64::from(render::TIME_WRAP)) as f32;
+        r.water_time = seconds;
+        r.render(&Camera::default(), &[draw], [0.0; 4]).unwrap();
+        r.capture_rgba().unwrap().0
+    };
+    let a = at(215.0);
+    assert_ne!(a, at(216.0), "scroll control is inert");
+    assert_eq!(a, at(2000.0), "bloom detached when the water clock wrapped");
+    assert_eq!(at(0.0), at(255.0), "material-period mismatch");
 }

@@ -145,6 +145,14 @@ impl Renderer {
         clear: [f64; 4],
         overlay: Option<OverlayFn<'_>>,
     ) -> Result<(), RenderError> {
+        let extra = self.falling_draws(camera);
+        let all;
+        let draws = if extra.is_empty() {
+            draws
+        } else {
+            all = draws.iter().copied().chain(extra).collect::<Vec<_>>();
+            &all
+        };
         for d in skinned {
             let Some(mesh) = self.skinned_meshes.get(d.mesh.0 as usize) else {
                 return Err(RenderError::BadHandle(format!("skinned mesh {}", d.mesh.0)));

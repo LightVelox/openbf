@@ -61,6 +61,7 @@ pub fn leaf_class(name: &str, props: &[(u32, String)]) -> ManifestLeafClass {
     let mut g = ManifestLeafClass {
         name: name.to_owned(),
         texture: "grass".into(),
+        falling_count: 0,
         particles: 50,
         min_size: 10.0,
         max_size: 15.0,
@@ -86,6 +87,9 @@ pub fn leaf_class(name: &str, props: &[(u32, String)]) -> ManifestLeafClass {
         let fl = |k: usize| f.get(k).copied().flatten();
         let one = |d: f32| fl(0).unwrap_or(d);
         match *h {
+            0xfd7f_ae90 => {
+                g.falling_count = int(v).map_or(g.falling_count, |n| n.clamp(0, 50) as u8)
+            }
             0xd133_f7da => g.particles = int(v).map_or(g.particles, |n| n.max(0) as u32),
             0xeaeb_cf6e => g.min_size = one(g.min_size),
             0x80ba_1308 => g.max_size = one(g.max_size),
@@ -195,6 +199,17 @@ mod tests {
 
     fn props(p: &[(u32, &str)]) -> Vec<(u32, String)> {
         p.iter().map(|&(h, v)| (h, v.to_owned())).collect()
+    }
+
+    #[test]
+    fn falling_count_is_optional_and_bounded() {
+        assert_eq!(leaf_class("empty", &[]).falling_count, 0);
+        for (value, count) in [("6", 6), ("90", 50), ("-1", 0), ("bad", 0)] {
+            assert_eq!(
+                leaf_class("leaf", &props(&[(0xfd7f_ae90, value)])).falling_count,
+                count
+            );
+        }
     }
 
     /// BF1 NAB1's class as the disc spells it (re-leafpatch §1); a seed past

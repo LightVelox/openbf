@@ -67,6 +67,7 @@ mod camera;
 mod capture;
 mod device;
 mod draw;
+mod falling;
 mod filter;
 mod frame;
 mod frustum;
@@ -97,6 +98,7 @@ pub use draw::{
     fragment_kept, DrawCmd, DrawLayer, Fade, LightPath, LodSide, LodSwitch, SkinnedDrawCmd,
     IFACE_AMBIENT, IFACE_DIR_CAMERA,
 };
+pub use falling::LeafEmitter;
 pub use filter::{box_side, FrameFilter};
 pub use frame::{FrameStats, OverlayFn};
 pub use grass::{sprite_quad, sway, GrassClass, GrassPatch, GrassSprite, ViewAxes};
@@ -335,6 +337,7 @@ pub struct Renderer {
     grass_pipeline: wgpu::RenderPipeline,
     grass: grass::GrassState,
     leaves: leaf::LeafState,
+    falling: falling::FallingState,
     /// The laser bolts (`bolt.rs`, card FXB): the core's NORMAL and the
     /// glow's ADDITIVE pipeline (vs `grass.wgsl`, fs `bolt.wgsl`, no depth
     /// write) and this frame's bolts, set by [`Renderer::set_bolts`].
@@ -430,6 +433,7 @@ impl Renderer {
         self.set_terrain_lights(Default::default());
         self.set_frame_filter(None);
         self.set_bloom(None);
+        self.set_leaf_fall(Vec::new(), None, None);
         self.lighting = Lighting::default();
     }
 }

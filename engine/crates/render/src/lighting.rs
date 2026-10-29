@@ -89,7 +89,7 @@ pub fn encode(l: f32) -> f32 {
 }
 
 /// sRGB decode of one display channel (the shader's `srgb_to_linear`).
-fn decode(d: f32) -> f32 {
+pub(crate) fn decode(d: f32) -> f32 {
     if d <= 0.040_45 {
         d / 12.92
     } else {

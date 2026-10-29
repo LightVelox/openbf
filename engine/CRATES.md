@@ -673,3 +673,4 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `game/src/fx/props.rs` 174 — static prop effect frames and optional repeat timers, presentation only.
 - `render/src/bloom.rs` — selective BF2 pre-clamp emissive gather and authored blur · `Bloom`
 - `render/src/bloom.wgsl` — threshold, five-tap blur and display-space composite · bloom fragment entry points
+- `render/src/falling.rs` — airborne leaf pool, flutter/tumble, visibility retirement and world quads · `LeafEmitter`

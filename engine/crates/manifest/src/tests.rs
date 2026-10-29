@@ -387,6 +387,7 @@ fn full_manifest() -> Manifest {
         leaf: vec![ManifestLeafClass {
             name: "nab2_prop_vine1".into(),
             texture: "nab2_leaf".into(),
+            falling_count: 0,
             particles: 50,
             min_size: 1.2,
             max_size: 1.4,
@@ -1376,4 +1377,16 @@ fn hud_files_round_trip() {
     };
     let back: HudIndex = ron::from_str(&to_ron(&index)).expect("read back index");
     assert_eq!(back, index);
+}
+
+#[test]
+fn old_leaf_rows_disable_airborne_particles() {
+    let mut leaf = full_manifest().leaf.remove(0);
+    leaf.falling_count = 6;
+    let text = ron::ser::to_string(&leaf).unwrap();
+    let parsed: ManifestLeafClass = ron::from_str(&text).unwrap();
+    assert_eq!(parsed.falling_count, 6);
+    let old = text.replace("falling_count:6,", "");
+    let parsed: ManifestLeafClass = ron::from_str(&old).unwrap();
+    assert_eq!(parsed.falling_count, 0);
 }

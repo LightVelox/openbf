@@ -1220,6 +1220,27 @@ pub fn upload_scene(r: &mut Renderer, scene: &Scene) -> Result<SceneGpu> {
         .near_scene_range
         .map(|[_, b, c]| (b, c));
     r.set_leaves(leaf_classes, leaf_objects, near);
+    let emitters = scene
+        .manifest
+        .leaf
+        .iter()
+        .map(|g| render::LeafEmitter {
+            count: g.falling_count,
+            radius: g.radius,
+            height: g.height,
+            scale: g.scale,
+            distance: g.max_distance,
+        })
+        .collect();
+    let falling_texture = if scene.manifest.leaf.iter().any(|g| g.falling_count > 0) {
+        get_texture(r, scene, &mut textures, "leaf", render::WrapV::Repeat)?.map(|t| t.handle)
+    } else {
+        None
+    };
+    let ground = scene.heightfield().map(|g| {
+        Box::new(move |x, z| g.height_at(x, z)) as Box<dyn Fn(f32, f32) -> f32 + Send + Sync>
+    });
+    r.set_leaf_fall(emitters, falling_texture, ground);
     let mut untextured: Vec<(String, String, usize)> = census
         .failed
         .into_iter()
