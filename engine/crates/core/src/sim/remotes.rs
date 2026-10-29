@@ -1,3 +1,8 @@
+//! The remote droid in the sim: launch, control routing and hand-back, flight,
+//! blaster, destruct, damage, salvo runs and the bot's droid pad (card DROIDAI).
+//! `free_shots` fires the ownerless-gun bolts the auto-turret shares. Follows
+//! `analysis/re-remote-droid.md`; friendly-fire checks are card TKFIX.
+
 use super::{buttons, Event, PadState, Sim};
 use crate::collision::{Capsule, HullFilter};
 use crate::projectile::{Bolt, Shooter};

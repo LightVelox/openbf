@@ -337,7 +337,7 @@ fn free_bot(sim: &Sim, i: usize, team: u8, vh: VehicleHandle) -> bool {
         && o.team == team
         && o.controller == Controller::Ai
         && o.mount.is_none()
-        && o.command.is_none_or(|c| c.in_pool())
+        && o.command.is_none()
         && o.ai.lost.is_none()
         && o.ai.ride.is_none_or(|r| {
             r.board.is_none()

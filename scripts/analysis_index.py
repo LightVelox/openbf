@@ -102,7 +102,7 @@ def main():
         out.append("")
     text = "\n".join(out)
     if "--check" in args:
-        print(text)
+        sys.stdout.write(text)
     else:
         open(os.path.join(AN, "INDEX.md"), "w", encoding="utf-8").write(text)
         print(f"wrote analysis/INDEX.md: {sum(len(v) for v in rows.values())} files, {len(text.splitlines())} lines")

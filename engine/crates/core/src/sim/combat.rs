@@ -19,7 +19,8 @@ use glam::Vec3;
 #[cfg(doc)]
 use super::state::LETHAL_LANDING_SPEED;
 
-/// The head prim's HitLocation factor (see `Sim::hit_scale`).
+/// The head prim's HitLocation factor (see `Sim::hit_scale`): BF2's hard-coded
+/// default {head prim, x3.0}, `FUN_002517e8` (`analysis/re-ai-difficulty.md` §9.2).
 pub const HEADSHOT_SCALE: f32 = 3.0;
 
 impl Sim {

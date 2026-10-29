@@ -1,3 +1,8 @@
+//! Keyboard + mouse look in the sim: seat-gun look by angle, hover and walker
+//! mouse driving, and the between-tick view preview. OURS: keyboard + mouse is a
+//! deliberate deviation (public pull request #1); rules in `AGENTS.md`
+//! (Keyboard + mouse).
+
 use super::input::PadState;
 use super::state::Sim;
 use crate::unit::UnitHandle;

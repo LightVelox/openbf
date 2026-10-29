@@ -553,23 +553,12 @@ pub const BF1_AIR_SPEED: f32 = 0.2;
 /// update, 0.5606 m/s on every later one, at Acceleraton 70).
 pub const BF1_ACCEL: f32 = 1.2;
 pub const BF1_AIR_ACCEL: f32 = 0.2;
-/// Historical BF1 jump (unused by JUNI): this share of the jump velocity,
-/// times the forward stick,
-/// along the facing (FUN_00208b78: 8.0 x stick x 0.25 = +-2.0 m/s; PCSX2:
-/// 6.500 -> 8.500, -6.500 -> -8.503, nothing with the stick released).
-pub const BF1_JUMP_PUSH: f32 = 0.25;
-
 /// A jump press is taken this long after the floor is lost, in the stand and
 /// the sprint stance (card JGATE; BF2 FUN_00240bf8 B2:160304-160310 / 160530,
 /// BF1 FUN_00205cc8 B1:117388-117414 for a stance 5 s old; re-stance-roll.md
 /// §4.3c). The PS2's timer is 0 on the first update off the floor, so 9
 /// updates take the press and the 10th does not.
 pub const JUMP_OFF_FLOOR: f32 = 0.3;
-/// Historical BF1 stand jump delay (unused by JUNI): this long into the
-/// stance (B1:117439), and a
-/// crouch stands up on the jump button this long into it (both games; BF2
-/// B2:160394-160397).
-pub const BF1_JUMP_WAIT: f32 = 0.5;
 /// A crouch or a prone stands up on the jump button this long into it (the
 /// crouch: both games, BF2 B2:160394-160397; the prone: BF1's prone case,
 /// `jump && t > 0.5`, re-stance-roll.md §3.2).

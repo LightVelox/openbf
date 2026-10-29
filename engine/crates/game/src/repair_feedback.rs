@@ -1,3 +1,7 @@
+//! Whether a unit's fusion cutter is working now, shared by audio and effects:
+//! the active weapon, its channel and its energy; also the cutter's sound loops.
+//! Card TBLD (`analysis/re-build-zones.md`).
+
 use core::sim::{Event, Sim};
 use core::unit::UnitHandle;
 use core::weapon::{FireState, WeaponClass};

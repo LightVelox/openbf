@@ -57,8 +57,8 @@ pub enum UcfbError {
 /// Four-byte chunk tag, e.g. `ucfb`, `lvl_`, `scr_`, `NAME`.
 pub type Tag = [u8; 4];
 
-/// FNV-1a-32 over the lowercased name — the hash used for non-ASCII chunk
-/// tags, `lvl_` sub-level names, and PROP keys (A2 §1; matches PC tools).
+/// FNV-1a-32 with the game's byte fold (`b | 0x20`) — the hash used for
+/// non-ASCII chunk tags, `lvl_` sub-level names, and PROP keys (A2 §1).
 pub fn fnv1a_lowercase(name: &str) -> u32 {
     let mut h: u32 = 2_166_136_261;
     for b in name.bytes() {

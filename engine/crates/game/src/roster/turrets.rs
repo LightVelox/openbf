@@ -1,3 +1,6 @@
+//! Resolves the auto-turret dispenser's turret, gun and explosion through the
+//! baked class chains. Follows `analysis/re-portable-turret.md`.
+
 use super::{explosion_class, weapon_from_db, ClassDb, ClassSrc};
 use anyhow::{Context, Result};
 use core::autoturret::TurretClass;

@@ -71,7 +71,7 @@ pub const TEAMKILL_SLAUGHTER: u8 = 0x25;
 /// The events the port's triggers ask (`Vo::tick`): the PS2's call sites
 /// that have a line and a port event. Never 0 (the `...VO` requests) or
 /// MissileIncoming (5): no PS2 site passes them [receipt:e6dfb8fe].
-/// HeadshotKill (9) waits for a head hit the port does not report;
+/// HeadshotKill (9) has no voice trigger wired to the reported critical hits;
 /// PathFollowWait, RebelsShootDeadBody, the repairs, GivePowerup,
 /// NotShootingCriticalHit and the SC_ lines for their port triggers.
 pub const ASKED: [u8; 8] = [

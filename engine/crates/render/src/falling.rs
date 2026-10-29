@@ -3,7 +3,9 @@
 //! Flutter/tumble use the original two modes; terrain ends a fall. Three
 //! seconds without a draw retires a leaf, rather than limiting its life.
 //! [ours] A fixed cosmetic seed and a 100 ms step cap keep replay/camera
-//! discontinuities bounded. Ground-leaf gusts are outside this module.
+//! discontinuities bounded. [ours] Every leaf object is checked each frame,
+//! not the PS2's 30 s collision query near the camera. Ground-leaf gusts are
+//! outside this module.
 use crate::frustum::Frustum;
 use crate::{
     Camera, DrawCmd, DrawLayer, LeafObject, LightPath, MeshData, MeshHandle, Renderer,

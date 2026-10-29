@@ -191,16 +191,32 @@ def map_texture_sources(baked):
             names = [json.loads(m) for m in re.findall(RON_STRING, raw)]
             if re.sub(RON_STRING, '', raw).strip(' \r\n\t,'):
                 raise ValueError("unrecognized textures array")
-            raw = ron_array(text, "texture_tiers")
-            tiers = [(json.loads(a), json.loads(b)) for a, b in re.findall(pair, raw)]
-            if re.sub(pair, '', raw).strip(' \r\n\t,'):
-                raise ValueError("unrecognized texture_tiers array")
+            def pairs(key):
+                raw = ron_array(text, key)
+                values = [(json.loads(a), json.loads(b)) for a, b in re.findall(pair, raw)]
+                if re.sub(pair, '', raw).strip(' \r\n\t,'):
+                    raise ValueError(f"unrecognized {key} array")
+                return values
+
+            tiers = pairs("texture_tiers")
+            files = {}
+            for name, filename in pairs("texture_tier2"):
+                path = Path(filename)
+                if not filename or path.is_absolute() or '..' in path.parts:
+                    raise ValueError("texture_tier2 file must be relative to textures/")
+                if name in files and files[name] != filename:
+                    raise ValueError(f"conflicting texture_tier2 files for {name!r}")
+                files[name] = filename
             textures = manifest.parent / 'textures'
+            tier_names = {name for name, _ in tiers}
+            present = {name for name, filename in files.items() if (textures / filename).is_file()}
             row.update(source_game=game, base_source=f"{game} PS2",
-                       base_textures=sum((textures / f'{n.lower()}.ktx2').is_file() for n in set(names)),
-                       missing_base_textures=sorted(n for n in set(names) if not (textures / f'{n.lower()}.ktx2').is_file()),
-                       pc_alternatives=sorted({n for n, source in tiers if source == 'pc' and (textures / f'{n}.tier2.ktx2').is_file()}),
-                       missing_alternatives=sorted({n for n, _ in tiers if not (textures / f'{n}.tier2.ktx2').is_file()}),
+                       base_textures=sum((textures / f'{n}.ktx2').is_file() for n in set(names)),
+                       missing_base_textures=sorted(n for n in set(names) if not (textures / f'{n}.ktx2').is_file()),
+                       pc_alternatives=sorted({n for n, source in tiers if source == 'pc' and n in present}),
+                       missing_alternatives=sorted(tier_names.intersection(files) - present),
+                       missing_alternative_metadata=sorted(tier_names - files.keys()),
+                       unrecognized_alternative_metadata=sorted(files.keys() - tier_names),
                        unrecognized_tiers=sorted({source for _, source in tiers if source != 'pc'}))
         except (OSError, ValueError) as error:
             row['error'] = str(error)
@@ -219,7 +235,7 @@ def source_report(root, baked, missions, images, extracted_used=(), images_used=
 
     selected = set()
     for game, image in images.items():
-        selected.add(Path(image).absolute())
+        selected.add(Path(image).resolve())
         used = game in images_used
         note(image, f'{game} requested PS2 image', used,
              'extracted successfully this run' if used else 'not read or verified this run; cached extraction used')
@@ -230,7 +246,7 @@ def source_report(root, baked, missions, images, extracted_used=(), images_used=
     iso = root / 'iso'
     if iso.is_dir():
         for path in sorted(p for p in iso.iterdir() if p.is_file()):
-            if path.absolute() not in selected:
+            if path.resolve() not in selected:
                 inputs.append(dict(path=str(path.absolute()), label='other source file', present=True,
                                    status='not recognized', reason='no supported reader selected; file was not read'))
     pc = root / 'PC_swbf2_exe' / 'Star Wars Battlefront II Classic/GameData/data/_lvl_pc'
@@ -271,6 +287,10 @@ def write_source_report(out, report):
             print(f"  {row['map']}: {row['base_textures']} {row['base_source']} base, "
                   f"{len(row['pc_alternatives'])} PC alternatives; "
                   f"{len(row['missing_base_textures'])} missing base / {len(row['missing_alternatives'])} missing alternatives")
+            if row['missing_alternative_metadata']:
+                print(f"    missing alternative filename metadata: {row['missing_alternative_metadata']!r}")
+            if row['unrecognized_alternative_metadata']:
+                print(f"    alternative files without source metadata: {row['unrecognized_alternative_metadata']!r}")
             if row['unrecognized_tiers']:
                 print(f"    unrecognized provenance tags: {row['unrecognized_tiers']!r}")
     print(report['limits'])
@@ -359,6 +379,9 @@ def main():
 
     step("6/6 pack")
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    old_report = out + ".sources.json"  # never left describing an earlier pack
+    if os.path.exists(old_report):
+        os.remove(old_report)
     tmp = os.path.join(os.path.dirname(out), "pack-tmp" + EXE)  # Windows runs only a name ending in .exe
     shutil.copyfile(game, tmp)
     os.chmod(tmp, 0o755)

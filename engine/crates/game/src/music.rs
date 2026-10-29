@@ -132,8 +132,13 @@ impl BattleMusic {
         self.tracks.get(music)
     }
 
-    /// Length of the listener's selected end-music take, even without a device.
+    /// Length of the listener's selected end-music take, even without a device;
+    /// None when no end music is asked (volume 0, or the round ended before the
+    /// first spawn: [`BattleMusic::observe`]).
     pub fn end_music_secs(&self, listener: usize, winner: u8) -> Option<f32> {
+        if self.volume <= 0.0 || !self.ambient.enabled {
+            return None;
+        }
         let table = if usize::from(winner) == listener {
             &self.ambient.victory
         } else {
@@ -343,6 +348,7 @@ mod tests {
             t.def.takes = vec![if name.ends_with("defeat") { 4.9 } else { 8.4 }];
             Some(t)
         });
+        m.ambient.enabled = true;
         for listener in [0, 1] {
             for winner in [0, 1] {
                 let won = listener == usize::from(winner);
@@ -358,9 +364,19 @@ mod tests {
                 assert_eq!(r.phase, Phase::Banner);
                 r.step(0.02, ui::stats::Pad::default());
                 assert_eq!(r.phase, if won { Phase::Banner } else { Phase::Stats });
+                r.step(1.98, ui::stats::Pad::default());
+                assert_eq!(r.phase, if won { Phase::Banner } else { Phase::Stats });
+                r.step(0.02, ui::stats::Pad::default());
+                assert_eq!(r.phase, Phase::Stats, "7 s at most");
             }
         }
         assert_eq!(m.end_music_secs(2, 0), None);
+        m.ambient.enabled = false;
+        assert_eq!(m.end_music_secs(0, 0), None, "no spawn: no end music");
+        m.ambient.enabled = true;
+        m.volume = 0.0;
+        assert_eq!(m.end_music_secs(0, 0), None, "volume 0: no end music");
+        m.volume = DEFAULT_VOLUME;
         let entry = m.ambient.victory[0].unwrap();
         m.player.musics[entry.music].def.takes = vec![8.4, 6.0];
         m.player.musics[entry.music].take = 1;

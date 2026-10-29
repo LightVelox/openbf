@@ -4773,10 +4773,9 @@ fn run_map(
         // a non-zero count here means a command-free round issued one.
         outln!(
             out,
-            "    squad: commands {}  releases {}  disperse_fb {}",
+            "    squad: commands {}  releases {}",
             w.sim.nav_stats.commands,
             w.sim.nav_stats.releases,
-            w.sim.nav_stats.disperse_fallbacks,
         );
         // Card VAI: the bots' vehicles — only on a map that has any.
         if !w.sim.vehicles.is_empty() {
@@ -5127,7 +5126,7 @@ fn run_map(
             };
             // D13: the squad order this unit carries, `-` for none.
             let cmd = match u.command {
-                Some(c) => c.kind.label(w.sim.tick),
+                Some(c) => c.kind.label(),
                 None => "-".to_string(),
             };
             let target = match u.ai.target {

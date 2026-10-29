@@ -47,14 +47,17 @@ fn a_scrolling_material_moves_with_the_clock() {
     let (mesh, tex) = striped_quad(&mut r, [0.5, 0.0]);
 
     r.time = 0.0;
+    r.water_time = 0.0;
     let t0 = frame(&mut r, mesh, tex);
     // Half a texture width later the stripes have swapped places.
     r.time = 1.0;
+    r.water_time = 1.0;
     let t1 = frame(&mut r, mesh, tex);
     assert_ne!(t0, t1, "a scrolling material did not move");
 
     // A whole texture width brings it exactly back.
     r.time = 2.0;
+    r.water_time = 2.0;
     let t2 = frame(&mut r, mesh, tex);
     assert_eq!(t0, t2, "one full period did not return to the start");
 }
@@ -69,9 +72,11 @@ fn a_still_material_is_identical_at_any_time() {
     let (mesh, tex) = striped_quad(&mut r, [0.0, 0.0]);
 
     r.time = 0.0;
+    r.water_time = 0.0;
     let t0 = frame(&mut r, mesh, tex);
     for t in [0.5, 17.0, render::TIME_WRAP] {
         r.time = t;
+        r.water_time = f64::from(t);
         assert_eq!(
             t0,
             frame(&mut r, mesh, tex),

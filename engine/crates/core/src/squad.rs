@@ -34,8 +34,7 @@
 //! speaks them (a
 //! trooper's "follow me" / "move out" order nobody on the PS2 either; a new
 //! pilot's need-gunner call, `Sim::need_gunner_call`, temporarily boards
-//! recipients over their retained Hold/Follow order, WGORD). `Disperse` is the
-//! earlier port's own order and no pad reaches it any more.
+//! recipients over their retained Hold/Follow order, WGORD).
 
 use crate::unit::UnitHandle;
 use glam::Vec3;
@@ -72,9 +71,6 @@ pub const LEAVE_DIST: f32 = 20.0;
 /// Ticks of thinks beyond [`LEAVE_DIST`] that release it: the PS2's 20 thinks
 /// of 0.5 s = 10 s, summed over the order and never refilled.
 pub const LEAVE_TICKS: u16 = 300;
-/// How long a Disperse order biases the commander's plan (30 s).
-/// PROVISIONAL (lead).
-pub const DISPERSE_TICKS: u64 = 900;
 
 /// A field or driver D-pad order. The discriminant is `Event::Command`'s `kind`
 /// byte.
@@ -151,13 +147,11 @@ impl Pending {
 /// What a player's order has a bot doing.
 ///
 /// `Follow` carries the LEADER's handle, `Hold` the spot the bot stands on —
-/// its OWN position when it took the order — and `Disperse` the tick the bias
-/// expires at.
+/// its OWN position when it took the order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CommandKind {
     Follow(UnitHandle),
     Hold(Vec3),
-    Disperse(u64),
 }
 
 impl CommandKind {
@@ -178,23 +172,15 @@ impl CommandKind {
                 out[5..9].copy_from_slice(&p.y.to_bits().to_le_bytes());
                 out[9..13].copy_from_slice(&p.z.to_bits().to_le_bytes());
             }
-            CommandKind::Disperse(until) => {
-                out[0] = 3;
-                out[1..9].copy_from_slice(&until.to_le_bytes());
-            }
         }
         out
     }
 
-    /// The diagnostics name (`ROUND_VERBOSE`, the HUD feed): `tick` is the
-    /// sim's now, so a Disperse can say how long it has left.
-    pub fn label(self, tick: u64) -> String {
+    /// The diagnostics name (`ROUND_VERBOSE`, the HUD feed).
+    pub fn label(self) -> String {
         match self {
             CommandKind::Follow(h) => format!("follow #{}", h.index),
             CommandKind::Hold(p) => format!("hold ({:.0},{:.0})", p.x, p.z),
-            CommandKind::Disperse(until) => {
-                format!("disperse {}", until.saturating_sub(tick))
-            }
         }
     }
 }
@@ -213,13 +199,6 @@ pub struct Command {
 }
 
 impl Command {
-    /// Is this unit still the commander's to assign? A dispersed bot IS (it
-    /// takes a plan objective again, with the spread bias — brief D5); a
-    /// Follow or Hold bot is not in the pool at all while the order stands.
-    pub fn in_pool(self) -> bool {
-        matches!(self.kind, CommandKind::Disperse(_))
-    }
-
     /// The bytes [`crate::unit::Unit::hash_into`] eats for a unit that HAS an
     /// order. A unit with NONE eats nothing at all — not even a 0 byte — so the
     /// hash of a command-free sim is byte-for-byte what it was before Phase D
@@ -260,8 +239,7 @@ impl crate::sim::Sim {
         .then_some(m.vehicle)
     }
 
-    /// `Sim::step` phase 0b: expire the Disperse biases, take at most one
-    /// order EDGE per player slot, in slot order, then let every unit whose
+    /// `Sim::step` phase 0b: take at most one order EDGE per player slot, in slot order, then let every unit whose
     /// think is due this tick take the order it was given.
     ///
     /// A slot with no pad idles (the P9 rule — a missing pad is not a held
@@ -271,20 +249,6 @@ impl crate::sim::Sim {
     /// soldier starts at `prev_buttons` 0). A ground pilot's Right issues
     /// PILE IN and Left EVERYONE OUT (RE §4.4).
     pub(crate) fn squad_pass(&mut self, pads: &[crate::sim::PadState]) {
-        // The expiry first, units in index order: a Disperse whose tick has
-        // come is no order at all, and the commander (phase 1) must not see it.
-        for i in 0..self.units.len() {
-            if let Some(Command {
-                kind: CommandKind::Disperse(until),
-                ..
-            }) = self.units[i].command
-            {
-                if self.tick >= until {
-                    self.units[i].command = None;
-                    self.units[i].ai.cmd_clear();
-                }
-            }
-        }
         for slot in 0..self.players.len() {
             let Some(h) = self.players[slot] else {
                 continue;
@@ -571,7 +535,7 @@ impl crate::sim::Sim {
                 (admitted, false)
             }
             Order::MoveOut | Order::AtEase => {
-                let released = has.is_some_and(|c| !c.in_pool() && c.issuer == p.issuer);
+                let released = has.is_some_and(|c| c.issuer == p.issuer);
                 if released {
                     self.units[i].ai.pending_board = None;
                     self.units[i].command = None;
@@ -643,11 +607,6 @@ impl crate::sim::Sim {
             let order = match kind {
                 CommandKind::Follow(_) => Order::Follow,
                 CommandKind::Hold(_) => Order::Hold,
-                CommandKind::Disperse(_) => {
-                    self.put_command(i, kind, slot);
-                    n += 1;
-                    continue;
-                }
             };
             let p = Pending {
                 order,
@@ -849,9 +808,6 @@ pub fn steer(
             st.route = None;
             c.goal = spot;
         }
-        // Never reached: a dispersed unit is the COMMANDER's (`in_pool`), and
-        // `think` only calls this for an order that is not.
-        CommandKind::Disperse(_) => {}
     }
     // The release, counted in THINKS and never refilled.
     if d > LEAVE_DIST {
@@ -1030,17 +986,9 @@ mod tests {
             CommandKind::Hold(Vec3::new(1.0, 0.0, 2.0)).bytes(),
             CommandKind::Hold(Vec3::new(1.0, 30.0, 2.0)).bytes()
         );
-        assert_ne!(
-            CommandKind::Disperse(900).bytes(),
-            CommandKind::Disperse(901).bytes()
-        );
         // ... and no two KINDS collide, whatever they carry: the tag is first
         // and the width is fixed.
-        let kinds = [
-            CommandKind::Follow(h(0, 0)),
-            CommandKind::Hold(Vec3::ZERO),
-            CommandKind::Disperse(0),
-        ];
+        let kinds = [CommandKind::Follow(h(0, 0)), CommandKind::Hold(Vec3::ZERO)];
         for i in 0..kinds.len() {
             for j in i + 1..kinds.len() {
                 assert_ne!(kinds[i].bytes(), kinds[j].bytes(), "{i} vs {j}");
@@ -1048,31 +996,15 @@ mod tests {
         }
     }
 
-    /// Only a dispersed bot goes back into the commander's pool.
-    #[test]
-    fn follow_and_hold_leave_the_pool_and_disperse_does_not() {
-        let cmd = |kind| Command {
-            kind,
-            issuer: 0,
-            issued_tick: 0,
-        };
-        assert!(!cmd(CommandKind::Follow(UnitHandle { index: 1, gen: 1 })).in_pool());
-        assert!(!cmd(CommandKind::Hold(Vec3::ZERO)).in_pool());
-        assert!(cmd(CommandKind::Disperse(900)).in_pool());
-    }
-
-    /// The labels the diagnostics print, including the Disperse countdown at
-    /// and past its expiry (it must not underflow).
+    /// The labels the diagnostics print.
     #[test]
     fn the_labels_say_what_the_order_is() {
         let h = UnitHandle { index: 7, gen: 1 };
-        assert_eq!(CommandKind::Follow(h).label(0), "follow #7");
+        assert_eq!(CommandKind::Follow(h).label(), "follow #7");
         assert_eq!(
-            CommandKind::Hold(Vec3::new(-12.4, 3.0, 8.6)).label(0),
+            CommandKind::Hold(Vec3::new(-12.4, 3.0, 8.6)).label(),
             "hold (-12,9)"
         );
-        assert_eq!(CommandKind::Disperse(900).label(300), "disperse 600");
-        assert_eq!(CommandKind::Disperse(900).label(1000), "disperse 0");
     }
 
     /// D6/D9, and the phase's own acceptance ("`--sim-hash` with a scripted
@@ -1141,7 +1073,7 @@ mod tests {
     fn the_hash_bytes_of_an_order_start_with_a_one() {
         let mut got: Vec<u8> = Vec::new();
         Command {
-            kind: CommandKind::Disperse(900),
+            kind: CommandKind::Hold(Vec3::ZERO),
             issuer: 1,
             issued_tick: 30,
         }

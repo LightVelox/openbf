@@ -1,3 +1,7 @@
+//! The remote droid (BF1 and BF2): class data, launcher, destruct (salvo or
+//! burst), flight step, drain and replay state. Follows
+//! `analysis/re-remote-droid.md` (card REMOTE); the bots' droid rules are card DROIDAI.
+
 use crate::unit::UnitHandle;
 use crate::weapon::{
     pair, pf, pf_hash, ExplosionClass, HealthType, PropSource, WeaponClass, WeaponState, DEG,

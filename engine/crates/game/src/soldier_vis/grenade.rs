@@ -1,3 +1,7 @@
+//! The grenade on the soldier: strength variants (underhand / overhand) and the
+//! pack drop action, including instant-release dispensers. Follows
+//! `analysis/re-grenade-throw-anim.md` (card GTHRW).
+
 use super::{in_hand, InHand, SoldierVisuals};
 use crate::walk::WalkSim;
 use core::unit::Unit;

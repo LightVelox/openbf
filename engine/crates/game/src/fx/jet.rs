@@ -29,7 +29,7 @@ use glam::{Mat3, Mat4, Vec3};
 pub const JET_FRAME_AT: Vec3 = Vec3::new(0.0, 1.481, -0.023);
 
 /// The frame a jet effect rides in for a soldier at `pos` turned to `yaw`
-/// (the sim's: 0 faces -Z, the model faces +Z, `soldier_vis::model_matrix`):
+/// (the sim's: 0 faces -Z, the model faces +Z, `soldier_vis::model_of`):
 /// x up, y his forward, z the model's +x.
 pub fn jet_frame(pos: Vec3, yaw: f32, vel: Vec3) -> Frame {
     // About +y by yaw + pi (`core::fmath`, as every game file computes).

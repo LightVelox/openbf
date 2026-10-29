@@ -555,7 +555,7 @@ Interpretation (for the port; follows algebraically from the code):
 
 ## 7. Reference-trace test vectors
 
-Symbolic; plug in `R` (MaxTurnSpeed) and `dt` from the trace itself. All
+Symbolic; plug in `R` (MaxPitchSpeed; corrected 2026-10-22, RE_LOG; was MaxTurnSpeed) and `dt` from the trace itself. All
 computable by hand from §5. Inputs are post-deadzone stick values in [-1,1].
 
 **T1 — slowdown only.** Target valid; f=(0, 0, 0.4, 0.6); velocities zero;
@@ -596,10 +596,12 @@ from the trace.
    three states hold a friendly reticle pick with `weapon+0x128` = 0. Still
    open: a live frame with an ENEMY magneted (`lead_tmp/aimf/probe_live.py` is
    ready).
-2. **vtbl294[0x0c] turn-rate getter** — confirm it returns soldierClass+0x113c
+2. ~~**vtbl294[0x0c] turn-rate getter**~~ **ANSWERED 2026-10-22 (`re-look-ramp.md`):** the aim
+   assist's R is MaxPitchSpeed (class +0x1844; BF2 +0x758) in both games, not MaxTurnSpeed.
+   Struck text: ~~confirm it returns soldierClass+0x113c
    (`MaxTurnSpeed`) and its units (rad/s vs deg/s). Trace: break on
    FUN_0025fea8+entry, read the f-register after the vcall; compare against
-   the ODF value of the soldier being played.
+   the ODF value of the soldier being played.~~
 3. **Axis identity** — confirm f0=move (which of strafe/forward?), f2=yaw,
    f3=pitch by wiggling one stick axis at a time and watching
    entity+0x60/64/68/6c.

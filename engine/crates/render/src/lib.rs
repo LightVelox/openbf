@@ -369,8 +369,7 @@ pub struct Renderer {
     /// — how the mismatch LOOKS on the PS2 wants an in-map capture.
     pub spec_mirror: bool,
     pub lighting: Lighting,
-    /// Animation clock in seconds: UV-scrolling materials
-    /// ([`TextureDesc::scroll`] — a map's water surface), the water's
+    /// Animation clock in seconds: the water surface's UV scroll, the water's
     /// speckle, the mirrored sky shell's squash ([`mirror_squash`]) and the
     /// grass and leaf sway.
     ///
@@ -412,7 +411,7 @@ pub fn advance_clocks(time: f32, water_time: f64, dt: f32) -> (f32, f64) {
 }
 
 /// BF2 rates are integer bytes / 255: this period wraps by whole repeats.
-/// Use the unwrapped clock so the water's 2000 s reset cannot jump a material.
+/// Takes the unwrapped water clock, so the [`TIME_WRAP`] reset of `time` cannot jump a material.
 pub fn material_scroll_time(seconds: f64) -> f32 {
     seconds.rem_euclid(255.0) as f32
 }

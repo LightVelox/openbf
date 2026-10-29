@@ -56,7 +56,6 @@ use crate::nav::Mover;
 use crate::sim::Sim;
 use crate::soldier::Stance;
 use glam::Vec3;
-use std::collections::BTreeSet;
 
 /// Ticks between plans for one team (30 = 1 s): the PS2 goal manager's tick
 /// (BF2 `FUN_002e7cf8`). Team `t` plans on ticks `t, t + 30, t + 60, ...`, so
@@ -392,28 +391,6 @@ struct PostInfo {
     capturable: bool,
 }
 
-/// The post player `slot` stands NEAREST in XZ, if that player is alive.
-///
-/// Brief D5(b) keeps a dispersed bot off "the player's current objective", and
-/// a player has no plan assignment to read — so the post they are standing
-/// nearest is the LEAD'S PROVISIONAL reading of "current" (report it as the
-/// reading taken; a radius or the post they last captured are the alternatives
-/// nobody has decided between). Ties keep the LOWER post index, the authored
-/// order, so no float equality decides anything; a map with no posts, a slot
-/// with no player and a DEAD player all answer `None` — no exclusion at all.
-fn issuer_post(sim: &Sim, slot: u8) -> Option<u32> {
-    let h = sim.players.get(usize::from(slot)).copied().flatten()?;
-    let from = sim.unit(h)?.soldier.pos;
-    let mut best: Option<(f32, u32)> = None;
-    for (ci, c) in sim.cps.iter().enumerate() {
-        let d = crate::nav::xz_dist(c.def.pos, from);
-        if best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, ci as u32));
-        }
-    }
-    best.map(|(_, ci)| ci)
-}
-
 /// The Conquest goal's tick for team `team`. Called by
 /// [`crate::sim::Sim::step`] phase 1, BEFORE the think loop, so the units
 /// think against the plan made this same tick.
@@ -431,12 +408,11 @@ pub fn plan(sim: &mut Sim, team: u8) {
         // A Follow or Hold bot is the PLAYER'S while the order stands (brief
         // D5), so it is not in the pool at all: `assignment[i]` stays `None`,
         // the squad bookkeeping below skips it, and no plan can take the order
-        // off it. A DISPERSE bot is in the pool — handing them back is what
-        // Disperse IS — and comes back with the spread rule further down.
+        // off it.
         if !u.alive
             || u.team != team
             || u.controller != crate::unit::Controller::Ai
-            || u.command.is_some_and(|c| !c.in_pool())
+            || u.command.is_some()
         {
             continue;
         }
@@ -542,15 +518,10 @@ pub fn plan(sim: &mut Sim, team: u8) {
     let mut changes = 0u64;
     // Hoisted: refilled per draw instead of allocated per draw.
     let mut offered: Vec<DrawPost> = Vec::with_capacity(posts.len());
-    // The Disperse rule (brief D5), one entry per ISSUER that has a dispersed
-    // unit in this plan: the post excluded for its bots (b) and the posts its
-    // bots hold (c). Built lazily and left EMPTY by a plan with no dispersed
-    // unit, which is every plan of a command-free round.
-    let mut disperse: Vec<(u8, Option<u32>, BTreeSet<u32>)> = Vec::new();
     for &(i, gen, pos, hub) in &units {
-        let (command, fighting, dwell) = {
+        let (fighting, dwell) = {
             let u = &sim.units[i];
-            (u.command, u.ai.target.is_some(), u.ai.unreachable_dwell)
+            (u.ai.target.is_some(), u.ai.unreachable_dwell)
         };
         // Card MOVR: the post this unit's walk gave up (`behave::recover`),
         // read once.
@@ -559,28 +530,6 @@ pub fn plan(sim: &mut Sim, team: u8) {
         let kept = old
             .of(i as u32)
             .filter(|_| old.gens.get(i).is_none_or(|g| *g == gen));
-        // The order this unit is under, if it is a DISPERSE still in force.
-        // Follow and Hold never reach here (they are out of the pool above),
-        // and `Sim::step` phase 0b has already dropped every EXPIRED Disperse —
-        // the `tick < until` test is what makes a directly-called `plan` agree
-        // with a stepped one.
-        let dispersing = command.filter(|c| match c.kind {
-            crate::squad::CommandKind::Disperse(until) => sim.tick < until,
-            _ => false,
-        });
-        let spread =
-            dispersing.map(
-                |c| match disperse.iter().position(|(s, _, _)| *s == c.issuer) {
-                    Some(k) => k,
-                    None => {
-                        disperse.push((c.issuer, issuer_post(sim, c.issuer), BTreeSet::new()));
-                        disperse.len() - 1
-                    }
-                },
-            );
-        // (a) The FIRST plan after the order draws afresh: the point of
-        // Disperse is a new spread, not the target it already had.
-        let fresh_order = dispersing.is_some_and(|c| c.issued_tick + PLAN_PERIOD > sim.tick);
 
         // --- does it draw? ---
         let target = kept
@@ -590,7 +539,6 @@ pub fn plan(sim: &mut Sim, team: u8) {
         let mut exclude: Option<u32> = None;
         let draw = match target {
             None => true,
-            Some(_) if fresh_order => true,
             Some(c) => {
                 let p = &posts[c as usize];
                 // The at-post helper's 5 s test, once per stay.
@@ -652,27 +600,7 @@ pub fn plan(sim: &mut Sim, team: u8) {
             // unit-seconds hunting); kept for a unit on a graph that joins no
             // post left to take.
             if posts.iter().any(|p| !p.friendly && reach(hub, p)) {
-                // (b) and (c): the spread. The post the ISSUER stands nearest
-                // is not drawn (they are already there), nor is any post
-                // another dispersed bot of the SAME issuer holds.
-                if let Some(k) = spread {
-                    let (_, banned, taken) = &disperse[k];
-                    let mut spread_offer = offered.clone();
-                    for (ci, o) in spread_offer.iter_mut().enumerate() {
-                        let ci = ci as u32;
-                        o.open &= Some(ci) != *banned && !taken.contains(&ci);
-                    }
-                    got = draw_post(rules, team, &spread_offer, r);
-                    if got.is_none() {
-                        // (d) The exclusions asked for more distinct posts
-                        // than the map has: they are dropped FOR THIS UNIT
-                        // and the counter says how often that happened.
-                        sim.nav_stats.disperse_fallbacks += 1;
-                    }
-                }
-                if got.is_none() {
-                    got = draw_post(rules, team, &offered, r);
-                }
+                got = draw_post(rules, team, &offered, r);
                 // Card DEFS: an own post that has its defenders is not drawn.
                 let full =
                     |c: u32| posts[c as usize].friendly && held[c as usize] >= cap[c as usize];
@@ -705,9 +633,6 @@ pub fn plan(sim: &mut Sim, team: u8) {
             // A new target starts a fresh dwell window, so giving up on one
             // does not immediately give up on the next.
             sim.units[i].ai.unreachable_dwell = 0;
-        }
-        if let (Some(k), Some(c)) = (spread, chosen.cp()) {
-            disperse[k].2.insert(c);
         }
         assignment[i] = Some(chosen);
         at_post[i] = clock;
@@ -1104,7 +1029,7 @@ mod tests {
     use crate::heightfield::Heightfield;
     use crate::nav::{Arc, Hub, NavGraph, RouteTable};
     use crate::region::Region;
-    use crate::squad::{Command, CommandKind};
+    use crate::squad::CommandKind;
     use crate::unit::{Controller, UnitSpec};
 
     /// Three hubs in a line (0 - 1 - 2), soldier arcs, no authored route table
@@ -1201,14 +1126,13 @@ mod tests {
         sim.commander[usize::from(team)].assignment.clone()
     }
 
-    /// The Disperse-bias world (brief D5): `values.len()` ENEMY posts at
+    /// The squad-order world (brief D5): `values.len()` ENEMY posts at
     /// `x = 40 i` (so every one of them is an Attack objective and Hunt is
     /// never offered), `bots` AI of team 0 standing at hub 1, and the ISSUER —
     /// a player of team 0 in slot 0 — standing with them at x = 40, which puts
-    /// every bot inside [`crate::squad::ORDER_REACH`] and makes **cp1** the post
-    /// D5(b) keeps the squad off. Bots are indices `0..bots`, the player is
-    /// `bots`, the enemy `bots + 1`.
-    fn disperse_world(values: &[i32], bots: usize) -> Sim {
+    /// every bot inside [`crate::squad::ORDER_REACH`]. Bots are indices
+    /// `0..bots`, the player is `bots`, the enemy `bots + 1`.
+    fn squad_world(values: &[i32], bots: usize) -> Sim {
         let mut sim = Sim::empty(7);
         sim.heightfield = Some(Heightfield {
             size: 2,
@@ -1238,14 +1162,6 @@ mod tests {
         })
         .expect("enemy");
         sim
-    }
-
-    /// What the AI of team 0 were assigned, in index order, unwrapped.
-    fn objectives(sim: &Sim, bots: usize) -> Vec<Objective> {
-        assignments(sim, 0)[..bots]
-            .iter()
-            .map(|o| o.expect("every bot in the pool gets an objective"))
-            .collect()
     }
 
     /// A hint at `x` of `kind` whose allowed-stance mask is `mask` (what the
@@ -1421,7 +1337,7 @@ mod tests {
     #[test]
     fn a_followed_or_holding_bot_is_out_of_the_plan_until_it_is_cleared() {
         for follow in [true, false] {
-            let mut sim = disperse_world(&[10, 10, 10], 4);
+            let mut sim = squad_world(&[10, 10, 10], 4);
             plan(&mut sim, 0);
             assert!(
                 assignments(&sim, 0)[..4].iter().all(|o| o.is_some()),
@@ -1452,149 +1368,6 @@ mod tests {
                 "back in the pool after clear_all ({kind:?})"
             );
         }
-    }
-
-    /// D5(b)+(c): four dispersed bots of one issuer take four DIFFERENT
-    /// posts and none of them the post their issuer stands on. The control —
-    /// the same world, no order — is measured beside it, because "they
-    /// spread" only means something if they would not have: over thirty
-    /// ticks' draws the dispersed four spread every time and the control
-    /// does not.
-    #[test]
-    fn four_dispersed_bots_take_four_distinct_objectives_none_the_issuers() {
-        let mut control_spread = 0;
-        for tick in 0..30 {
-            let mut ctl = disperse_world(&[10, 10, 10, 10, 10], 4);
-            ctl.tick = tick;
-            plan(&mut ctl, 0);
-            let control = objectives(&ctl, 4);
-            let control_keys: BTreeSet<u32> = control.iter().map(|o| o.key()).collect();
-            control_spread +=
-                u32::from(control_keys.len() == 4 && !control.iter().any(|o| o.cp() == Some(1)));
-
-            let mut sim = disperse_world(&[10, 10, 10, 10, 10], 4);
-            sim.tick = tick;
-            assert_eq!(sim.issue_command(0, CommandKind::Disperse(900)), 4);
-            plan(&mut sim, 0);
-            let got = objectives(&sim, 4);
-            let keys: BTreeSet<u32> = got.iter().map(|o| o.key()).collect();
-            assert_eq!(keys.len(), 4, "four distinct objectives: {got:?}");
-            assert!(
-                !got.iter().any(|o| o.cp() == Some(1)),
-                "none of them the issuer's own post cp1: {got:?}"
-            );
-            assert_eq!(
-                sim.nav_stats.disperse_fallbacks, 0,
-                "nothing had to fall back"
-            );
-        }
-        assert!(
-            control_spread < 10,
-            "the control does not spread by itself: {control_spread} of 30"
-        );
-    }
-
-    /// D5(c): the post an earlier dispersed bot of the SAME issuer holds is
-    /// not drawn by the next one, even when it is worth ten times the other.
-    #[test]
-    fn an_earlier_dispersed_bot_takes_its_objective_off_the_table() {
-        for tick in 0..30 {
-            let mut sim = disperse_world(&[10, 10, 100], 4);
-            sim.tick = tick;
-            assert_eq!(sim.issue_command(0, CommandKind::Disperse(900)), 4);
-            plan(&mut sim, 0);
-            let got = objectives(&sim, 4);
-            let first: BTreeSet<Option<u32>> = got[..2].iter().map(|o| o.cp()).collect();
-            assert_eq!(
-                first,
-                BTreeSet::from([Some(0), Some(2)]),
-                "the first two take one post each: {got:?}"
-            );
-            // Two posts on offer and four bots: the last two run out and fall
-            // back, which is (d) again and is what the counter is for.
-            assert_eq!(sim.nav_stats.disperse_fallbacks, 2, "{got:?}");
-        }
-    }
-
-    /// D5(d): the exclusions can ask for more distinct posts than the map
-    /// has. On a FOUR-post map with the issuer's post excluded only three are
-    /// left, so the fourth bot drops them — and the counter says so, once.
-    #[test]
-    fn a_dispersed_bot_falls_back_when_the_objectives_run_out() {
-        let mut sim = disperse_world(&[10, 10, 10, 10], 4);
-        assert_eq!(sim.issue_command(0, CommandKind::Disperse(900)), 4);
-        plan(&mut sim, 0);
-        let got = objectives(&sim, 4);
-        assert_eq!(
-            sim.nav_stats.disperse_fallbacks, 1,
-            "exactly one bot ran out: {got:?}"
-        );
-        let first: BTreeSet<Option<u32>> = got[..3].iter().map(|o| o.cp()).collect();
-        assert_eq!(
-            first,
-            BTreeSet::from([Some(0), Some(2), Some(3)]),
-            "three spread; the fourth falls back onto any post: {got:?}"
-        );
-    }
-
-    /// D5: the rule lives exactly as long as the order does. A `Disperse` whose
-    /// tick has passed plans EXACTLY as no order at all (phase 0b clears it
-    /// first in a stepped sim; a directly-called `plan` proves the guard).
-    #[test]
-    fn an_expired_disperse_plans_as_if_there_were_no_order() {
-        let mut sim = disperse_world(&[10, 10, 10, 10, 10], 4);
-        assert_eq!(sim.issue_command(0, CommandKind::Disperse(900)), 4);
-        sim.tick = 900;
-        plan(&mut sim, 0);
-
-        let mut ctl = disperse_world(&[10, 10, 10, 10, 10], 4);
-        ctl.tick = 900;
-        plan(&mut ctl, 0);
-
-        assert_eq!(
-            assignments(&sim, 0),
-            assignments(&ctl, 0),
-            "expired == no order"
-        );
-        assert_eq!(sim.nav_stats.disperse_fallbacks, 0);
-    }
-
-    /// D5(a): the FIRST plan after the order draws afresh, so a bot cannot
-    /// keep the target it already had just because it had it; every plan
-    /// after that keeps it like any other.
-    ///
-    /// The pair differs ONLY in the order's `issued_tick` — the same world,
-    /// the same tick, so the same draw.
-    #[test]
-    fn the_first_plan_after_a_disperse_draws_afresh() {
-        let held = Objective::Attack(0);
-        let run = |tick: u64, age: u64| -> Objective {
-            let mut sim = disperse_world(&[10, 10, 10], 1);
-            assert_eq!(sim.issue_command(0, CommandKind::Disperse(100_000)), 1);
-            sim.units[0].command = Some(Command {
-                kind: CommandKind::Disperse(100_000),
-                issuer: 0,
-                issued_tick: tick - age,
-            });
-            sim.commander[0].assignment = vec![Some(held); sim.units.len()];
-            sim.tick = tick;
-            plan(&mut sim, 0);
-            objectives(&sim, 1)[0]
-        };
-        let (mut fresh_kept, mut stale_kept) = (0, 0);
-        for t in 100..130 {
-            // age 0: issued this very tick. age PLAN_PERIOD: the plan after the
-            // first one (`issued_tick + PLAN_PERIOD > tick` is false at equal).
-            let (fresh, stale) = (run(t, 0), run(t, PLAN_PERIOD));
-            fresh_kept += u32::from(fresh == held);
-            stale_kept += u32::from(stale == held);
-        }
-        assert_eq!(stale_kept, 30, "a standing order keeps its target");
-        // cp1 is the issuer's: the fresh draw is cp0 or cp2, evenly.
-        assert!(
-            (5..=25).contains(&fresh_kept),
-            "the fresh order draws again: kept {fresh_kept} of 30"
-        );
     }
 
     /// Queue HDL: a hint on a ledge above the post is not a defend spot, even

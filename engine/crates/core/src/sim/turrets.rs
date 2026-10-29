@@ -1,3 +1,8 @@
+//! The auto-turret in the sim: throw and `MaxItems` replacement, the fall, the
+//! stationary controller's target choice, aim and fire, and its end and
+//! explosion. Follows `analysis/re-portable-turret.md` (card ATUR); friendly-fire
+//! checks are card TKFIX.
+
 use super::mines::oldest_beyond;
 use super::{Event, Sim};
 use crate::autoturret::{

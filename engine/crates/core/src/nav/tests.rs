@@ -948,7 +948,7 @@ mod regressions {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "index out of bounds")]
     fn level_at_keeps_direct_indexed_short_floor_behavior() {
         let mut sim = Sim::empty(1);
         sim.nav = Some(floor_graph());

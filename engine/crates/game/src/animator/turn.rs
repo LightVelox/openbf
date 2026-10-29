@@ -1,3 +1,7 @@
+//! The soldier's turns: root twist, roll travel and standing foot turns, with
+//! the waist's rotation bounded for fast mouse aiming. Follows
+//! `analysis/re-soldier-anim-layers.md` §11.
+
 use super::{aim, AnimInput, Animator, Body, Game, Move, Rig, Special};
 use crate::skin::Clip;
 use std::f32::consts::{FRAC_PI_8, PI, TAU};

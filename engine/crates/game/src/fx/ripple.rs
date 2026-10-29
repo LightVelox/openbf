@@ -1,3 +1,7 @@
+//! Flat-water ripples: the PS2's 100-record pool, spawned by bolt water hits
+//! and water blasts, drawn as the `FXrippl1` ring; plus the splash bob lift.
+//! Follows `analysis/re-fx.md` §15.
+
 use super::Fx;
 use glam::Vec3;
 use render::{ParticleDraw, ParticleShape, TextureHandle};

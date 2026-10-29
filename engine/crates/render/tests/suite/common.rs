@@ -11,10 +11,6 @@
 //! [`headless`] is the same constructor call every test already made, not a
 //! shared device, and parallel wgpu devices SIGSEGV on the Intel iGPU driver
 //! (measured 2 of 3 runs, `analysis/PLAN_LOG_2026.md`).
-//!
-//! A helper no test module happens to use would fail clippy's dead-code lint
-//! — hence the module-wide allow, as in `game/tests/common/mod.rs`.
-#![allow(dead_code)]
 
 use render::{
     MeshData, MeshHandle, Renderer, SamplerMode, SkinnedMeshData, SkinnedMeshHandle, TextureDesc,

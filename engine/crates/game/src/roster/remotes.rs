@@ -1,3 +1,6 @@
+//! Resolves the remote weapon's droid, blaster and destruct (salvo shell or
+//! burst) through the baked class chains. Follows `analysis/re-remote-droid.md`.
+
 use super::{explosion_class, fired_ordnance, weapon_from_db, weapon_hud, ClassDb, ClassSrc};
 use crate::walk::{DroidHud, WeaponHud};
 use anyhow::{Context, Result};

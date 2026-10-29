@@ -1,3 +1,7 @@
+//! The fusion cutter's repair-pulse muzzle effects: they follow the owner, and
+//! the first burst sits at the drawn weapon tip. Card TBLD; no analysis doc
+//! covers the effect placement.
+
 use super::{emitter::Frame, Fx};
 use core::sim::{Event, Sim};
 use glam::{Mat3, Vec3};

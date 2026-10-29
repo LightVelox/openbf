@@ -81,7 +81,7 @@ PCSX2 frame.
 - **BF1 leaves are unlit; BF2 leaves are lit** [V measured]: with the scene lights zeroed, BF1 NAB1's leaves keep
   their colour (−3 levels while the scene drops 21) and BF2 DAG1's lose ~70 % (per-vertex normals ±Y and a light-set
   upload, §6.6).
-- **The port draws none of it** [V]: 0 hits for `AttachOdf` / `AttachToHardpoint` / their hashes in `engine/crates`;
+- **At the 2026-09-30 research baseline, the port drew none of it** [V]: 0 hits for `AttachOdf` / `AttachToHardpoint` / their hashes in `engine/crates`;
   FOLG places `LeafPatch` records that nothing draws; hardpoints are baked only for vehicles and armed buildings.
 - **Not leaf patches** [V measured]: BF1 NAB1's round crowns past ~120 m are the tree's far model
   (`nab_prop_trees2LOWD`, a leafy crown billboard) — the far scene draws LOWD (`re-far-lowd.md`), the port draws LOD0
@@ -312,6 +312,9 @@ sin(phase)·amplitude to 3.5e-6. One template per class → every object of a cl
 their start phase.
 
 ## 8. Not drawn by LEAF (follow-ups)
+> **Superseded for the falling leaves (2026-10-29):** `re-falling-leaves.md` re-read the spawner — slots refill as they
+> free, positions are world-axis box samples, the motion is read [D]. The text below is kept as first written.
+
 - **Falling leaves** — the `LeafSpawner` half of `9LeafPatch` (RTTI `6Entity`, `11LeafSpawner`): when an object is first
   drawn it spawns up to byte +0x80 leaf particles at random points in its ellipsoid (`FUN_001b1f00` 57236–57260;
   `FUN_001af8d0` inits one, storing the terrain height under it from `FUN_00473db0`, `re-terrain-heights.md`), from a
@@ -324,8 +327,13 @@ their start phase.
   B2's twin `FUN_001c9468` queries 0x200). Whether any ray cast (AI sight, bolts) includes those layers is [H] — the
   port keeps leaves as decoration (the maintainer: no collision unless the PS2 gives it).
 
-## 9. The port and the build (card LEAF phase build)
-The port [V]: `engine/crates` has 0 hits for `AttachOdf`, `AttachToHardpoint`, 0xa9d0d48b, 0x3be7b80a; `LeafPatch`
+## 9. The port and the build at the research baseline (card LEAF)
+
+Current canopy code is `game/src/viewer/leaf.rs` and `render/src/leaf.rs`; airborne
+leaves are separate (`analysis/re-falling-leaves.md`). The following inventory and
+build shape record the earlier baseline, not current completion or acceptance.
+
+The research-baseline port [V]: `engine/crates` has 0 hits for `AttachOdf`, `AttachToHardpoint`, 0xa9d0d48b, 0x3be7b80a; `LeafPatch`
 appears only in the FOLG `prp_` parser and placement (`mungefs/src/foliage.rs`, `bake/src/foliage.rs`,
 `manifest/src/lib.rs`), whose records nothing draws; `bake/src/hardpoints.rs::wants` bakes skeleton nodes only for
 vehicle and armed-building bases, and positions only. The leaf classes bake with `geometry: None`.

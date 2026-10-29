@@ -57,6 +57,9 @@
 //!     --bench-ticks <n>           sim ticks to time (default 900)
 //!     --bench-csv <file>          append the bench row to a CSV
 //!     --bench-player-cam          bench from the player's eye, not the overview
+//!   --write-pack <out> <name>=<dir>...  copy this executable to <out> with
+//!                                 each <dir> appended as the archive's
+//!                                 <name>/ (card PACK; scripts/pack.py)
 //!
 //! Environment — every variable is optional; unset means the default:
 //!   OPENBF_TEXTURE_TIER=1|2       1 = the PS2 disc's own pixels, 2 = the PC
@@ -106,6 +109,21 @@
 //!   OPENBF_WINDOW_SIZE=WxH        windowed: the first window size in
 //!                                 physical pixels (default 1280x720 logical)
 //!   OPENBF_BF1_WALKER_PACE=1      BF1 walkers on their own gait (vehicle_class::walker)
+//!   OPENBF_AUTOPILOT=1            dev mode, windowed: a scripted pad drives the
+//!                                 player (card HITCH; default off)
+//!   OPENBF_QUIT_AT=<seconds>      dev mode, windowed: quit when the battle
+//!                                 clock reaches it (default never)
+//!   OPENBF_FRAME_RECORD=0         no frame-time record in dev mode (default on;
+//!                                 game::frame_profile)
+//!   OPENBF_LOD=0|ps2              far-scene LOWD switch: 0 = off, ps2 = the
+//!                                 PS2's distance (default classic-plus; card LOD)
+//!   OPENBF_NO_BLOOM=<any>         no bloom pass (default: the map's HDR bloom)
+//!   OPENBF_RENDER_BLEND=0         windowed: draw ticks, no blend between them
+//!                                 (default on; game::render_blend)
+//!   OPENBF_MATCHLOG=0             no match log in dev mode (default on;
+//!                                 game::matchlog)
+//!   OPENBF_SHELL_SOUNDS=1         log each shell click and take to stderr
+//!                                 (default off)
 //!   MUSIC_LOG=<team>              headless: log the music manager's changes
 //!                                 for that team; OPENBF_SOUND_ROOT=<dir> reads
 //!                                 a scratch bake's `<map>/sounds`

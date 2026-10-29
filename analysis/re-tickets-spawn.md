@@ -300,6 +300,10 @@ Respawn path (timer `+0xc0` expired):
 - Locals teams: each update finds the allied main team (relation byte > 0); when the
   ally's reserve is exhausted (`ally alive >= ally tickets`), locals' tickets are zeroed.
 
+> **Corrected 2026-10-27 (`re-round-end.md` §1.4):** this reads the team update alone. The BF1 game-over driver
+> (`FUN_0033f718`) ends the round 2.0 s after a main team's reinforcements drop below 1, units alive or not.
+> There is no last stand. [V for the code; one live sample owed, capture C5]
+
 ### 2.7 Mission-side constants (Lua 4.0 bytecode, verified) [V]
 
 PS2 retail conquest (representative):
@@ -332,6 +336,10 @@ tat1r (250 tickets, 25 units/team):
    respawn (gate is AI-only).
 5. Team loses all CPs, none neutral: 20 s → tickets 0 → no spawns; remaining units are
    the last stand.
+
+   > **Corrected 2026-10-27 (`re-round-end.md` §1.4):** the round ends 2.0 s after tickets reach 0, units
+   > alive or not; there is no last stand (see the erratum under §2.6).
+
 6. 900 s after reserve exhaustion: engine starts shooting its own worst AI every 15 s.
 
 ---

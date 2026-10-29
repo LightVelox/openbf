@@ -1,3 +1,6 @@
+//! The BF2 Bothan cloak: class properties, the concealment curve, byte
+//! visibility and deterministic state. Follows `analysis/re-cloaking.md` (card CLOAK).
+
 use crate::soldier::Soldier;
 use crate::weapon::{pf, PropSource};
 

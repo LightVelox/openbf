@@ -343,7 +343,7 @@ pub struct Unit {
     /// command-free sim hashes exactly as it did before Phase D — that is what
     /// keeps the replay gates' three values where they are. The only writers
     /// are `Sim::take_order` (phase 0b), `Sim::issue_command`, `Sim::clear_all`,
-    /// `squad::on_unit_died`, phase 0b's Disperse expiry and the release in
+    /// `squad::on_unit_died` and the release in
     /// `Sim::step`'s AI write-back, all in `Sim::step`'s fixed order.
     pub command: Option<crate::squad::Command>,
     /// The order this unit was given and has not thought about yet (card

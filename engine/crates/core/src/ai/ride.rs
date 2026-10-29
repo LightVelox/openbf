@@ -280,7 +280,7 @@ pub(super) fn deliver_call(sim: &Sim, me: UnitHandle, u: &Unit, st: &mut AiState
     {
         return;
     }
-    let ordered = u.command.is_some_and(|c| !c.in_pool());
+    let ordered = u.command.is_some();
     let Some(v) = sim.vehicle(vh) else { return };
     if !matches!(v.kind, VehicleKind::Hover | VehicleKind::Walker)
         || v.stuck_at
@@ -486,7 +486,7 @@ pub(super) fn board_goal(
         sim.players.get(usize::from(issuer.slot)).copied().flatten() == Some(issuer.leader)
             && sim.unit(issuer.leader).is_some_and(|l| l.team == u.team)
     } else if r.ordered_call {
-        u.command.is_some_and(|c| !c.in_pool())
+        u.command.is_some()
     } else if turret {
         !super::man::endgame(sim, u.team)
     } else {

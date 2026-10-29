@@ -77,11 +77,6 @@ impl Renderer {
         self.gpu_timer.as_ref().map_or(&[], |t| t.last())
     }
 
-    /// Is the GPU timer on (`OPENBF_GPU_TIMING=1` on an adapter that has it)?
-    pub fn gpu_timing(&self) -> bool {
-        self.gpu_timer.is_some()
-    }
-
     /// CPU ms the last frame waited for the window's next image (vsync and
     /// the frame-latency limit); 0 headless.
     pub fn acquire_ms(&self) -> f64 {

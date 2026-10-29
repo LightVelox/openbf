@@ -1,3 +1,7 @@
+//! BF2 award guided rockets: class data, quaternion flight, energy and boost,
+//! end reasons and replay state. Follows `analysis/re-guided-rockets.md` (card
+//! GUIDED).
+
 use crate::sim::PadState;
 use crate::unit::UnitHandle;
 use crate::vehicle::hover::{quat_x, quat_y, quat_z};

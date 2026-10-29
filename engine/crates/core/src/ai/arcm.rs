@@ -1,7 +1,6 @@
 //! Card ARCM: failure memory on nav links, and a back-and-forth detector
-//! (`engine/artifacts/lead_tmp/botre/modern.md` A1, A2; `analysis/bot-design.md`
-//! 6.3, 9 D20). OURS: the PS2 retries a failed walk's arc (BF2) or stalls on
-//! it (BF1), and its stuck test is a clock.
+//! (`analysis/bot-design.md` 6.3, 9 D20). OURS: the PS2 retries a failed
+//! walk's arc (BF2) or stalls on it (BF1), and its stuck test is a clock.
 //!
 //! - **The bot's own memory** ([`ArcmState::closed`]): an arc whose walk
 //!   fails twice running (a progress window failed on it with an earlier
@@ -30,7 +29,7 @@ use crate::TICK_HZ;
 use glam::{Vec2, Vec3};
 
 /// How long an arc whose walk failed stays closed to the bot (ticks): 60 s.
-/// PROVISIONAL (ours; modern.md A1).
+/// PROVISIONAL (ours; `analysis/bot-design.md` 9 D20).
 pub const ARC_CLOSED: u64 = 60 * TICK_HZ as u64;
 /// Closings of one arc by the team's bots (each counted once in turn) that
 /// take it out of the team's route draw for the round. PROVISIONAL (ours).

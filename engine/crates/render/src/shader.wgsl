@@ -41,7 +41,8 @@ struct Globals {
     ambient_ground: vec3<f32>, fog_on: f32,
     fog_color: vec3<f32>, fog_near: f32,
     // `time` is seconds, WRAPPED by the caller (see Renderer::time) so the
-    // UV scroll below keeps its precision in a long session.
+    // water scroll keeps its precision in a long session; model materials
+    // scroll on `material_time` (unwrapped clock modulo 255 s).
     // fade_begin/fade_end: NearSceneRange's b and c on a map with NO far
     // layer (`render::FarFade`). fade_end <= fade_begin means "no fade".
     fog_far: f32, time: f32, fade_begin: f32, fade_end: f32,
@@ -369,12 +370,17 @@ fn far_cull(in: VsOut) {
 // the composition for every alpha.
 const MASK_CUTOFF: f32 = 0.753;
 
+// Surfaces and their bloom mask share the same material clock.
+fn material_uv(uv: vec2<f32>) -> vec2<f32> {
+    return uv + material.scroll.xy * globals.material_time;
+}
+
 // MASK draws: the disc's cutout materials (leaves, bamboo, banners, grates).
 // A self-lit BF2 segment (`LIGHT_GLOW`) tests its overridden As against the
 // same AREF 0x60 — disc alpha >= 98 under the full vertex alpha
 // (`analysis/re-glow.md` §1.3 [D]).
 fn mask_test(in: VsOut) {
-    let uv = in.uv + material.scroll.xy * globals.material_time;
+    let uv = material_uv(in.uv);
     let texel = textureSample(t_color, s_color, uv);
     if in.light == LIGHT_GLOW {
         if glow_as(texel.a, in.color.a) < 96.0 {
@@ -455,7 +461,7 @@ const LIGHT_IFACE: u32 = 9u;
 const IFACE_AMBIENT: f32 = 0.5;
 
 fn shade_unfogged(in: VsOut) -> vec4<f32> {
-    let uv = in.uv + material.scroll.xy * globals.material_time;
+    let uv = material_uv(in.uv);
     let texel = textureSample(t_color, s_color, uv);
     let base = texel * in.color;
     let n = normalize(in.world_normal);
@@ -1010,7 +1016,7 @@ fn vs_skinned(in: VsSkinnedIn) -> VsOut {
 
 // [ours] Gather only marked emissive surfaces, before display clipping.
 fn bloom_light(in: VsOut) -> vec4<f32> {
-    let uv = in.uv + material.scroll.xy * globals.time;
+    let uv = material_uv(in.uv);
     let texel = textureSample(t_color, s_color, uv);
     let base = texel * in.color;
     let gain = select(2.0, 1.0 + glow_as(texel.a, in.color.a) / 128.0, in.light == LIGHT_GLOW);

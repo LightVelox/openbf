@@ -83,7 +83,7 @@ pub(super) fn upkeep(sim: &Sim, me: UnitHandle, u: &Unit, st: &mut AiState, seen
     let busy = u.mount.is_some()
         || st.lost.is_some()
         || st.cmd.is_some()
-        || u.command.is_some_and(|c| !c.in_pool())
+        || u.command.is_some()
         || st.ride.is_some_and(|r| r.board.is_some())
         || sim.battle.teams.iter().any(|t| t.tickets() <= HOLD_ENDGAME);
     if busy {

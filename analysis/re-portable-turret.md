@@ -143,7 +143,7 @@ com_bldg_inf_autoturret com_weap_inf_dropturret`), so its band scrolls too.
 - `core/src/sim/turrets.rs`: the throw (`throw_from`, shared with mines, droids and packs), `oldest_beyond` (shared with
   mines), the fall (`mine::fall`, `mine::rebound`, `sweep_item`), the think every 0.5 s, the turn, the fire through the
   gun's own `WeaponState`, `free_shots` (shared with the droid's blaster), the end and the explosion.
-- Damage: `Target::Turret`, a 0.3 m sphere for bolts that skips the owner's own; blasts through the shared items pass;
+- Damage: `Target::Turret`, a 0.25 m sphere for bolts (erratum 2026-10-29: was written 0.3; the code and §8 below use `RADIUS` 0.25) that skips the owner's own; blasts through the shared items pass;
   both by the `HealthType` scale (Building).
 - Bots: §6.1 in `ai/abilities.rs`, the cluster through the grenade's `group_counts` / `is_group` (BF2); the
   dispenser is excluded from the weapon choice (`WeaponClass::dispenses`).

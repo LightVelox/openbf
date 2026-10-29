@@ -1,3 +1,6 @@
+//! The cloak in the sim: activation, shared energy, drain, fade, flicker and
+//! cleanup when it ends. Follows `analysis/re-cloaking.md` (card CLOAK).
+
 use super::{Event, Sim};
 use crate::cloak::CloakState;
 

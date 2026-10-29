@@ -2,8 +2,6 @@
 
 (Trimmed 2026-10-08 from 934 lines. Everything cut was MOVED verbatim to `analysis/plan/`; each section below says where. Old section names — §Guardrails, §Milestones, §Architecture, §LOCKED FEATURE SET, §DESIGN SPECS — still resolve here or in the pointer table.)
 
-# SWBF Modern Port — PLAN
-
 North star: ONE game from two. A single Rust codebase for Windows/Linux/macOS that plays
 like the PS2 Battlefronts (not the PC ports): controller-first with BF1 aim assist (keyboard + mouse added
 2026-10-25 as a deliberate deviation, no assist on the mouse), all
@@ -172,25 +170,16 @@ exception on the last count, kept for the video.
 **Always on — M0 Health:** ci green; referees that test what they say; files ≤ 1,500 lines (`scripts/size_report.sh`);
 disk hygiene; the auditor's error rate low.
 
-## How the project runs (2026-09-25 — replaces §Working mode, §Subagent orchestration, §Escalation policy; archived)
-- **Scope and decisions (the maintainer, 2026-09-25; 2026-10-18).** The SOURCE is public (github.com/sprucey149/openbf, exported by
-  `scripts/export_public.py`, committed there by the maintainer by hand) and community contributions are wanted; the game's content
-  never is: each player builds their own game file from their own discs (`scripts/pack.py`), and no asset, golden or
-  packed binary ever enters git or leaves the machine. The loop decides
-  everything a faithful-yet-modern port needs — what the PS2 does is settled by evidence, where the maintainer has said nothing it stays
-  true to the original and modern in presentation — including feel, recorded in `engine/artifacts/loop/FEEL_NOTES.md` for
-  The maintainer's controller pass near the end. Only three things wait for the maintainer: a public export (the maintainer runs it),
-  anything outside the repo/machine, and a NEW category of decision, which is asked under STATUS "Questions for the maintainer" with a
-  reversible default taken meanwhile.
-- **Full autonomy.** The loop (`scripts/autoloop.sh`, standing prompt `engine/artifacts/briefs/LOOP_PROMPT.md`) builds,
-  lands, does its own RE and plans; the maintainer starts it, reads `engine/artifacts/loop/STATUS.md`, and steers by writing
-  `engine/artifacts/loop/INBOX.md`. Only the maintainer: feel checks, legal questions, LOCKED FEATURE SET changes, pushing.
+## How the project runs
+
+- **Scope and decisions.** The source is public and community contributions are welcome. Each player builds from their own discs (`scripts/pack.py`); game assets, goldens and packed binaries are not public deliverables. The maintainer owns legal questions, feel checks and changes to the locked feature set. Implementation and acceptance are separate: an implemented feature can still require original-game comparisons or other recorded checks.
+- **Current authority.** Follow `AGENTS.md`, the active session's instructions and the applicable stop controls before using historical automation recipes. Publication may be delegated when explicitly authorized; it is never implied by a source commit or a green partial check.
+
+
 - **One plan.** This file holds the goals (§Milestones), the feature set and the specs. The backlog is the cards
   (`engine/artifacts/loop/cards/`, `BACKLOG.md` generated from them by `scripts/loopctl.py`); RE lives in `analysis/`;
   history is git, `engine/artifacts/loop/reports/` and `analysis/PLAN_LOG_2026.md`. No other planning documents.
-- **Parallel work** only as worktrees on branches with disjoint file sets (`scripts/loopctl.py start <card>`:
-  `<repo parent>/openbf-wt/<branch>` with the shared data symlinked and its own target dir
-  `engine/artifacts/lead_tmp/<branch>_target`); main only fast-forwards, through `scripts/land.py` under the MAIN claim.
+- **Parallel work.** Agree scope and ownership before implementation; honor other contributors' claims. Keep independent feature changes reviewable and verify their combined behavior before integration.
 - **Gates** (`scripts/gates.py` against `engine/artifacts/loop/gates.toml`): ci, GPU referees + goldens, sim hashes, the
   round sweep, the arenas, byte-identical bakes. Every move is declared on its card; goldens are quantified and viewed before
   they are committed. Priority one is correct, clean code and a look that matches the discs under the stated deviations —
@@ -200,7 +189,9 @@ disk hygiene; the auditor's error rate low.
 
 ## Determinism & capture/replay spine
 The sim is **fixed-step** (rate from audit A5), **seeded RNG**, **no wall-clock in sim
-logic**. The `game` binary must support from the start:
+logic** (two diagnostic timers, `ai_wall_ms` in `core/src/sim/step.rs` and `TableStats.secs` in
+`core/src/ai/tactic.rs`, are never hashed or read by the sim; `core::fmath`'s `no_wall_clock_in_core`
+referee allows only those). The `game` binary must support from the start:
 - `--headless` (no window; wgpu renders offscreen to a texture)
 - `--replay <inputlog>` and `--record <inputlog>` (deterministic input playback/capture)
 - `--capture-frame <tick> <out.png>` (offscreen render one frame to PNG)

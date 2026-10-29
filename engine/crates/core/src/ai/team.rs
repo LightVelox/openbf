@@ -290,7 +290,7 @@ pub fn board(sim: &mut Sim) {
             let done = !cover
                 || !u.alive
                 || u.mount.is_some()
-                || u.command.is_some_and(|k| !k.in_pool())
+                || u.command.is_some()
                 || u.ai.snipe.cur.is_some()
                 || cp.is_none_or(|cp| cp.owner == Some(t))
                 || (inside[usize::from(c)].is_empty() && sim.tick >= u.ai.role.since + ROLE_KEEP);
@@ -321,7 +321,7 @@ pub fn board(sim: &mut Sim) {
                 if i == capturer
                     || u.ai.role.post.is_some()
                     || u.controller != crate::unit::Controller::Ai
-                    || u.command.is_some_and(|k| !k.in_pool())
+                    || u.command.is_some()
                     || u.ai.snipe.cur.is_some()
                 {
                     continue;
@@ -388,7 +388,7 @@ fn flank_pass(sim: &mut Sim, t: u8) {
             && u.alive
             && u.mount.is_none()
             && u.controller == Controller::Ai
-            && u.command.is_none_or(|k| k.in_pool())
+            && u.command.is_none()
             && attacked_hub(sim, i) == Some(u.ai.flank.to)
     };
     // 1. End.

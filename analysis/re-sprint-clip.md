@@ -160,6 +160,8 @@ rate. The two absence verifiers of each group agreed on every claim; none was do
    the line otherwise reads the unscaled speed, B1:144989).
 2. BF2: `Body::Special(Special::Sprint)` plays both players at `|v| / v_clip`, v_clip the lower sprint clip's forward root
    speed (`Rig::clip_speed`), v unscaled; 1.0 when none is baked (B2:201048, 201453, 201479).
+   > **Corrected 2026-10-22 (§7.3):** the BF2 droid sprint clips are baked with `root_motion` 0, and the PS2
+   > falls back to 11.5 m/s for them. Their rate is |v| / 11.5, not 1.0.
 3. Tests: the census over every class and weapon of both games (data-gated on the bake): 0 rows on an idle or turn clip
    at sprint (main: BF1 140 / 146); the PS2's sprint rows (a fixture from `ps2/rate_bf2.txt`) through the BF2 trooper's
    rig within 0.0002 of phase per update (main 0.009); a synthetic-rig BF1 test at 9.75 m/s. Mutation-check each.

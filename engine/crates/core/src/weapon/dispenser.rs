@@ -13,6 +13,8 @@ pub struct Dispenser<I = ItemClass> {
 }
 
 impl Dispenser {
+    /// BF2 left-hand release point (height, forward) m: `bone_l_hand` sampled at
+    /// 0.5 s of the engineer's throw (`analysis/re-grenade-throw-anim.md`).
     pub const BF2_HAND: (f32, f32) = (1.148, 0.721);
 }
 

@@ -1,3 +1,7 @@
+//! The water plane as the sim sees it: one level plus the WMAP wet-cell mask
+//! (a nibble per 32 m cell, the PS2's clamped lookup) and the downward crossing
+//! tested at its cell. Follows `analysis/re-fx.md` §15.
+
 use glam::Vec3;
 
 #[derive(Clone, Debug, PartialEq)]

@@ -1,7 +1,7 @@
 //! The end of a round (issue #33, `analysis/re-round-end.md` §2-§3): one flow
 //! on every map. When the round is decided the view goes to a random
 //! camera shot of the mission and the victory / defeat banner stands over it
-//! (5 s at least, 7 s at most, not past the music's end: BF1 §2.1); then
+//! (5 s at least and until the music ends, 7 s at most: BF1 §2.1); then
 //! BF2's stats pages (issue #50, [`ui::stats`]: Team Stats, a row's Personal
 //! Stats, the player's Career Stats), left with Square ("Done") or 30 s with
 //! no input (§3, both games); leaving goes on to the next playlist map or
@@ -10,11 +10,19 @@
 use crate::spawn_backdrop::{CameraShot, ShotPicker};
 use ui::stats::{Command, Pad, StatsScreens};
 
-/// The banner's shortest and longest stay (BF1 `FUN_002bec60`, §2.1).
+/// The banner's shortest and longest stay (BF1 §2.1: 7 s `FUN_0033f718`; 5 s
+/// and the music's end `FUN_002be838` / `FUN_002bec60`).
 pub const BANNER_MIN_SECS: f32 = 5.0;
 pub const BANNER_MAX_SECS: f32 = 7.0;
 /// A stats screen with no input this long quits by itself (§3, both games).
 pub const STATS_IDLE_SECS: f32 = 30.0;
+
+/// Whether the windowed HUD pass draws this frame. At the end of the round it
+/// always does, `hud` cheat or not: it draws no battle HUD then, only the
+/// banner over the camera shot (issue #33) and later the stats pages.
+pub fn hud_pass_drawn(round_end: bool, hud_hidden: bool) -> bool {
+    round_end || !hud_hidden
+}
 
 /// Where the end of the round stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +64,7 @@ pub struct RoundEnd {
 impl RoundEnd {
     /// The round just ended: draw a shot from `shots` (the picker's own draw,
     /// seeded) and stand the banner for the music's length within 5-7 s
-    /// (7 s with no music).
+    /// (5 s with no music).
     pub fn start(result: Result, shots: &[CameraShot], seed: u32, music_secs: Option<f32>) -> Self {
         let shot = (!shots.is_empty()).then(|| {
             let mut p = ShotPicker::new(seed);
@@ -67,7 +75,7 @@ impl RoundEnd {
             phase: Phase::Banner,
             shot,
             banner_secs: music_secs
-                .unwrap_or(BANNER_MAX_SECS)
+                .unwrap_or(BANNER_MIN_SECS)
                 .clamp(BANNER_MIN_SECS, BANNER_MAX_SECS),
             secs: 0.0,
             idle: 0.0,
@@ -141,13 +149,23 @@ mod flow_tests {
         p
     }
 
-    /// The banner stands for the music within 5-7 s (7 with none), then the
+    /// The banner stands for the music within 5-7 s (5 with none), then the
     /// stats pages, which wait to be made; X walks them, Triangle back,
     /// Square leaves.
+    /// The banner and the pages are the HUD pass's: hiding the battle HUD
+    /// must not hide them (the windowed game once showed no banner).
+    #[test]
+    fn the_hud_pass_draws_at_the_end_of_the_round_even_hidden() {
+        assert!(hud_pass_drawn(true, false));
+        assert!(hud_pass_drawn(true, true));
+        assert!(hud_pass_drawn(false, false));
+        assert!(!hud_pass_drawn(false, true));
+    }
+
     #[test]
     fn the_banner_then_the_stats_pages_then_out() {
         for (music, want) in [
-            (None, 7.0),
+            (None, 5.0),
             (Some(3.0), 5.0),
             (Some(6.2), 6.2),
             (Some(20.0), 7.0),

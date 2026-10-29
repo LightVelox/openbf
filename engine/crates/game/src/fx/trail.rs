@@ -1,3 +1,7 @@
+//! Ordnance trails: one identity per projectile (bolt, sticky, guided),
+//! survivor matching and independent retirement, so repeated shots stay
+//! distinct. The `TrailEffect` rules are `analysis/re-fx.md` §14.
+
 use super::{Frame, Fx};
 use core::projectile::Bolt;
 use core::sim::{Event, Sim};

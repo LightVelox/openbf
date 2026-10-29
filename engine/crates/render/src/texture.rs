@@ -69,7 +69,7 @@ pub struct TextureDesc<'a> {
     pub detail: Option<DetailDesc<'a>>,
     /// UV units per second; zero for static materials. BF2 models use baked
     /// byte/255 rates and the 255 s material clock. Water uses the wrapped
-    /// water clock and its `fx__ Effect("Water")` velocity / INFO5 (magnitude
+    /// `time` clock and its `fx__ Effect("Water")` velocity / INFO5 (magnitude
     /// [V], sign PROVISIONAL; `mungefs::fx::WaterConfig::scroll_per_second`).
     pub scroll: [f32; 2],
     /// Multiplies the mesh UV before the scroll — read ONLY by the water's

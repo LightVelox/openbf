@@ -483,9 +483,13 @@ rider killed in a vehicle or a removal — they bracket the true ratio from both
 Every bracket holds its table's total. The Empire's low table against the Alliance's is plain on Hoth: 15 drops
 from 64 Imperial deaths, 40 from 44 Rebel ones.
 
-## 9. The port today, and the build
+## 9. The port and the build at the research baseline
 
-The port has no pickup: no class reads the drop keys, no item entity, nothing drawn (search of `engine/crates` for
+Current pickup code is `core/src/sim/pickups.rs` and `game/src/viewer/pickups.rs`.
+The following inventory describes the 2026-10-02 baseline; it is not a claim that
+those features remain unimplemented or that current original-game acceptance is complete.
+
+At that research baseline, the port had no pickup: no class reads the drop keys, no item entity, nothing drawn (search of `engine/crates` for
 `powerup`, `DropItem`, `pickup`: no runtime hit). The build (card PWUP, phase build), in commits:
 1. **Data.** Per soldier class its resolved drop table (§3.1: parent first, the index rule); per item class its
    numbers (§2.1) and box (§2.3); per map the pool size (§2.4). A droideka gets none.

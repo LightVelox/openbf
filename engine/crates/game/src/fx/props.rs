@@ -132,22 +132,8 @@ mod tests {
     }
     #[test]
     fn finite_effects_repeat_only_when_the_hardpoint_authors_a_delay() {
-        let root = crate::assets::baked_root();
-        let lib = Library::load(&root, &root.join("bf2_mus1"), "bf2", &[]);
-        let original = lib
-            .effects
-            .values()
-            .flat_map(|d| &d.emitters)
-            .next()
-            .expect("real effect bake");
-        let mut emitter = original.clone();
-        emitter.max_particles = manifest::FxRange(1.0, 0.0);
-        emitter.burst_count = manifest::FxRange(1.0, 0.0);
-        emitter.start_delay = manifest::FxRange(0.0, 0.0);
-        emitter.burst_delay = manifest::FxRange(0.0, 0.0);
+        let mut emitter = super::super::tests::one_shot_emitter();
         emitter.transformer.lifetime = 0.1;
-        emitter.sibling = None;
-        emitter.geometry.child = None;
         let def = Arc::new(EffectDef::new(
             1,
             None,

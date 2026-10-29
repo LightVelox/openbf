@@ -40,7 +40,7 @@ pub struct OrdnanceClass {
     pub collision_sound: Option<String>,
     pub geometry: Option<String>,
     /// The laser keys of a `bolt` / `laser` class (its own draw, card FXB);
-    /// `None` for any other ordnance (drawn as the old placeholder box).
+    /// `None` means no laser ribbon; geometry-backed items use their own draw path.
     /// Render-only: the sim never reads it.
     pub laser: Option<crate::laser::LaserLook>,
     /// What its hits spawn (card FXP3, [`crate::impact`]); `None` only for a
@@ -48,8 +48,8 @@ pub struct OrdnanceClass {
     /// the bullet setter does not read carries just its trail. Render-only.
     pub impact: Option<crate::impact::ImpactLook>,
     /// A `sticky` class's own rules (card GREN, [`crate::sticky`]): gravity,
-    /// the stick mask, the explosion. `Some` makes the weapon's shot a thrown
-    /// grenade instead of a bolt; filled by the class loader.
+    /// the stick mask, the explosion. The firing path decides whether the
+    /// sticky is thrown or launched; filled by the class loader.
     pub sticky: Option<crate::sticky::StickyClass>,
     /// The impact explosion (card RKEX, re-blaster-damage 7.3: `Explosion` /
     /// `ExplosionImpact` / `ExplosionName`, B1 class +0x38 / B2 +0x4c): what

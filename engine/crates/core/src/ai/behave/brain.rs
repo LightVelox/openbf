@@ -126,8 +126,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         }
         // An order the player gave outranks the commander's plan. A Follow
         // or Hold unit is not in the plan at all, so `retarget` would put it
-        // on the Phase A fallback; the command branch runs instead (a
-        // `Disperse` unit stays in the pool and never gets here).
+        // on the Phase A fallback; the command branch runs instead.
         // Card SNPR: a sniper's spot - kept, left when its lane is quiet,
         // picked (`snipe::upkeep`).
         let seen_any = st.contacts.iter().flatten().any(|c| c.seen_now);
@@ -136,7 +135,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         crate::ai::fix::upkeep(sim, me, u, st);
         let fixing = crate::ai::fix::walk(sim, me, st);
         match (u.command, ring_walk(sim, st), super::snipe::walk(st)) {
-            (Some(c), _, _) if !c.in_pool() => crate::squad::steer(sim, me, st, &c, &mut nt),
+            (Some(c), _, _) => crate::squad::steer(sim, me, st, &c, &mut nt),
             // Card TBLD: a fixer walks to its turret over the graph.
             _ if fixing.is_some() => {
                 super::route::retarget_board(sim, me, st, fixing.unwrap_or(eye), &mut nt)
@@ -171,7 +170,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         }
         // Card VAI: a bot on foot in the commander's pool may go for a
         // vehicle (`ride::claim`); an ordered one stays with its order.
-        if u.mount.is_none() && u.command.is_none_or(|c| c.in_pool()) {
+        if u.mount.is_none() && u.command.is_none() {
             let had = super::ride::board_point(sim, st).is_some();
             super::ride::claim(sim, me, u, st);
             // Card WAI2: a new claim routes to its vehicle at once - card

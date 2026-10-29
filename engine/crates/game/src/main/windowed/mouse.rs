@@ -1,3 +1,6 @@
+//! The window's pointer lock and mouse glue for `App`. Keyboard + mouse is OURS
+//! (public pull request #1); rules in `AGENTS.md` (Keyboard + mouse).
+
 use super::{App, Screen};
 use winit::event::WindowEvent;
 

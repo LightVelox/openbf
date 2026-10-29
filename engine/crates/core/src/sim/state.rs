@@ -1052,10 +1052,6 @@ pub struct NavStats {
     pub man_defence_offers: u64,
     pub man_boards: u64,
     pub man_codes: [u64; 7],
-    /// Disperse plans that had to drop their exclusions because the map did not
-    /// offer enough distinct objectives (brief D5(d)). OUTPUT only — a fact
-    /// about a two-post map, not something to tune away.
-    pub disperse_fallbacks: u64,
 }
 
 /// BF2's 10 m view-cone omni radius, or 0 for a BF1 map (RE §9.1: BF1's cone

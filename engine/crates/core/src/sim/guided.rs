@@ -1,3 +1,7 @@
+//! Guided rockets in the sim: launch, player and bot control routing, swept
+//! collision, detonation and control return. Follows
+//! `analysis/re-guided-rockets.md` (card GUIDED).
+
 use super::{buttons, Event, PadState, Sim};
 use crate::collision::{HullFilter, Layers};
 use crate::guided::{GuidedClass, GuidedEnd, GuidedRocket, COLLISION_RADIUS_PROVISIONAL as RADIUS};

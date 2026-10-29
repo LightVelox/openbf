@@ -2,6 +2,8 @@
 //! self-lit surfaces and additive sprites in half-scale display units against
 //! the scene depth; threshold before downsampling, then the authored cascade.
 //! [ours] Only emissive sources bloom. Ordinary lit whites are excluded.
+//! [ours] The 4x downsample averages all 16 texels of a block (the PS2 takes one
+//! bilinear sample of the central 2x2, `re-glow.md` §2.2).
 //! Native quarter-size buffers replace the fixed PS2 128×112 buffers.
 use crate::{bindings, pipelines::PipelineDesc, Renderer};
 

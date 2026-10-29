@@ -15,7 +15,7 @@ impl AiState {
     /// Forget everything this unit was doing on someone else's behalf: the
     /// route and the post it was walking to. Phase D calls it wherever a squad
     /// order is put on a unit or taken off it (`squad::issue_command`,
-    /// `clear_all`, `on_unit_died`, phase 0b's Disperse expiry) so the unit
+    /// `clear_all`, `on_unit_died`) so the unit
     /// re-plans from scratch instead of finishing a leg it was given as part
     /// of a plan it is no longer in — and the follower scratch state
     /// ([`CmdState`]), so the next order starts in no follow state and with no

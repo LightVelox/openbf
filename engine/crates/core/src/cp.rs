@@ -264,21 +264,6 @@ impl CommandPost {
         self.owner == Some(team) && !self.def.spawn_nodes.is_empty()
     }
 
-    /// Fraction of the active meter (for HUD/markers): capture progress on a
-    /// neutral post, neutralize progress on an owned one.
-    pub fn charge_fraction(&self) -> (Option<u8>, f32) {
-        match self.owner {
-            None => (
-                self.capture_team,
-                (self.capture / self.def.capture_time).clamp(0.0, 1.0),
-            ),
-            Some(_) => (
-                None,
-                (self.neutral / self.def.neutralize_time).clamp(0.0, 1.0),
-            ),
-        }
-    }
-
     pub fn hash_into(&self, eat: &mut impl FnMut(&[u8])) {
         eat(&[self.owner.unwrap_or(255), self.capture_team.unwrap_or(255)]);
         eat(&self.capture.to_bits().to_le_bytes());

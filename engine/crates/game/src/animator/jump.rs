@@ -1,3 +1,6 @@
+//! BF1's jump: timed poses, landing choice and interruption, and the fade back
+//! to locomotion. Follows `analysis/re-soldier-anim-layers.md` §10.
+
 use super::{AnimInput, Body, Game, Rig, Special};
 use crate::skin::Clip;
 

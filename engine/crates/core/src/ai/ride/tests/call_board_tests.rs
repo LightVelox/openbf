@@ -626,34 +626,6 @@ fn gboard_older_claim_keeps_clock_with_second_called_claim() {
 }
 
 #[test]
-fn gboard_disperse_expiry_preserves_the_normal_pool_call_target() {
-    let (mut s, _, a, vh) = scene(VehicleKind::Hover, 20.0, 0);
-    s.spawn(&UnitSpec::player(0, s.unit(a).unwrap().soldier.pos))
-        .unwrap();
-    assert!(s.issue_command(0, crate::squad::CommandKind::Disperse(12)) > 0);
-    assert!(s.unit(a).unwrap().command.unwrap().in_pool());
-    while s.tick <= 10 {
-        s.step(&[]);
-    }
-    assert_eq!(s.unit(a).unwrap().ai.pending_board, Some((a, vh)));
-    let due = s.unit(a).unwrap().ai.next_think;
-    assert!(due > 12);
-    while s.tick <= 12 {
-        s.step(&[]);
-    }
-    assert!(s.unit(a).unwrap().command.is_none());
-    assert_eq!(
-        s.unit(a).unwrap().ai.pending_board,
-        Some((a, vh)),
-        "pool expiry is not a new player order"
-    );
-    while s.tick <= due {
-        s.step(&[]);
-    }
-    assert_eq!(s.unit(a).unwrap().ai.ride.unwrap().board, Some(vh));
-}
-
-#[test]
 fn wgord_ordered_call_matrix() {
     use crate::squad::CommandKind;
     let mut faults = 0;

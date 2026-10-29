@@ -1,6 +1,8 @@
 //! Cosmetic chunk launches (`re-vehicle-death.md` §6, `re-droid-death.md` §2).
-//! [ours] Sphere contacts against the static floor replace rigid-body contacts;
-//! spin is cosmetic, chunks never damage units, and airborne pieces expire at 30 s.
+//! [ours] Sphere contacts against the floor under the piece (terrain, static
+//! bodies and vehicle hulls) replace rigid-body contacts; spin is cosmetic,
+//! chunks never damage units, and airborne pieces expire at 30 s. A piece with
+//! no floor under it falls through and goes below `NO_GROUND` (§6.2).
 use super::{FxAssets, Lcg};
 use crate::{classdb::ClassDb, walk::WalkSim};
 use core::sim::Event;
@@ -106,13 +108,16 @@ impl Chunks {
                 .sim
                 .ground_point_under_n(p.pos, before.y + p.spec.radius)
                 .0;
-            if p.vel.y < 0.0 && p.pos.y - p.spec.radius <= floor {
+            let void = floor <= core::collision::NO_GROUND + 1.0;
+            if !void && p.vel.y < 0.0 && p.pos.y - p.spec.radius <= floor {
                 p.pos.y = floor + p.spec.radius;
                 p.vel.y = -p.vel.y * p.spec.bounce;
                 p.contacts += 1;
             }
         }
-        self.live.retain(|p| p.age < 30.0 && p.rest < p.spec.life);
+        self.live.retain(|p| {
+            p.age < 30.0 && p.rest < p.spec.life && p.pos.y > core::collision::NO_GROUND
+        });
         for event in &walk.sim.events {
             match event {
                 Event::DroidBurst {
@@ -122,7 +127,7 @@ impl Chunks {
                     pos: _,
                     scale,
                 } => {
-                    let name = &walk.teams[usize::from(*team)].class(*class).name;
+                    let name = &walk.teams[usize::from(*team).min(1)].class(*class).name;
                     let u = &walk.sim.units[unit.index as usize];
                     self.launch(
                         name,
@@ -377,7 +382,19 @@ mod tests {
         assert_eq!(walk.sim.hash(), hash);
         assert!((c.live[0].vel - Vec3::new(5.0, 6.0, 0.0)).length() < 0.00001);
         walk.sim.events.clear();
-        for _ in 0..1000 {
+        // Nothing under it: no bounce on the NO_GROUND plane, gone below it.
+        for _ in 0..300 {
+            c.tick(&walk);
+        }
+        assert_eq!(c.len(), 0, "a piece over a void falls out");
+        // Thrown high enough to stay up past 30 s: the age bound removes it.
+        c.launch("fixture", Vec3::ZERO, Vec3::ZERO, Quat::IDENTITY, 1.0, 1.0);
+        c.live[0].vel = Vec3::Y * 200.0;
+        for _ in 0..890 {
+            c.tick(&walk);
+        }
+        assert_eq!(c.len(), 1);
+        for _ in 0..20 {
             c.tick(&walk);
         }
         assert_eq!(c.len(), 0, "airborne pieces are bounded too");

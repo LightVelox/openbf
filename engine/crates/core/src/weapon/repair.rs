@@ -1,3 +1,6 @@
+//! The repair tool's authored repair amounts, one per health type plus building
+//! rebuild and build. Follows `analysis/re-build-zones.md` (card TBLD).
+
 use super::{pf, FireState, PropSource, WeaponClass, WeaponState};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

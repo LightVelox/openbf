@@ -1,3 +1,6 @@
+//! Resolves a mine class and its trigger, expiry and destroyed explosions
+//! through the baked class chains. Follows `analysis/re-grenades.md` (mines).
+
 use super::{explosion_class, ClassDb, ClassSrc};
 use core::mine::MineClass;
 

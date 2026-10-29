@@ -1905,14 +1905,8 @@ impl winit::application::ApplicationHandler for App {
                     let mut hud_view = match (&mut self.hud_view, &hud) {
                         (Some(hv), Some(model)) => {
                             hv.update(model, hud_dt, [w, h]);
-                            // The end of the round draws no battle HUD over
-                            // its camera shot (issue #33); its stats pages
-                            // are the pass's, the `hud` cheat or not.
-                            let pages = model.round_end.as_ref().map(|r| r.stats.is_some());
-                            match pages {
-                                None => (!hud_hidden).then_some(hv),
-                                Some(up) => up.then_some(hv),
-                            }
+                            game::round_end::hud_pass_drawn(model.round_end.is_some(), hud_hidden)
+                                .then_some(hv)
                         }
                         _ => None,
                     };

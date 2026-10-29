@@ -22,6 +22,8 @@
 //! `no_std_transcendentals_in_game_sim_inputs` does the same over `game/src`,
 //! where the load path builds sim inputs, all but its presentation files
 //! and the exact, counted drawing expressions in mixed files.
+//! `no_wall_clock_in_core` walks the same files for `Instant`, `SystemTime`
+//! and `std::time`, allowing only two diagnostic timers.
 
 /// Sine and cosine of `x` radians together, as `(sin, cos)`.
 #[inline]
@@ -242,26 +244,33 @@ mod tests {
         })
     }
 
+    /// `line` without its `//` comment and its spacing, bar one space between
+    /// two identifiers (`return f32::sin`): what the scans match against.
+    fn compact(line: &str) -> String {
+        let mut compact = String::new();
+        let mut chars = line.split("//").next().unwrap_or("").chars().peekable();
+        while let Some(c) = chars.next() {
+            if c.is_whitespace() {
+                // Preserve identifier separation (`return f32::sin`),
+                // while discarding spacing around `.` and `::`.
+                if compact.chars().next_back().is_some_and(ident)
+                    && chars.peek().copied().is_some_and(ident)
+                {
+                    compact.push(' ');
+                }
+            } else {
+                compact.push(c);
+            }
+        }
+        compact
+    }
+
     /// One diagnostic per offending line, retaining the original line number.
     fn banned_calls_in(name: &str, code: &str) -> Vec<String> {
         code.lines()
             .enumerate()
             .filter_map(|(n, line)| {
-                let mut compact = String::new();
-                let mut chars = line.split("//").next().unwrap_or("").chars().peekable();
-                while let Some(c) = chars.next() {
-                    if c.is_whitespace() {
-                        // Preserve identifier separation (`return f32::sin`),
-                        // while discarding spacing around `.` and `::`.
-                        if compact.chars().next_back().is_some_and(ident)
-                            && chars.peek().copied().is_some_and(ident)
-                        {
-                            compact.push(' ');
-                        }
-                    } else {
-                        compact.push(c);
-                    }
-                }
+                let compact = compact(line);
                 let primitive = BANNED.iter().any(|pat| {
                     let method = pat.trim_start_matches('.').trim_end_matches('(');
                     compact.contains(pat)
@@ -368,13 +377,14 @@ mod tests {
         ("render_blend.rs", "o.rot = p.rot.slerp(o.rot, t);"),
     ];
 
-    /// The banned calls in every `.rs` file under `dir`, down into the
-    /// module directories a split leaves (`collision/`: a flat walk would
-    /// let every item a split moved slip past the scan without a word),
-    /// skipping the files `skip` names by their path under `dir` (a name
-    /// ending in `/` skips that whole directory) and each file's trailing
-    /// `#[cfg(test)] mod tests` — inline, or `mod tests;` in `tests.rs`.
-    fn offenders_under(dir: &std::path::Path, skip: &[&str]) -> Vec<String> {
+    /// Every `.rs` file under `dir` as `(path under dir, non-test code)`,
+    /// down into the module directories a split leaves (`collision/`: a flat
+    /// walk would let every item a split moved slip past the scan without a
+    /// word), skipping the files `skip` names by their path under `dir` (a
+    /// name ending in `/` skips that whole directory) and each file's
+    /// trailing `#[cfg(test)] mod tests` — inline, or `mod tests;` in
+    /// `tests.rs`.
+    fn non_test_sources(dir: &std::path::Path, skip: &[&str]) -> Vec<(String, String)> {
         let mut files: Vec<std::path::PathBuf> = Vec::new();
         let mut dirs = vec![dir.to_path_buf()];
         while let Some(d) = dirs.pop() {
@@ -393,7 +403,7 @@ mod tests {
             "referee scanned almost nothing: {files:?}"
         );
 
-        let mut offenders = Vec::new();
+        let mut sources = Vec::new();
         for path in &files {
             let name = path
                 .strip_prefix(dir)
@@ -449,7 +459,16 @@ mod tests {
                 }
                 None => text.clone(),
             };
+            sources.push((name, code));
+        }
+        sources
+    }
 
+    /// The banned calls in the non-test code under `dir`
+    /// ([`non_test_sources`]), less the exact [`DRAW_CALLS`] exceptions.
+    fn offenders_under(dir: &std::path::Path, skip: &[&str]) -> Vec<String> {
+        let mut offenders = Vec::new();
+        for (name, code) in non_test_sources(dir, skip) {
             let mut hits = banned_calls_in(&name, &code);
             for &(file, expression) in DRAW_CALLS.iter().filter(|(file, _)| *file == name) {
                 let suffix = format!(": {expression}");
@@ -511,6 +530,88 @@ mod tests {
              route these through core::fmath (or, if the file truly only \
              draws, add it to PRESENTATION with the reason). Offending \
              lines:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// The only files under `core/src` whose non-test code may read the wall
+    /// clock, each with why that cannot move the sim.
+    const WALL_CLOCK_ALLOWED: &[(&str, &str)] = &[
+        (
+            "sim/step.rs",
+            "`ai_wall_ms`: diagnostic timing, never hashed or read by the sim",
+        ),
+        (
+            "ai/tactic.rs",
+            "`TableStats.secs`: diagnostic timing, never hashed or read by the sim",
+        ),
+    ];
+
+    /// One diagnostic per non-comment line that names `Instant`,
+    /// `SystemTime` (as whole identifiers) or the `std::time` path.
+    fn wall_clock_in(name: &str, code: &str) -> Vec<String> {
+        code.lines()
+            .enumerate()
+            .filter_map(|(n, line)| {
+                let compact = compact(line);
+                ["Instant", "SystemTime", "std::time"]
+                    .iter()
+                    .any(|w| path_call(&compact, w))
+                    .then(|| format!("{name}:{}: {}", n + 1, line.trim()))
+            })
+            .collect()
+    }
+
+    /// The wall-clock scan, watched failing and passing on probes.
+    #[test]
+    fn the_wall_clock_referee_catches_clock_reads() {
+        for probe in [
+            "let t0 = std::time::Instant::now();",
+            "let t0 = std :: time :: Instant :: now();",
+            "use std::time;",
+            "let t = Instant::now();",
+            "let t = SystemTime::now();",
+            "fn f(t: Instant) {}",
+        ] {
+            assert_eq!(wall_clock_in("probe.rs", probe).len(), 1, "{probe}");
+        }
+        for allowed in [
+            "// the Instant Action option, std::time",
+            "let instant_kill = mystd::time_left + InstantAction;",
+            "let s = \"x\"; // Instant::now()",
+        ] {
+            assert!(
+                wall_clock_in("probe.rs", allowed).is_empty(),
+                "false positive on: {allowed}"
+            );
+        }
+    }
+
+    /// `core` is deterministic: its non-test code reads no wall clock, bar
+    /// the two diagnostic timers in [`WALL_CLOCK_ALLOWED`]. An allowlisted
+    /// file that no longer reads the clock is a stale entry and fails too.
+    #[test]
+    fn no_wall_clock_in_core() {
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        let mut offenders = Vec::new();
+        let mut used = vec![false; WALL_CLOCK_ALLOWED.len()];
+        // This file is skipped as in `no_std_transcendentals_in_core`: its
+        // tests quote the probes, and its non-test code is the libm wrappers.
+        for (name, code) in non_test_sources(dir, &["fmath.rs"]) {
+            let hits = wall_clock_in(&name, &code);
+            match WALL_CLOCK_ALLOWED.iter().position(|(f, _)| *f == name) {
+                Some(k) => used[k] |= !hits.is_empty(),
+                None => offenders.extend(hits),
+            }
+        }
+        for ((file, _), used) in WALL_CLOCK_ALLOWED.iter().zip(used) {
+            assert!(used, "{file}: stale wall-clock allowance, drop it");
+        }
+        assert!(
+            offenders.is_empty(),
+            "core reads the wall clock outside its diagnostic allowlist — the \
+             sim must replay bit-for-bit, so time comes from `Sim::tick`. \
+             Offending lines:\n{}",
             offenders.join("\n")
         );
     }

@@ -1,3 +1,7 @@
+//! The fusion cutter in the sim: target choice, energy-gated pulses, station
+//! rebuilding and fallen building turrets. Follows `analysis/re-build-zones.md`
+//! (card TBLD).
+
 use super::{Event, Sim};
 use crate::collision::{HullFilter, Layers};
 use crate::projectile::Target;

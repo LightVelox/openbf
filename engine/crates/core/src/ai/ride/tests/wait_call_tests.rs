@@ -393,6 +393,7 @@ fn wgcal_bailout_preempts_start_and_player_orders_keep_priority() {
 }
 
 #[test]
+#[ignore = "probe: prints hash traces to compare across branches; asserts nothing"]
 fn wgcal_foot_bf2_controls_and_affected_unarmed_traces() {
     for case in 0..3 {
         let (mut s, p, vh) = pickup_world(VehicleKind::Hover);

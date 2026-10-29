@@ -1,5 +1,5 @@
 //! Card HYST: a bot thinks at once when something happens to it, not at its
-//! next scheduled think (`lead_tmp/botre/modern.md` B3: L4D's actions answer
+//! next scheduled think (`analysis/bot-design.md` 9 D21: actions answer
 //! events as they come; a bot hit just after a think stood up to a think
 //! period without answering). Three events wake it: a hit, an enemy bolt
 //! passing within [`NEAR_MISS`] of its body, and an enemy it does not know

@@ -681,7 +681,6 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
                             match c.kind {
                                 core::squad::CommandKind::Follow(_) => "F",
                                 core::squad::CommandKind::Hold(_) => "H",
-                                core::squad::CommandKind::Disperse(_) => "D",
                             }
                         ));
                     }

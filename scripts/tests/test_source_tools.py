@@ -315,6 +315,60 @@ class PackTests(unittest.TestCase):
                 self.assertEqual({r['status'] for r in extracted}, {'used' if rebake else 'unused'})
                 self.assertTrue(out.is_file())
 
+    def test_map_sources_preserve_base_and_alternative_file_spelling(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            texture_dir = root / 'map/textures'
+            texture_dir.mkdir(parents=True)
+            (root / 'map/manifest.ron').write_text(
+                '(source_game: "bf2", textures: ["Foo"], '
+                'texture_tiers: [("foo", "pc")], '
+                'texture_tier2: [("foo", "Foo.tier2.ktx2")])')
+            (texture_dir / 'Foo.ktx2').touch()
+            (texture_dir / 'Foo.tier2.ktx2').touch()
+            row, = pack.map_texture_sources(root)
+            self.assertEqual(row['base_textures'], 1)
+            self.assertEqual(row['missing_base_textures'], [])
+            self.assertEqual(row['pc_alternatives'], ['foo'])
+            self.assertEqual(row['missing_alternatives'], [])
+            self.assertEqual(row['missing_alternative_metadata'], [])
+
+    def test_map_sources_require_explicit_alternative_file_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            texture_dir = root / 'map/textures'
+            texture_dir.mkdir(parents=True)
+            manifest = root / 'map/manifest.ron'
+            # Even an existing conventionally named file is not evidence
+            # without the producer's filename metadata.
+            (texture_dir / 'foo.tier2.ktx2').touch()
+            header = '(source_game: "bf2", textures: [], texture_tiers: [("foo", "pc")], '
+            manifest.write_text(header + ')')
+            row, = pack.map_texture_sources(root)
+            self.assertEqual(row['pc_alternatives'], [])
+            self.assertEqual(row['missing_alternative_metadata'], ['foo'])
+            self.assertEqual(row['missing_alternatives'], [])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                pack.write_source_report(root / 'game', dict(inputs=[], maps=[row], limits='fixture'))
+            self.assertIn("missing alternative filename metadata: ['foo']", output.getvalue())
+            (texture_dir / 'Other.ktx2').touch()
+            manifest.write_text(header + 'texture_tier2: [("other", "Other.ktx2")])')
+            row, = pack.map_texture_sources(root)
+            self.assertEqual(row['unrecognized_alternative_metadata'], ['other'])
+            self.assertEqual(row['missing_alternative_metadata'], ['foo'])
+            self.assertEqual(row['pc_alternatives'], [])
+            manifest.write_text(header + 'texture_tier2: [("foo", "Absent.ktx2")])')
+            row, = pack.map_texture_sources(root)
+            self.assertEqual(row['missing_alternatives'], ['foo'])
+            self.assertEqual(row['missing_alternative_metadata'], [])
+            for mapping in ['[("foo", 3)]', '[("foo", "one"), ("foo", "two")]',
+                            '[("foo", "")]', '[("foo", "../outside.ktx2")]',
+                            '[("foo", "/outside.ktx2")]', '[("foo", "unfinished")']:
+                with self.subTest(mapping=mapping):
+                    manifest.write_text(header + 'texture_tier2: ' + mapping + ')')
+                    self.assertIn('error', pack.map_texture_sources(root)[0])
+
     def test_map_sources_count_existing_files_without_inventing_tiers(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -322,7 +376,9 @@ class PackTests(unittest.TestCase):
             texture_dir.mkdir(parents=True)
             manifest = root / 'map/manifest.ron'
             manifest.write_text('(source_game: "bf2", textures: ["lava", "missing", "bracket]"], '
-                                'texture_tiers: [("lava", "pc"), ("missing", "pc"), ("odd", "unknown")])')
+                                'texture_tiers: [("lava", "pc"), ("missing", "pc"), ("odd", "unknown")], '
+                                'texture_tier2: [("lava", "lava.tier2.ktx2"), ("missing", "missing.tier2.ktx2"), '
+                                '("odd", "odd.tier2.ktx2")])')
             (texture_dir / 'lava.ktx2').touch()
             (texture_dir / 'bracket].ktx2').touch()
             (texture_dir / 'lava.tier2.ktx2').touch()
@@ -369,6 +425,20 @@ class PackTests(unittest.TestCase):
             for name, data in reversed(list(contents.items())):
                 (root / name).write_bytes(data)
             self.assertEqual(original, pack.inputs_hash(pack.BAKE_INPUTS))
+
+
+class AnalysisIndexTests(unittest.TestCase):
+    def test_check_prints_exact_written_index_without_editing_it(self):
+        script=Path(__file__).resolve().parents[1] / 'analysis_index.py'
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/'analysis').mkdir()
+            (root/'analysis/re-fixture.md').write_text('# Fixture\n\nSummary.\n')
+            command=[sys.executable,str(script),'--root',str(root)]
+            subprocess.run(command,check=True,capture_output=True)
+            path=root/'analysis/INDEX.md';before=path.read_bytes()
+            result=subprocess.run(command+['--check'],check=True,capture_output=True)
+            self.assertEqual(result.stdout,before)
+            self.assertEqual(path.read_bytes(),before)
 
 
 class ScannerProjectionTests(unittest.TestCase):

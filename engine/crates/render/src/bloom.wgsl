@@ -41,7 +41,8 @@ fn fs_blur(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_composite(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
-    let uv = p.xy / vec2<f32>(textureDimensions(frame));
+    // The small buffer is ceil(size / 4): each texel covers 4x4 full-res pixels.
+    let uv = p.xy / (4.0 * vec2<f32>(textureDimensions(source)));
     let glow = textureSampleLevel(source, linear_sampler, uv, 0.0).rgb;
     let c = min(textureLoad(frame, vec2<i32>(p.xy), 0).rgb + glow, vec3<f32>(1.0));
     let linear = select(c / 12.92, pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), c > vec3<f32>(0.04045));

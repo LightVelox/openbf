@@ -12,7 +12,10 @@ B1 = `analysis/SWBFRONT.ELF-decomp.c`. GS ALPHA: Cv = ((A − B)·C >> 7) + D. T
 
 ## 0. The answer
 
-Three mechanisms, none in the port. Plus one the port should keep out.
+At the 2026-09-30 research baseline, three mechanisms were absent from the port.
+The current implementations are `render/src/shader.wgsl` (self-lit paths),
+`render/src/filter.rs` and `render/src/bloom.rs`; their presence does not establish
+original-game acceptance. The original measurements below remain historical evidence.
 
 | effect | where | trigger | what the PS2 does | measured on the PS2 |
 |---|---|---|---|---|
@@ -161,7 +164,7 @@ and the bloom switch together (frame luma: both on 99.7, no glow 82.8, no bloom 
 The model: out = min(255, v + I/128 · up2×(max(0, box2×(v) − T))). The HUD is drawn after the filter.
 
 ### 3.4 The port [D]
-The port has no filter. Applied offline to the port's stored walk frames (09-29) with each map's values: TAT1 −12.8 →
+At that research baseline, the port had no filter. Applied offline to the port's stored walk frames (09-29) with each map's values: TAT1 −12.8 →
 −0.1 median dluma (24 pairs), KAM1 −6.8 → +1.3, NAB2 −5.9 → −0.6, KAS2 −7.7 → −3.7; the threshold-150 maps move ≤ 3;
 **NAB1 −7.3 → +10.5 and BES2 −1.0 → +8.8 overshoot** (the port is already too bright in their bright areas — other terms).
 
@@ -187,7 +190,7 @@ _tNN thresholds; alphaonly / colouronly (the override's halves); _nosoft (DAT_00
 - **HW Basic** (the reference library's renderer) matches SW here: MYG1 ctl mean |d| 1.9 (luma 101.2 vs 99.7), TAT1
   1.6 / 1.2 — so the library's glow and filter frames stand (card PXSW).
 
-## 7. What the port owes (the builds)
+## 7. Build obligations recorded at the research baseline
 All BF2 effects apply only on maps whose `Effect("HDR")` enables it; the per-map numbers are the disc's.
 1. **GLOW (build) — the self-lit segments.** Bake: carry per primitive "glow" (BF2 MTRL 0x10 and not 0x04, on an HDR map)
    and "unscaled" (0x14); keep the texture's alpha for glow textures (`bake/src/alpha.rs` strips alpha from textures

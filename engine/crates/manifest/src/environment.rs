@@ -1,3 +1,7 @@
+//! The environment schema: weather, local lights and HDR, foliage and the
+//! `foliage.bin` codec, water, lighting, fog and sky. Each type cites its own
+//! `analysis/` doc (`re-water.md`, `re-fog.md`, `re-foliage.md`, ...).
+
 use serde::{Deserialize, Serialize};
 
 #[cfg(doc)]

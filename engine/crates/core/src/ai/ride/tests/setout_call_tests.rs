@@ -328,6 +328,7 @@ fn turning_toward_route_consumes_departure_before_translation() {
 }
 
 #[test]
+#[ignore = "probe: prints hash traces to compare across branches; asserts nothing"]
 fn affected_bf1_and_unaffected_bf2_trace_controls() {
     for kind in [VehicleKind::Hover, VehicleKind::Walker] {
         for rules in [GroundRules::Bf1, GroundRules::Bf2] {

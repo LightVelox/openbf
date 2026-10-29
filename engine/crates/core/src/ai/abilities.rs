@@ -1,3 +1,9 @@
+//! Which ability a bot uses: officer support, the remote droid (card DROIDAI)
+//! and the auto-turret (card ATUR, the BF2 cluster rule), pressed through
+//! secondary fire and weapon switch. Follows `analysis/re-portable-turret.md`
+//! §6.1; the officer rule is a PROVISIONAL port policy
+//! (`analysis/re-officer-abilities.md`, Bot policy).
+
 use super::arsenal;
 use crate::sim::{buttons, Sim};
 use crate::soldier::GroundRules;

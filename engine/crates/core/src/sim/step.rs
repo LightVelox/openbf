@@ -3,10 +3,10 @@
 //! stages call live with the feature they serve (`spawn`, `input`, `combat`,
 //! `round`). WGCAL/WGOUT publish BF1 wait-start and first routed departure calls after all
 //! AI write-backs, before use/entry and movement. The movement (unit separation, the A.4 step, the wall pass),
-//! stamina-cheat and AI-fire (D9's spread multiplier, the fairness rule)
-//! tests live here, and a human's shot (card AIMA, `re-aim-assist.md` §10.2:
-//! from the fire point at what the aim ray hits, `Sim::aim_hit`) with its
-//! tests.
+//! stamina cheat, AI fire (D9's spread multiplier, the fairness rule) and a
+//! human's shot (card AIMA, `re-aim-assist.md` §10.2: from the fire point at
+//! what the aim ray hits, `Sim::aim_hit`) live here. Their tests are in
+//! `step/tests.rs` and `step/tests/`.
 
 use super::input::{buttons, PadState};
 use super::state::{Call, DeathCause, Event, Sim, LETHAL_LANDING_SPEED};

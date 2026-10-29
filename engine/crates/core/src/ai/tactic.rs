@@ -136,11 +136,6 @@ pub struct Position {
 }
 
 impl Position {
-    /// Cover of either kind toward the direction `d` (XZ): on either of the
-    /// two sector rays either side of it ([`sector_pair`]).
-    pub fn covered_toward(&self, d: Vec2) -> bool {
-        (self.low | self.corner) & sector_pair(d) != 0
-    }
     /// Any cover at all.
     pub fn covered(&self) -> bool {
         self.low | self.corner != 0

@@ -1,3 +1,7 @@
+//! BF2 bots' pickup detour: the scan, need checks, the walk past the item and
+//! back, and deterministic state. Follows `analysis/re-powerups.md` §6 (PS2) and
+//! §12 (the port's own gates, card B2ITEM).
+
 use super::state::AiState;
 use crate::perception;
 use crate::sim::Sim;
@@ -5,11 +9,19 @@ use crate::soldier::GroundRules;
 use crate::unit::Unit;
 use glam::Vec3;
 
+/// The scan every 2.0 s (`analysis/re-powerups.md` §6, BF2 `FUN_002bd628`).
 const PERIOD: u64 = 2 * crate::TICK_HZ as u64;
+/// 4.0 s more after a hit (§6).
 const FOUND_DELAY: u64 = 4 * crate::TICK_HZ as u64;
+/// Items within 6 m (§6, `FUN_002be050(6.0)`).
 const RADIUS: f32 = 6.0;
+/// The PS2's 7 m level-of-detail step (§6); gating the detour by it, with LOS
+/// beyond, is OURS (§12). PROVISIONAL.
 const HUMAN_NEAR: f32 = 7.0;
+/// The PS2's 20 m level-of-detail step (§6); the hard cut is OURS (§12).
+/// PROVISIONAL.
 const HUMAN_FAR: f32 = 20.0;
+/// OURS: arrival distance at a detour point. PROVISIONAL (not in re-powerups.md).
 const WAYPOINT_REACH: f32 = 0.3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -55,7 +67,7 @@ pub(super) fn goal(sim: &Sim, u: &Unit, st: &mut AiState) -> Option<Vec3> {
     if u.mount.is_some()
         || st.lost.is_some_and(|l| l.confirmed)
         || st.ride.is_some()
-        || u.command.is_some_and(|c| !c.in_pool())
+        || u.command.is_some()
     {
         st.items.detour = None;
         return None;

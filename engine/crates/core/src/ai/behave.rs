@@ -40,12 +40,13 @@
 //! hub, `hub_reached`; its shuffle and its hold at a hub went with card
 //! TPOS),
 //! the run from a grenade (`hazard_flee`) and the lost bot's jump
-//! (`lost_jump`). The position, fight, reaction, grenade, lost-bot and dodge
-//! tests live here.
+//! (`lost_jump`). The position, fight, reaction and dodge tests live in
+//! `behave/position/tests.rs`.
 
 //!
 //! Split by responsibility: `brain` runs the priority chain; `position` owns
-//! fight positions, reactions and escape probes; `tests` covers both.
+//! fight positions, reactions and escape probes; `position/tests.rs` holds
+//! the tests.
 
 #[cfg(doc)]
 use crate::ai::gunner_foot::AimRequest;

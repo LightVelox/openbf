@@ -1,3 +1,7 @@
+//! The BF2 sniper's portable auto-turret: class data with the `portableturret`
+//! defaults, fall / land / bounce, lifetime, the hover-stick aim turn and replay
+//! state. Follows `analysis/re-portable-turret.md` (card ATUR).
+
 use crate::ai::hover_drive::shaped;
 use crate::fmath;
 use crate::remote::{look_frame, name, tilted};
@@ -10,17 +14,29 @@ use crate::weapon::{
 use glam::{Quat, Vec3};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+/// `boneroot` height above the origin (`re-portable-turret.md` §7, skeleton).
 pub const CENTRE: f32 = 1.056;
+/// The shell's bind-pose sphere (§7); using it as the hit sphere is OURS (§9).
 pub const RADIUS: f32 = 0.25;
+/// `aimer_x` offset from the centre along the yaw (§7, skeleton).
 pub const AIMER: f32 = 0.234;
+/// `hp_fire` offset from `aimer_x` along the aim (§7, skeleton).
 pub const FIRE: f32 = 0.074;
+/// A contact lands the turret when its normal's y is above this (§4, B2:143871).
 pub const LAND_NY: f32 = 0.7;
+/// `Gravity` 1 x 9.8 m/s^2 (§0 "flight").
 pub const GRAVITY: f32 = -9.8;
+/// Tracking range, about 100 m (§0 "its aim"; `re-turret-ai.md` §2-3).
 pub const VIEW: f32 = 100.0;
+/// The fight is kept to MaxRange + this (§0 "its aim").
 pub const FIGHT_MARGIN: f32 = 10.0;
+/// Fires only with the aim inside this cone (§0 "its aim"; `re-turret-ai.md` §2-3).
 pub const AIM_CONE: f32 = 22.5 * DEG;
+/// Idle look: base yaw +/- this (§0 "its aim"; `re-turret-ai.md` §2.3).
 pub const LOOK_SPREAD: f32 = 30.0 * DEG;
+/// The idle look point is redrawn every this many thinks (§0 "its aim").
 pub const LOOK_EVERY: u32 = 18;
+/// OURS: the think interval in seconds (§9). PROVISIONAL.
 pub const THINK: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

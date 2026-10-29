@@ -1,3 +1,8 @@
+//! Keyboard + mouse to `PadState`: the bindings table, held keys and latched
+//! taps, mouse look in `LOOK_UNIT`s, the merge with the controller, pointer lock
+//! and menu keys. OURS (public pull request #1); rules in `AGENTS.md`
+//! (Keyboard + mouse).
+
 use core::sim::{buttons, PadState, LOOK_UNIT};
 use winit::event::{KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};

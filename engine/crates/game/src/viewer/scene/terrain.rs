@@ -1,3 +1,7 @@
+//! Terrain draw: the heightfield split into square chunks with their bounds,
+//! and the layer uploads. Cutter patches use the bake's pre-clipped meshes
+//! (`analysis/re-terrain-cutters.md` §0.3).
+
 use super::*;
 
 /// Cells along one edge of a terrain draw chunk. See

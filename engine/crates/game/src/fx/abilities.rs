@@ -1,3 +1,7 @@
+//! BF2 officer abilities on screen: activation effects and the timed auras that
+//! follow their recipients. Follows `analysis/re-officer-abilities.md`
+//! (issue #47).
+
 use super::{emitter::Frame, Fx, Gain};
 
 use core::sim::{Event, Sim};
