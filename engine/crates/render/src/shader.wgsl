@@ -1007,3 +1007,23 @@ fn vs_skinned(in: VsSkinnedIn) -> VsOut {
     }
     return out;
 }
+
+// [ours] Gather only marked emissive surfaces, before display clipping.
+fn bloom_light(in: VsOut) -> vec4<f32> {
+    let uv = in.uv + material.scroll.xy * globals.time;
+    let texel = textureSample(t_color, s_color, uv);
+    let base = texel * in.color;
+    let gain = select(2.0, 1.0 + glow_as(texel.a, in.color.a) / 128.0, in.light == LIGHT_GLOW);
+    let d = min(linear_to_srgb(base.rgb * detail_factor(uv)) * gain, vec3<f32>(2.0));
+    let fogged = linear_to_srgb(apply_fog(srgb_to_linear(d), in.fog_depth));
+    let coverage = select(base.a, 1.0, in.light == LIGHT_GLOW);
+    return vec4<f32>(fogged * 0.5 * coverage * far_fade(in.view_dist), 1.0);
+}
+@fragment
+fn fs_bloom(raw: VsOut) -> @location(0) vec4<f32> {
+    let in = affine_in(raw); far_cull(in); return bloom_light(in);
+}
+@fragment
+fn fs_bloom_mask(raw: VsOut) -> @location(0) vec4<f32> {
+    let in = affine_in(raw); far_cull(in); mask_test(in); return bloom_light(in);
+}

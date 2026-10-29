@@ -114,3 +114,92 @@ fn the_two_pass_box_is_the_square_box() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn bloom_uses_preclip_marked_light_and_scene_depth() {
+    use glam::Vec3;
+    use render::{Bloom, LightPath, ParticleDraw, ParticleShape};
+    let mut r = Renderer::new_headless(128, 128).unwrap();
+    let tex = upload_tex(&mut r, 1, 1, &[255, 100, 10, 255], "orange glow");
+    let white = upload_tex(&mut r, 1, 1, &[255; 4], "plain white");
+    let quad = view_quad(&mut r, -3.0);
+    let mut d = DrawCmd::textured(quad, tex, Mat4::from_scale(Vec3::splat(0.1)));
+    d.model = Mat4::from_translation(Vec3::new(0.0, 0.0, -2.7)) * d.model;
+    d.light = LightPath::Glow;
+    let settings = Bloom {
+        passes: 5,
+        weight: 1.2,
+        threshold: 0.5,
+    };
+    let cam = Camera::default();
+    let mut capture = |draws: &[DrawCmd], bloom| {
+        r.set_bloom(bloom);
+        r.render(&cam, draws, [0.0, 0.0, 0.0, 1.0]).unwrap();
+        r.capture_rgba().unwrap().0
+    };
+    let off = capture(&[d], None);
+    let on = capture(&[d], Some(settings));
+    let halo = on
+        .chunks_exact(4)
+        .zip(off.chunks_exact(4))
+        .filter(|(a, b)| b[0] == 0 && a[0] > 1)
+        .count();
+    assert!(halo > 100, "preclip orange halo has only {halo} pixels");
+    d.light = LightPath::Unlit;
+    d.texture = Some(white);
+    assert_eq!(
+        capture(&[d], Some(settings)),
+        capture(&[d], None),
+        "plain white must not bloom"
+    );
+    d.light = LightPath::Glow;
+    d.texture = Some(tex);
+    let mut blocker = DrawCmd::textured(view_quad(&mut r, -1.0), white, Mat4::IDENTITY);
+    blocker.light = LightPath::Unlit;
+    r.set_bloom(None);
+    r.render(&cam, &[d, blocker], [0.0; 4]).unwrap();
+    let blocked = r.capture_rgba().unwrap().0;
+    r.set_bloom(Some(settings));
+    r.render(&cam, &[d, blocker], [0.0; 4]).unwrap();
+    assert_eq!(
+        r.capture_rgba().unwrap().0,
+        blocked,
+        "opaque wall must hide emissive source"
+    );
+    let particle = ParticleDraw {
+        shape: ParticleShape::Sprite {
+            pos: Vec3::new(0.0, 0.0, -3.0),
+            half: 0.4,
+            angle: 0.0,
+            uv: [0.0, 0.0, 1.0, 1.0],
+        },
+        key: Vec3::new(0.0, 0.0, -3.0),
+        color: [255; 4],
+        texture: Some(white),
+        additive: true,
+    };
+    r.set_particles(vec![particle.clone(), particle]);
+    r.set_bloom(None);
+    r.render(&cam, &[], [0.0; 4]).unwrap();
+    let off = r.capture_rgba().unwrap().0;
+    r.set_bloom(Some(Bloom {
+        threshold: 0.6,
+        ..settings
+    }));
+    r.render(&cam, &[], [0.0; 4]).unwrap();
+    let on = r.capture_rgba().unwrap().0;
+    assert!(
+        on.chunks_exact(4)
+            .zip(off.chunks_exact(4))
+            .any(|(a, b)| b[0] == 0 && a[0] > 1),
+        "overlapping additive light must cross threshold"
+    );
+    r.set_bloom(None);
+    r.render(&cam, &[], [0.0; 4]).unwrap();
+    assert_eq!(
+        r.capture_rgba().unwrap().0,
+        off,
+        "disabled state must restore exact frame"
+    );
+}

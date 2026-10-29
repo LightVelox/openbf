@@ -485,6 +485,34 @@ impl Renderer {
         // The DomeInfo frame filter (card BFLT, `filter.rs`): its own
         // full-screen pipeline over a copy of the finished 3D frame.
         let filter = crate::filter::FilterState::new(&device, format, copyable);
+        let gather_world = |fs, blend| {
+            crate::bloom::gather(
+                &device,
+                &shader,
+                PipelineDesc {
+                    blend,
+                    ..PipelineDesc::world("bloom surface", &pipeline_layout, &vb)
+                },
+                fs,
+            )
+        };
+        let gather = crate::bloom::Gather {
+            world: gather_world("fs_bloom", None),
+            mask: gather_world("fs_bloom_mask", None),
+            blend: gather_world("fs_bloom", Some(additive)),
+            particle: crate::bloom::gather(
+                &device,
+                &bolt_shader,
+                PipelineDesc {
+                    vs: "vs_grass",
+                    blend: Some(additive),
+                    ..PipelineDesc::world("bloom particle", &pipeline_layout, &grass_vb)
+                },
+                "fs_bloom_particle",
+            ),
+        };
+        let bloom = crate::bloom::BloomState::new(&device, format, copyable, gather);
+
         let (w, h) = match &target {
             Target::Window { config, .. } => (config.width, config.height),
             Target::Headless { width, height, .. } => (*width, *height),
@@ -579,6 +607,7 @@ impl Renderer {
                 ..Default::default()
             },
             filter,
+            bloom,
             spec_buf,
             spec_bg: None,
             spec_mirror: true,

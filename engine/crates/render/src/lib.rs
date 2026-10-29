@@ -61,6 +61,7 @@
 
 pub mod affine;
 mod bindings;
+mod bloom;
 mod bolt;
 mod camera;
 mod capture;
@@ -87,6 +88,7 @@ mod stars;
 mod terrain_light;
 mod texture;
 
+pub use bloom::Bloom;
 pub use bolt::{BoltDraw, RibbonVertex};
 pub use camera::Camera;
 pub use capture::{encode_png, encode_png_rgb};
@@ -356,6 +358,7 @@ pub struct Renderer {
     /// The DomeInfo frame filter (`filter.rs`, card BFLT): its pipeline,
     /// this map's values ([`Renderer::set_frame_filter`]) and the frame copy.
     filter: filter::FilterState,
+    bloom: bloom::BloomState,
     spec_buf: wgpu::Buffer,
     spec_bg: Option<wgpu::BindGroup>,
     /// The disc's mirrored specular light (`analysis/re-specular-pass.md` §4,
@@ -426,6 +429,7 @@ impl Renderer {
         self.set_particles(Vec::new());
         self.set_terrain_lights(Default::default());
         self.set_frame_filter(None);
+        self.set_bloom(None);
         self.lighting = Lighting::default();
     }
 }

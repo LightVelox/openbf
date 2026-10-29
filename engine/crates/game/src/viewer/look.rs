@@ -679,6 +679,17 @@ pub fn apply_lighting(r: &mut Renderer, scene: &Scene) {
         scene.manifest.water.as_ref(),
     );
     r.set_frame_filter(frame_filter_from(&scene.manifest.lighting));
+    r.set_bloom(
+        scene
+            .manifest
+            .hdr
+            .filter(|_| std::env::var_os("OPENBF_NO_BLOOM").is_none())
+            .map(|h| render::Bloom {
+                passes: h.num_bloom_passes,
+                weight: h.max_total_weight,
+                threshold: h.glow_threshold,
+            }),
+    );
 }
 
 /// The map's DomeInfo frame filter as the renderer takes it (card BFLT,

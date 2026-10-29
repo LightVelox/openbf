@@ -1,0 +1,49 @@
+// Half-scale display light, thresholded before the quarter-size downsample.
+@group(0) @binding(0) var source: texture_2d<f32>;
+@group(0) @binding(1) var linear_sampler: sampler;
+@group(0) @binding(2) var<uniform> params: vec4<f32>;
+@group(0) @binding(3) var frame: texture_2d<f32>;
+
+@vertex
+fn vs_bloom(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(p * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
+}
+
+@fragment
+fn fs_extract(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    let base = vec2<i32>(p.xy * 4.0) - vec2<i32>(2);
+    var sum = vec3<f32>(0.0);
+    for (var y = 0; y < 4; y++) {
+        for (var x = 0; x < 4; x++) {
+            let c = textureLoad(source, clamp(base + vec2<i32>(x,y), vec2<i32>(0), size - vec2<i32>(1)), 0).rgb;
+            if dot(c, vec3<f32>(0.299, 0.587, 0.114)) >= params.x {
+                sum += min(c, vec3<f32>(1.0));
+            }
+        }
+    }
+    return vec4<f32>(sum / 16.0, 1.0);
+}
+
+@fragment
+fn fs_blur(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(textureDimensions(source));
+    let uv = p.xy / size;
+    let step = vec2<f32>(params.z) / size;
+    var sum = textureSampleLevel(source, linear_sampler, uv, 0.0).rgb;
+    sum += textureSampleLevel(source, linear_sampler, uv + step, 0.0).rgb;
+    sum += textureSampleLevel(source, linear_sampler, uv - step, 0.0).rgb;
+    sum += textureSampleLevel(source, linear_sampler, uv + step * vec2<f32>(1.0,-1.0), 0.0).rgb;
+    sum += textureSampleLevel(source, linear_sampler, uv + step * vec2<f32>(-1.0,1.0), 0.0).rgb;
+    return vec4<f32>(min(sum * params.y, vec3<f32>(1.0)), 1.0);
+}
+
+@fragment
+fn fs_composite(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let uv = p.xy / vec2<f32>(textureDimensions(frame));
+    let glow = textureSampleLevel(source, linear_sampler, uv, 0.0).rgb;
+    let c = min(textureLoad(frame, vec2<i32>(p.xy), 0).rgb + glow, vec3<f32>(1.0));
+    let linear = select(c / 12.92, pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), c > vec3<f32>(0.04045));
+    return vec4<f32>(linear, 1.0);
+}

@@ -29,3 +29,9 @@ fn fs_bolt_glow(in: GrassOut) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(c.rgb * c.a, c.a);
 }
+
+@fragment
+fn fs_bloom_particle(in: GrassOut) -> @location(0) vec4<f32> {
+    let c = bolt_texel(in);
+    return vec4<f32>(linear_to_srgb(c.rgb) * c.a * 0.5, 1.0);
+}

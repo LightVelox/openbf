@@ -548,6 +548,7 @@ impl Renderer {
         }
 
         // The DomeInfo frame filter (`filter.rs`): its parameters and copy.
+        let bloom = self.prepare_bloom(width, height);
         let filter = self.filter_wanted();
         if filter {
             self.prepare_filter(width, height);
@@ -921,6 +922,69 @@ impl Renderer {
                 }
             }
             mark(&mut timer, &mut pass, "bolts+particles");
+        }
+        if bloom {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bloom gather"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: self.bloom_gather_view(),
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_bind_group(0, &self.globals_bg, &[]);
+            pass.set_vertex_buffer(1, self.instance_buf.slice(..));
+            for (slot, &i) in order.iter().enumerate() {
+                let d = &draws[i];
+                if !matches!(d.light, LightPath::Glow | LightPath::Unscaled)
+                    || !matches!(
+                        d.layer,
+                        DrawLayer::Opaque | DrawLayer::Mask | DrawLayer::Blend
+                    )
+                {
+                    continue;
+                }
+                pass.set_pipeline(match d.layer {
+                    DrawLayer::Mask => &self.bloom.gather.mask,
+                    DrawLayer::Blend => &self.bloom.gather.blend,
+                    _ => &self.bloom.gather.world,
+                });
+                pass.set_bind_group(1, self.tex_bg(d.texture), &[]);
+                let inst = (sky_base + slot) as u32;
+                draw_mesh(&mut pass, &self.meshes[d.mesh.0 as usize], inst..inst + 1);
+                draw_calls += 1;
+            }
+            if let (Some((vbuf, _)), Some((ibuf, _))) =
+                (&self.bolts.vertex_buf, &self.bolts.instance_buf)
+            {
+                pass.set_pipeline(&self.bloom.gather.particle);
+                pass.set_vertex_buffer(0, vbuf.slice(..));
+                pass.set_vertex_buffer(1, ibuf.slice(..));
+                for run in bolts.runs.iter().filter(|r| r.glow) {
+                    pass.set_bind_group(1, self.tex_bg(run.texture), &[]);
+                    pass.draw(run.vertices.clone(), 0..1);
+                    draw_calls += 1;
+                }
+            }
+            drop(pass);
+            draw_calls += self.bloom_pass(&mut encoder, frame_texture, &view);
+            if let Some(t) = &mut timer {
+                t.mark(&mut encoder, "bloom");
+            }
         }
         // The frame filter lifts the finished 3D frame, before the overlay
         // (the PS2 draws its HUD after it, `analysis/re-glow.md` §3.3).

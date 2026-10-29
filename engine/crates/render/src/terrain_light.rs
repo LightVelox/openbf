@@ -12,7 +12,7 @@
 //! dy²/r²), dy = the light's height over the heightfield), vertex alpha 0x20;
 //! GS MODULATE, ALPHA 0x148 (Cs·As + Cd), depth tested, no depth write, no
 //! fog. On screen that adds T·c·f/4 per channel (BF2's HDR halving is undone
-//! by its composite; the port has no HDR, so it adds the screen value).
+//! by its composite; the port keeps the scene full-scale, so it adds the screen value).
 //!
 //! The caller does the gather ([`TerrainLights`]: each light's colour
 //! already × f, and per PS2 patch the ≤ 3 lights it takes); the shader
