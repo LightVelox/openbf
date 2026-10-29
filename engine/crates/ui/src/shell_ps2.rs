@@ -310,6 +310,18 @@ impl ShellMenus {
         }
     }
 
+    /// Move focus to an enabled row; disabled and missing rows are ignored.
+    pub fn focus_row(&mut self, row: usize) -> bool {
+        let Some(stack) = self.stack_mut() else {
+            return false;
+        };
+        if !stack.rows.get(row).is_some_and(|r| r.enabled) {
+            return false;
+        }
+        stack.focus = row;
+        true
+    }
+
     fn go(&mut self, page: Page) {
         self.page = page;
         self.on_page = 0.0;
@@ -444,6 +456,57 @@ pub fn stack_layout(font: &HudFont, stack: &Stack) -> StackLayout {
         title: bar(0),
         rows: (1..bars).map(bar).collect(),
     }
+}
+
+/// Find an enabled, revealed shell row beneath a window-space pointer.
+pub fn row_at(
+    font: &HudFont,
+    menus: &ShellMenus,
+    point: [f32; 2],
+    size: [f32; 2],
+) -> Option<usize> {
+    if size[0] <= 0.0 || size[1] <= 0.0 {
+        return None;
+    }
+    let stack = menus.stack()?;
+    let box_w = 4.0 / 3.0 * size[1];
+    let origin_x = if stack.left {
+        0.0
+    } else {
+        (size[0] - box_w) * 0.5
+    };
+    let x = (point[0] - origin_x) / (box_w / 512.0);
+    let y = point[1] / (size[1] / 448.0);
+    stack
+        .rows
+        .iter()
+        .zip(stack_layout(font, stack).rows)
+        .enumerate()
+        .find_map(|(i, (row, [x0, y0, x1, y1]))| {
+            (row.enabled
+                && menus.on_page >= ROW_REVEAL * (i + 1) as f32
+                && x >= x0
+                && x <= x1
+                && y >= y0
+                && y <= y1)
+                .then_some(i)
+        })
+}
+
+/// Hit-test the title page's visible Start prompt.
+pub fn prompt_at(font: &HudFont, menus: &ShellMenus, point: [f32; 2], size: [f32; 2]) -> bool {
+    if size[0] <= 0.0 || size[1] <= 0.0 || menus.page != Page::Title {
+        return false;
+    }
+    let box_w = 4.0 / 3.0 * size[1];
+    let x = (point[0] - (size[0] - box_w) * 0.5) / (box_w / 512.0);
+    let y = point[1] / (size[1] / 448.0);
+    let width = run_width(font, &menus.prompt, LABEL_STRETCH, false);
+    let x0 = 256.0 - width * 0.5;
+    x >= x0 - 6.0
+        && x <= x0 + width + 6.0
+        && y >= PROMPT_TOP - 4.0
+        && y <= PROMPT_TOP + f32::from(font.line_height) + 4.0
 }
 
 impl Ctx<'_> {
@@ -617,6 +680,45 @@ mod tests {
         m.main.focus = 1;
         assert_eq!(m.step(press(|i| i.confirm = true), false, 0.1), None);
         assert_eq!(m.page, Page::Main);
+    }
+
+    #[test]
+    fn mouse_hit_uses_the_visible_row_layout_and_skips_disabled_rows() {
+        use manifest::hud::{HudFont, HudGlyph};
+        let font = HudFont {
+            name: BUTTON_FONT.into(),
+            line_height: 22,
+            pages: vec!["page0".into()],
+            glyphs: (32u8..127)
+                .map(|code| HudGlyph {
+                    code: u16::from(code),
+                    page: 0,
+                    advance: 10,
+                    x0: 0,
+                    x1: 10,
+                    y0: 2,
+                    y1: 14,
+                    uv: [0.0, 0.1, 0.0, 0.1],
+                })
+                .collect(),
+        };
+        let mut m = menus();
+        m.page = Page::Main;
+        m.on_page = 2.0;
+        let stack = m.stack().unwrap();
+        let layout = stack_layout(&font, stack);
+        let [x0, y0, x1, y1] = layout.rows[3];
+        let p = [
+            ((x0 + x1) * 0.5) * 1.25,
+            ((y0 + y1) * 0.5) * (480.0 / 448.0),
+        ];
+        assert_eq!(row_at(&font, &m, p, [640.0, 480.0]), Some(3));
+        let [x0, y0, x1, y1] = layout.rows[1];
+        let p = [
+            ((x0 + x1) * 0.5) * 1.25,
+            ((y0 + y1) * 0.5) * (480.0 / 448.0),
+        ];
+        assert_eq!(row_at(&font, &m, p, [640.0, 480.0]), None);
     }
 
     /// `m` as the HUD pass lays it out in a 640 x 480 window, with a font

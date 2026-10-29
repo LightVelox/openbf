@@ -14,11 +14,36 @@ impl App {
 
     pub(super) fn mouse_window_event(&mut self, event: &WindowEvent) {
         let battle = self.in_battle();
-        self.kbm.window_event(event, battle);
+        let can_grab = battle
+            && !self.paused
+            && self
+                .walk
+                .as_ref()
+                .and_then(|(walk, _)| walk.sim.unit(walk.player))
+                .is_some_and(|u| u.alive);
+        self.kbm.window_event(event, battle, can_grab);
         match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_position = Some([position.x, position.y]);
+            }
+            WindowEvent::MouseInput {
+                button: winit::event::MouseButton::Left,
+                state: winit::event::ElementState::Pressed,
+                ..
+            } if matches!(self.screen, Screen::Shell) => self.mouse_shell_click = true,
             WindowEvent::Focused(false) => {
                 self.kbm.release_keys();
                 self.release_mouse();
+                self.mouse_position = None;
+                self.mouse_shell_click = false;
+                if let Some(w) = &self.window {
+                    w.set_cursor_visible(true);
+                }
+            }
+            WindowEvent::Focused(true) => {
+                if let Some(w) = &self.window {
+                    w.set_cursor_visible(!matches!(self.screen, Screen::Shell));
+                }
             }
             WindowEvent::CloseRequested => self.release_mouse(),
             _ => {}
