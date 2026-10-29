@@ -67,11 +67,10 @@ pub struct TextureDesc<'a> {
     pub srgb: bool,
     /// Optional PS2 detail map modulated over this texture.
     pub detail: Option<DetailDesc<'a>>,
-    /// UV units per second this texture scrolls, applied in the shader
-    /// against the renderer's wrapped clock (`Renderer::time`). Zero for every
-    /// texture except a map's water surface, where the map's `fx__
-    /// Effect("Water")` authors it as `Velocity / INFO5` (the magnitude [V],
-    /// the sign PROVISIONAL — `mungefs::fx::WaterConfig::scroll_per_second`).
+    /// UV units per second; zero for static materials. BF2 models use baked
+    /// byte/255 rates and the 255 s material clock. Water uses the wrapped
+    /// water clock and its `fx__ Effect("Water")` velocity / INFO5 (magnitude
+    /// [V], sign PROVISIONAL; `mungefs::fx::WaterConfig::scroll_per_second`).
     pub scroll: [f32; 2],
     /// Multiplies the mesh UV before the scroll — read ONLY by the water's
     /// speckle layer (`fs_speckle`, [`crate::DrawLayer::Speckle`]) and the

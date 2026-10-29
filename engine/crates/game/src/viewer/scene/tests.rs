@@ -334,3 +334,108 @@ fn foam_uv_scale_is_base_over_foam_repeat() {
     assert_eq!(super::foam_uv_scale(Some(&old)), [1.0, 1.0]);
     assert_eq!(super::foam_uv_scale(None), [1.0, 1.0]);
 }
+
+#[test]
+fn material_scroll_bindings_do_not_change_the_static_texture() {
+    let key = "lava".to_owned();
+    assert_eq!(scrolling_key(key.clone(), [0.0; 2]), key);
+    assert_eq!(scrolling_key(key.clone(), [-0.0, 0.0]), key);
+    let a = scrolling_key(key.clone(), [-1.0, 0.0]);
+    assert_ne!(a, key);
+    assert_eq!(a, scrolling_key(key.clone(), [-1.0, 0.0]));
+    assert_ne!(a, scrolling_key(key.clone(), [0.0, -1.0]));
+    assert_ne!(a, scrolling_key(key.clone(), [-0.5, 0.0]));
+    assert_ne!(
+        a,
+        scrolling_key(format!("{CLAMP_V_KEY_PREFIX}{key}"), [-1.0, 0.0])
+    );
+}
+
+/// Real Mustafar material through the world uploader; no shared bake writes.
+#[test]
+#[ignore = "requires GPU, real Mustafar bake and OPENBF_SCROLL_MODELS overlay"]
+fn mustafar_world_material_moves_and_static_control_does_not() {
+    let root = crate::assets::baked_root();
+    let mut scene = crate::assets::load_scene(&root.join("bf2_mus1")).unwrap();
+    let overlay = std::env::var_os("OPENBF_SCROLL_MODELS").expect("selected-model bake directory");
+    let name = "mus1_bldg_world_2";
+    let mesh =
+        crate::assets::load_glb(&std::path::PathBuf::from(overlay).join(format!("{name}.glb")))
+            .unwrap();
+    let k = (0..mesh.submeshes.len())
+        .find(|&k| mesh.uv_scroll(k) != [0.0; 2])
+        .unwrap();
+    assert_eq!(mesh.uv_scroll(k), [-5.0 / 255.0, 0.0]);
+    let inst = scene
+        .manifest
+        .instances
+        .iter()
+        .find(|i| scene.resolve_model(&i.class) == Some(name))
+        .unwrap()
+        .clone();
+    let matrix = super::super::camera::instance_matrix(inst.rotation, inst.translation);
+    let (start, count, ..) = mesh.submeshes[k];
+    let vertices = &mesh.indices[start as usize..(start + count) as usize];
+    let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+    let mut normal = Vec3::ZERO;
+    for &i in vertices {
+        let p = matrix.transform_point3(Vec3::from(mesh.positions[i as usize]));
+        lo = lo.min(p);
+        hi = hi.max(p);
+        normal += matrix.transform_vector3(Vec3::from(mesh.normals[i as usize]));
+    }
+    let centre = (lo + hi) * 0.5;
+    let normal = normal.try_normalize().unwrap_or(Vec3::Y);
+    let eye = centre + normal * (hi - lo).length().max(10.0);
+    let dir = (centre - eye).normalize();
+    let cam = render::Camera {
+        position: eye,
+        yaw: (-dir.x).atan2(-dir.z),
+        pitch: dir.y.asin(),
+        ..Default::default()
+    };
+    scene.meshes.insert(name.into(), mesh);
+    scene.manifest.instances = vec![inst];
+    scene.manifest.sky = None;
+    scene.terrain = None;
+    scene.water = None;
+    scene.lowres = None;
+    scene.terrain_layers = None;
+    let mut r = Renderer::new_headless(640, 480).unwrap();
+    let gpu = upload_scene(&mut r, &scene).unwrap();
+    let frame = |r: &mut Renderer, gpu: &SceneGpu, t: f64| {
+        r.water_time = t;
+        r.render_frame(&cam, &gpu.draws, &[], gpu.clear, None)
+            .unwrap();
+        r.capture_rgba().unwrap().0
+    };
+    let a = frame(&mut r, &gpu, 0.0);
+    let b = frame(&mut r, &gpu, 2.0);
+    let repeated = frame(&mut r, &gpu, 255.0);
+    assert_eq!(a, repeated, "whole material period must repeat");
+    let changed = a
+        .chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(changed > 100, "only {changed} pixels moved");
+    if let Some(out) = std::env::var_os("OPENBF_SCROLL_PICTURES") {
+        let out = std::path::PathBuf::from(out);
+        for (label, rgba) in [("world-scroll-t0", &a), ("world-scroll-t2", &b)] {
+            std::fs::write(
+                out.join(format!("{label}.png")),
+                render::encode_png_rgb(rgba, 640, 480).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+    scene.meshes.get_mut(name).unwrap().scroll.fill([0.0; 2]);
+    let mut r = Renderer::new_headless(640, 480).unwrap();
+    let gpu = upload_scene(&mut r, &scene).unwrap();
+    assert_eq!(
+        frame(&mut r, &gpu, 0.0),
+        frame(&mut r, &gpu, 2.0),
+        "static material moved"
+    );
+    eprintln!("Mustafar lava: {changed} pixels changed; static control unchanged");
+}

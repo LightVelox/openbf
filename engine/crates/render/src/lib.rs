@@ -163,7 +163,8 @@ struct Globals {
     /// [`affine::guard`]'s y.
     guard_y: f32,
     ambient_sky: [f32; 3],
-    _pad3: f32,
+    /// BF2 material animation seconds, wrapped at 255.
+    material_time: f32,
     ambient_ground: [f32; 3],
     /// 0 = fog off, 1 = fog on (a bool in a uniform is a float).
     fog_on: f32,
@@ -404,6 +405,12 @@ pub fn advance_clocks(time: f32, water_time: f64, dt: f32) -> (f32, f64) {
     ((time + dt) % TIME_WRAP, water_time + f64::from(dt))
 }
 
+/// BF2 rates are integer bytes / 255: this period wraps by whole repeats.
+/// Use the unwrapped clock so the water's 2000 s reset cannot jump a material.
+pub fn material_scroll_time(seconds: f64) -> f32 {
+    seconds.rem_euclid(255.0) as f32
+}
+
 impl Renderer {
     /// Drop the map's look: everything drawn without a draw command (the
     /// sky, stars, grass, leaves, lights, effects, filter) and its lighting.
@@ -426,6 +433,22 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_clock_is_continuous_at_the_water_clock_wrap() {
+        for byte in [1, 50, 200, 255] {
+            let rate = -f64::from(byte) / 255.0;
+            for t in [254.99, 255.01, 1999.99, 2000.01, 36000.0] {
+                let expected = (rate * t).rem_euclid(1.0);
+                let got = (rate * f64::from(material_scroll_time(t))).rem_euclid(1.0);
+                let error = (expected - got).abs();
+                assert!(
+                    error.min(1.0 - error) < 0.00002,
+                    "{byte} at {t}: {got} vs {expected}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn globals_matches_the_wgsl_uniform_size() {

@@ -195,7 +195,7 @@ impl Renderer {
             sun_color: self.lighting.sun_color,
             guard_y: guard[1],
             ambient_sky: self.lighting.ambient_sky,
-            _pad3: 0.0,
+            material_time: crate::material_scroll_time(self.water_time),
             ambient_ground: self.lighting.ambient_ground,
             fog_on: if self.lighting.fog.is_some() {
                 1.0

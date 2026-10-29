@@ -37,7 +37,7 @@ struct Globals {
     sun_color: vec3<f32>, guard_y: f32,
     // Hemisphere ambient: sky lights up-facing surfaces, ground down-facing.
     // A map that authors one ambient colour sets both the same.
-    ambient_sky: vec3<f32>, _pad3: f32,
+    ambient_sky: vec3<f32>, material_time: f32,
     ambient_ground: vec3<f32>, fog_on: f32,
     fog_color: vec3<f32>, fog_near: f32,
     // `time` is seconds, WRAPPED by the caller (see Renderer::time) so the
@@ -374,7 +374,7 @@ const MASK_CUTOFF: f32 = 0.753;
 // same AREF 0x60 — disc alpha >= 98 under the full vertex alpha
 // (`analysis/re-glow.md` §1.3 [D]).
 fn mask_test(in: VsOut) {
-    let uv = in.uv + material.scroll.xy * globals.time;
+    let uv = in.uv + material.scroll.xy * globals.material_time;
     let texel = textureSample(t_color, s_color, uv);
     if in.light == LIGHT_GLOW {
         if glow_as(texel.a, in.color.a) < 96.0 {
@@ -455,7 +455,7 @@ const LIGHT_IFACE: u32 = 9u;
 const IFACE_AMBIENT: f32 = 0.5;
 
 fn shade_unfogged(in: VsOut) -> vec4<f32> {
-    let uv = in.uv + material.scroll.xy * globals.time;
+    let uv = in.uv + material.scroll.xy * globals.material_time;
     let texel = textureSample(t_color, s_color, uv);
     let base = texel * in.color;
     let n = normalize(in.world_normal);

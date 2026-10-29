@@ -1050,7 +1050,14 @@ pub fn upload_scene(r: &mut Renderer, scene: &Scene) -> Result<SceneGpu> {
             let cpu = &scene.meshes[model];
             for (k, (mesh, mat, layer, _)) in upload_submeshes(r, cpu)?.into_iter().enumerate() {
                 let tex = match mat {
-                    Some(m) => get_texture(r, scene, &mut textures, m, render::WrapV::Repeat)?,
+                    Some(m) => get_material_texture(
+                        r,
+                        scene,
+                        &mut textures,
+                        m,
+                        render::WrapV::Repeat,
+                        cpu.uv_scroll(k),
+                    )?,
                     None => None,
                 };
                 parts.push((
@@ -1559,6 +1566,17 @@ fn get_texture(
     name: &str,
     wrap_v: render::WrapV,
 ) -> Result<Option<BoundTexture>> {
+    get_material_texture(r, scene, cache, name, wrap_v, [0.0; 2])
+}
+
+fn get_material_texture(
+    r: &mut Renderer,
+    scene: &Scene,
+    cache: &mut HashMap<String, BoundTexture>,
+    name: &str,
+    wrap_v: render::WrapV,
+    scroll: [f32; 2],
+) -> Result<Option<BoundTexture>> {
     // `Scene::textures` is keyed lowercase: a `modl` segment spells its
     // texture with whatever case the artist typed, and the `tex_` chunk that
     // holds it spells it another way.
@@ -1572,6 +1590,8 @@ fn get_texture(
         render::WrapV::Repeat => name.clone(),
         render::WrapV::ClampToEdge => format!("{CLAMP_V_KEY_PREFIX}{name}"),
     };
+    // Material rates belong to the binding, not the shared image.
+    let key = scrolling_key(key, scroll);
     if let Some(&h) = cache.get(&key) {
         return Ok(Some(h));
     }
@@ -1582,10 +1602,22 @@ fn get_texture(
         return Ok(None);
     }
     let bt = BoundTexture {
-        handle: upload_cpu_texture_inner(r, t, name, [0.0, 0.0], [1.0, 1.0], wrap_v)?,
+        handle: upload_cpu_texture_inner(r, t, name, scroll, [1.0, 1.0], wrap_v)?,
     };
     cache.insert(key, bt);
     Ok(Some(bt))
+}
+
+fn scrolling_key(key: String, scroll: [f32; 2]) -> String {
+    if scroll == [0.0; 2] {
+        key
+    } else {
+        format!(
+            "\u{2}scroll:{:08x}:{:08x}:{key}",
+            scroll[0].to_bits(),
+            scroll[1].to_bits()
+        )
+    }
 }
 
 /// Does `OPENBF_TEST_DROP_TEXTURE` name this (lowercased) texture? TEST-ONLY:
