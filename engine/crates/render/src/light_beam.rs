@@ -56,6 +56,42 @@ pub struct Beam {
     pub visible: f32,
     /// The displayed value of a colour byte of 128 (module doc).
     pub gs_rgb: f32,
+    pub top: f32,
+    pub cross: Option<Cross>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cross {
+    pub x: Vec3,
+    pub z: Vec3,
+    pub r0z: f32,
+    pub r1z: f32,
+}
+
+impl Beam {
+    fn seen_from(&self, side: Vec3) -> Beam {
+        let Some(c) = self.cross else {
+            return *self;
+        };
+        let mut out = Beam {
+            cross: None,
+            ..*self
+        };
+        if self.r0 == c.r0z && self.r1 == c.r1z {
+            return out;
+        }
+        let (a, z) = (side.dot(c.x).abs(), side.dot(c.z).abs());
+        let fit = |rx: f32, rz: f32| {
+            if rx == rz {
+                rx
+            } else {
+                (rx * rx * a * a + rz * rz * z * z).sqrt()
+            }
+        };
+        out.r0 = fit(self.r0, c.r0z);
+        out.r1 = fit(self.r1, c.r1z);
+        out
+    }
 }
 
 /// The fan's strip as the PS2 indexes it (`FUN_004691f0`): `true` = this
@@ -142,7 +178,7 @@ pub fn fan(b: &Beam, g: f32) -> [(f32, f32, f32); 22] {
         out[9 + i] = (
             x * b.r1,
             b.length,
-            TOP_ALPHA * (1.0 - x * x).max(0.0).sqrt(),
+            b.top * (1.0 - x * x).max(0.0).sqrt(),
         );
     }
     // The cap: `soft` high from the side, the top's own radius along the axis.
@@ -174,15 +210,22 @@ pub fn crosses_near(b: &Beam, side: Vec3, g: f32, camera: &Camera) -> bool {
 /// The beam's triangles for this view, coloured `rgba` (its bytes before the
 /// GS halving; alpha 255 = ×1.0).
 pub fn vertices(b: &Beam, rgba: [u8; 4], camera: &Camera) -> Vec<GrassVertex> {
+    if b.length <= 0.0 {
+        return glow_vertices(b, rgba, camera);
+    }
     let eye = camera.position;
-    let Some((f, g)) = view_factor(b, eye, camera.near) else {
-        return Vec::new();
-    };
     let side = (b.base - eye).cross(b.axis);
-    if f <= 0.0 || side.length_squared() < 1e-12 {
+    if side.length_squared() < 1e-12 {
         return Vec::new();
     }
     let side = side.normalize();
+    let b = &b.seen_from(side);
+    let Some((f, g)) = view_factor(b, eye, camera.near) else {
+        return Vec::new();
+    };
+    if f <= 0.0 {
+        return Vec::new();
+    }
     if crosses_near(b, side, g, camera) {
         return Vec::new();
     }
@@ -208,6 +251,66 @@ pub fn vertices(b: &Beam, rgba: [u8; 4], camera: &Camera) -> Vec<GrassVertex> {
     out
 }
 
+pub fn glow_vertices(b: &Beam, rgba: [u8; 4], camera: &Camera) -> Vec<GrassVertex> {
+    let eye = camera.position;
+    let fwd = camera.forward();
+    let inner = b.r1;
+    let outer = inner + b.soft;
+    let v = b.base - eye;
+    let d2 = v.length_squared();
+    let vis2 = b.visible * b.visible;
+    if b.visible > 0.0 && vis2 <= d2 {
+        return Vec::new();
+    }
+    let depth = v.dot(fwd);
+    if depth + outer <= camera.near {
+        return Vec::new();
+    }
+    let gap = depth - camera.near;
+    let mut f = 1.0;
+    if gap < outer {
+        if gap < inner {
+            return Vec::new();
+        }
+        f = (gap - inner) / (outer - inner);
+    }
+    if b.visible > 0.0 && d2 > 0.81 * vis2 {
+        f *= (vis2 - d2) / (vis2 - 0.81 * vis2);
+    }
+    let half = |v: u8| f32::from((u16::from(v) + 1) >> 1);
+    let rgb = [rgba[0], rgba[1], rgba[2]].map(|c| half(c) / 128.0 * b.gs_rgb);
+    let centre_alpha = (f32::from(rgba[3]) * f + 0.5).clamp(0.0, 255.0) as u8;
+    let ring_alpha = (f32::from(centre_alpha) * b.top) as u8;
+    let right = camera.right();
+    let up = right.cross(fwd).normalize_or_zero();
+    let lift = -fwd * inner;
+    let at = |angle: f32, r: f32, z: Vec3, alpha: u8| {
+        let (s, c) = angle.sin_cos();
+        GrassVertex {
+            position: (b.base + z + (right * -s + up * c) * r).to_array(),
+            uv: [0.0, 0.0],
+            color: [rgb[0], rgb[1], rgb[2], half(alpha) / 128.0],
+            up: 0.0,
+        }
+    };
+    let step = std::f32::consts::PI / 8.0;
+    let centre = at(0.0, 0.0, lift, centre_alpha);
+    let ring: Vec<_> = (0..16)
+        .map(|k| at(k as f32 * step, inner, lift, ring_alpha))
+        .collect();
+    let rim: Vec<_> = (0..16)
+        .map(|k| at((k as f32 + 0.5) * step, outer, Vec3::ZERO, 0))
+        .collect();
+    let mut out = Vec::with_capacity(48 * 3);
+    for k in 0..16 {
+        let n = (k + 1) % 16;
+        out.extend([ring[k], ring[n], centre]);
+        out.extend([ring[k], rim[k], ring[n]]);
+        out.extend([rim[k], ring[n], rim[n]]);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +325,8 @@ mod tests {
             soft: 0.7,
             visible: 200.0,
             gs_rgb: 1.0,
+            top: TOP_ALPHA,
+            cross: None,
         }
     }
 
@@ -316,5 +421,121 @@ mod tests {
         assert_eq!((level(1.0), level(1.79)), (0, 29 * 3));
         // Looking away from it the box is behind the eye: none either.
         assert_eq!(pose([0.0, 1.5, 3.0], 180.0, [0.0, 0.0, 0.0]), 0);
+    }
+
+    fn halo() -> Beam {
+        Beam {
+            base: Vec3::new(0.0, 0.0, -10.0),
+            axis: Vec3::Y,
+            length: 1.0,
+            r0: 0.4,
+            r1: 0.65,
+            soft: 0.8,
+            visible: 300.0,
+            gs_rgb: 1.0,
+            top: 0.3,
+            cross: Some(Cross {
+                x: Vec3::X,
+                z: Vec3::Z,
+                r0z: 0.1,
+                r1z: 0.4,
+            }),
+        }
+    }
+
+    #[test]
+    fn an_elliptic_beam_shows_the_width_the_view_crosses() {
+        let width = |eye: Vec3| {
+            let cam = Camera {
+                position: eye,
+                ..Camera::default()
+            };
+            let side = (halo().base - eye).cross(Vec3::Y).normalize();
+            let b = halo().seen_from(side);
+            assert_eq!(b.cross, None);
+            (b.r0, b.r1, vertices(&halo(), [50, 177, 219, 255], &cam).len())
+        };
+        let (r0, r1, n) = width(Vec3::new(0.0, 0.5, 0.0));
+        assert!((r0 - 0.4).abs() < 1e-6 && (r1 - 0.65).abs() < 1e-6 && n == 29 * 3);
+        let (r0, r1, _) = width(Vec3::new(10.0, 0.5, -10.0));
+        assert!((r0 - 0.1).abs() < 1e-6 && (r1 - 0.4).abs() < 1e-6, "{r0} {r1}");
+        let round = Beam {
+            cross: Some(Cross {
+                x: Vec3::X,
+                z: Vec3::Z,
+                r0z: 0.4,
+                r1z: 0.65,
+            }),
+            ..halo()
+        };
+        assert_eq!(round.seen_from(Vec3::Z).r0, 0.4);
+    }
+
+    #[test]
+    fn the_top_row_takes_the_beams_own_fade_factor() {
+        let p = fan(&halo().seen_from(Vec3::X), 0.0);
+        assert_eq!(p[12].2, 0.3);
+        assert_eq!(fan(&post(), 0.0)[12].2, TOP_ALPHA);
+    }
+
+    fn glow() -> Beam {
+        Beam {
+            length: 0.0,
+            r0: 0.5,
+            r1: 0.1,
+            soft: 1.0,
+            visible: 0.0,
+            top: 0.2,
+            cross: None,
+            ..halo()
+        }
+    }
+
+    #[test]
+    fn a_zero_length_beam_is_a_glow_disc_facing_the_eye() {
+        let cam = Camera::default();
+        let v = vertices(&glow(), [255, 90, 90, 255], &cam);
+        assert_eq!(v.len(), 48 * 3);
+        assert!(v
+            .iter()
+            .all(|p| p.color[..3] == [1.0, 45.0 / 128.0, 45.0 / 128.0]));
+        let centre = v[2];
+        assert_eq!(centre.position, [0.0, 0.0, -9.9]);
+        assert_eq!(centre.color[3], 128.0 / 128.0);
+        assert_eq!(v[0].color[3], 26.0 / 128.0);
+        let rim = v[4];
+        assert_eq!(rim.color[3], 0.0);
+        assert!((rim.position[2] + 10.0).abs() < 1e-6);
+        assert!(((rim.position[0].powi(2) + rim.position[1].powi(2)).sqrt() - 1.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_glow_fades_in_past_its_radius_and_vanishes_inside_it() {
+        let at = |z: f32| {
+            let cam = Camera {
+                position: Vec3::new(0.0, 0.0, z),
+                ..Camera::default()
+            };
+            vertices(&glow(), [255, 90, 90, 255], &cam)
+        };
+        let near = Camera::default().near;
+        let d = |gap: f32| -10.0 + gap + near;
+        assert!(at(d(0.05)).is_empty());
+        let half = at(d(0.6));
+        assert_eq!(half[2].color[3], 64.0 / 128.0);
+        assert_eq!(at(d(2.0))[2].color[3], 1.0);
+        let far = Beam {
+            visible: 100.0,
+            ..glow()
+        };
+        let from = |z: f32| {
+            let cam = Camera {
+                position: Vec3::new(0.0, 0.0, z),
+                ..Camera::default()
+            };
+            vertices(&far, [255, 90, 90, 255], &cam)
+        };
+        assert_eq!(from(85.0)[2].color[3], 66.0 / 128.0);
+        assert!(from(95.0).is_empty());
     }
 }

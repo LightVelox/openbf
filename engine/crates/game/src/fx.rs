@@ -218,6 +218,7 @@ impl EffectDef {
 pub struct Library {
     pub era: Era,
     effects: HashMap<u32, Arc<EffectDef>>,
+    beams: HashMap<u32, manifest::FxBeam>,
     /// The layers' `textures/` dirs, map first.
     texture_dirs: Vec<PathBuf>,
     model_dirs: Vec<PathBuf>,
@@ -244,7 +245,11 @@ impl Library {
     /// `sets` highest layer first: an effect in two layers is the first's.
     pub fn from_sets(era: Era, sets: Vec<FxSet>, rng: &mut Lcg) -> Library {
         let mut effects = HashMap::new();
+        let mut beams = HashMap::new();
         for set in sets {
+            for b in set.beams {
+                beams.entry(b.hash).or_insert(b);
+            }
             let effect_era = match set.game.as_str() {
                 "bf1" => Era::Bf1,
                 "bf2" => Era::Bf2,
@@ -269,6 +274,7 @@ impl Library {
         Library {
             era,
             effects,
+            beams,
             texture_dirs: Vec::new(),
             model_dirs: Vec::new(),
         }
@@ -328,6 +334,10 @@ impl Library {
 
     pub fn get(&self, name: &str) -> Option<&Arc<EffectDef>> {
         self.effects.get(&crate::classdb::fnv1a_lowercase(name))
+    }
+
+    pub fn beam(&self, name: &str) -> Option<&manifest::FxBeam> {
+        self.beams.get(&crate::classdb::fnv1a_lowercase(name))
     }
 
     pub fn len(&self) -> usize {
@@ -644,6 +654,7 @@ pub struct Fx {
     water: ripple::Water,
     chunks: chunks::Chunks,
     attached: Vec<props::Attached>,
+    beams: Vec<props::Glow>,
 }
 
 impl std::fmt::Debug for Fx {
@@ -692,17 +703,17 @@ impl Fx {
             );
             names.sort();
             names.dedup();
-            fx.chunks = chunks::Chunks::load(&db, &names, &lib.model_dirs);
+            fx.chunks = chunks::Chunks::load(&db, &names, &lib.model_dirs, lib.era);
         }
         fx
     }
 
     /// Replace the static prop attachments when a scene or mode is loaded.
     pub fn set_scene_effects(&mut self, scene: &crate::assets::Scene) {
-        self.attached = self
+        (self.attached, self.beams) = self
             .library
             .as_ref()
-            .map_or_else(Vec::new, |lib| props::load(scene, lib));
+            .map_or_else(Default::default, |lib| props::load(scene, lib));
     }
 
     pub fn library(&self) -> Option<&Library> {
@@ -920,7 +931,13 @@ impl Fx {
             for e in &self.live {
                 e.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
             }
-            self.chunks.draws(lib.era, &mut assets, &mut out);
+            self.chunks.draws(
+                lib.era,
+                camera.position,
+                camera.forward(),
+                &mut assets,
+                &mut out,
+            );
             for attached in &self.attached {
                 if let Some(effect) = &attached.live {
                     effect.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
@@ -929,13 +946,14 @@ impl Fx {
             let sheet = assets.texture(ripple::TEXTURE);
             self.water.draws(camera.position, lift, sheet, &mut out);
         }
+        out.extend(self.beams.iter().map(props::Glow::draw));
         r.set_particles(out);
     }
 
     /// Read this tick's sim events into effects.
     pub fn ingest(&mut self, walk: &WalkSim) {
         self.ingest_sim(&walk.sim);
-        self.chunks.tick(walk);
+        self.chunks.tick(walk, self.library.as_ref());
         self.follow_jets(&walk.sim, |u| {
             walk.teams[usize::from(u.team).min(1)]
                 .class(u.spec.class)
@@ -1208,6 +1226,7 @@ impl Fx {
         }
         self.live.retain(|e| !e.is_dead());
         self.water.update(dt);
+        self.chunks.update(dt);
         for effect in &mut self.attached {
             effect.step(dt);
         }
@@ -1233,6 +1252,7 @@ impl Fx {
         self.water.clear();
         self.chunks.clear();
         self.attached.clear();
+        self.beams.clear();
     }
 
     /// Camera-facing quads for the live effects. `quad` is the unit quad from

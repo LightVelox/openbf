@@ -621,6 +621,7 @@ pub(super) fn bake_content(
                         .collect(),
                     name: g.name,
                     far: None,
+                    hardpoints: Vec::new(),
                 });
             }
             b"prp_" if foliage_file.is_none() => {

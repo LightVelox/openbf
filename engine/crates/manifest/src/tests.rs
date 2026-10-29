@@ -163,6 +163,11 @@ fn full_geometry() -> ManifestGeometry {
             ("LOWD".into(), "com_bldg_controlzone_lowd".into()),
         ],
         far: Some("com_bldg_controlzone_lowd_far".into()),
+        hardpoints: vec![ManifestHardpoint {
+            name: "hp_smoke1".into(),
+            pos: [0.5, 1.0, -2.0],
+            axes: None,
+        }],
     }
 }
 
@@ -989,10 +994,11 @@ fn class_and_prim_field_order_is_the_wire_format() {
     // so the 31 maps without one bake byte-identical to before it.
     assert_eq!(
         top_level_keys(&to_ron(&full_geometry())),
-        ["name", "model", "lods", "far"]
+        ["name", "model", "lods", "far", "hardpoints"]
     );
     let bare = ManifestGeometry {
         far: None,
+        hardpoints: Vec::new(),
         ..full_geometry()
     };
     assert_eq!(top_level_keys(&to_ron(&bare)), ["name", "model", "lods"]);
@@ -1309,6 +1315,20 @@ fn an_effect_set_round_trips_through_ron() {
             hash: 0xc42b_8278,
             name: Some("ord_explosion".into()),
             emitters: vec![root],
+        }],
+        beams: vec![FxBeam {
+            hash: 0x3388_1368,
+            name: "Blue_halo".into(),
+            color: [50, 177, 219, 255],
+            flare_intensity: 0.0,
+            length: 1.0,
+            initial_radius: [0.4, 0.1],
+            final_radius: [0.65, 0.4],
+            fade_length: 0.8,
+            fade_factor: 0.3,
+            draw_distance: 300.0,
+            position: [0.0; 3],
+            direction: [0.0, 1.0, 0.0],
         }],
     };
     let text = ron::ser::to_string_pretty(&set, ron::ser::PrettyConfig::default()).unwrap();

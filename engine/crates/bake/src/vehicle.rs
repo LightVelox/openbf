@@ -300,6 +300,7 @@ pub fn bake_vehicles(
                 model: best,
                 lods,
                 far: None,
+                hardpoints: Vec::new(),
             });
         }
         // The class's model is its geometry's top LOD (as the chunk loop
@@ -352,6 +353,16 @@ pub fn bake_vehicles(
 
     // Card VTUR: each class's skel nodes (the seats' fire points).
     crate::hardpoints::attach(&chunks, vehicles.iter_mut().map(|v| &mut v.class));
+    let skels = crate::hardpoints::Skeletons::of(&chunks);
+    for g in geometries.iter_mut().filter(|g| {
+        vehicles
+            .iter()
+            .any(|v| v.chunks.iter().any(|c| c.eq_ignore_ascii_case(&g.name)))
+    }) {
+        if let Some(s) = skels.find(&g.name) {
+            g.hardpoints = crate::hardpoints::of(s);
+        }
+    }
 
     // Models: every LOD of every geometry, once each.
     let mut textures_decoded: Vec<mungefs::texture::Texture> = Vec::new();

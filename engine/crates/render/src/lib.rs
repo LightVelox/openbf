@@ -103,7 +103,7 @@ pub use filter::{box_side, FrameFilter};
 pub use frame::{FrameStats, OverlayFn};
 pub use grass::{sprite_quad, sway, GrassClass, GrassPatch, GrassSprite, ViewAxes};
 pub use leaf::{LeafClass, LeafObject, LeafSprite};
-pub use light_beam::Beam;
+pub use light_beam::{Beam, Cross, TOP_ALPHA as BEAM_TOP_ALPHA};
 pub use lighting::{
     encode as srgb_encode, light_sum, DirLight, FarFade, Fog, Lighting, WaterShading,
 };

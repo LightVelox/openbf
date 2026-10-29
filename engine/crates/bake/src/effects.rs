@@ -21,9 +21,11 @@
 
 use anyhow::{anyhow, Result};
 use manifest::{
-    FxBlend, FxColorNode, FxColorOp, FxEffect, FxEmitter, FxGeometry, FxPositionNode, FxPositionOp,
-    FxRange, FxScalarNode, FxScalarOp, FxSet, FxShape, FxSpawner, FxTransformer, FxType,
+    FxBeam, FxBlend, FxColorNode, FxColorOp, FxEffect, FxEmitter, FxGeometry, FxPositionNode,
+    FxPositionOp, FxRange, FxScalarNode, FxScalarOp, FxSet, FxShape, FxSpawner, FxTransformer,
+    FxType,
 };
+use mungefs::lightbeam::LightBeamConfig;
 use mungefs::particle::{
     BlendMode, ColorMode, ColorOp, Effect, Emitter, GeometryType, PositionOp, Range, ScalarOp,
     Shape,
@@ -48,6 +50,7 @@ pub fn names() -> HashMap<u32, &'static str> {
 #[derive(Default)]
 pub struct Collected {
     pub effects: Vec<Effect>,
+    pub beams: Vec<LightBeamConfig>,
     /// Copies of an already-seen NAME whose tree differs from the first.
     pub differing_copies: Vec<u32>,
 }
@@ -60,6 +63,18 @@ impl Collected {
         let mut out = Collected::default();
         for c in chunks {
             if &c.tag != b"fx__" {
+                continue;
+            }
+            if let Some(b) = LightBeamConfig::parse(c)
+                .map_err(|err| anyhow!("fx__ 0x{:X}: {err}", c.offset))?
+            {
+                if !out
+                    .beams
+                    .iter()
+                    .any(|x| x.name.eq_ignore_ascii_case(&b.name))
+                {
+                    out.beams.push(b);
+                }
                 continue;
             }
             let Some(e) =
@@ -117,7 +132,7 @@ impl Collected {
         have_textures: &[String],
         have_models: &[String],
     ) -> Result<Option<FxSet>> {
-        if self.effects.is_empty() {
+        if self.effects.is_empty() && self.beams.is_empty() {
             // A rebake into a used directory must not keep a stale file.
             let _ = std::fs::remove_file(outdir.join(EFFECTS_FILE));
             return Ok(None);
@@ -126,6 +141,7 @@ impl Collected {
         let set = FxSet {
             game: game.to_owned(),
             effects: self.effects.iter().map(|e| effect(e, &names)).collect(),
+            beams: self.beams.iter().filter_map(beam).collect(),
         };
         crate::write_ron(&outdir.join(EFFECTS_FILE), &set)?;
         let emitters: usize = self.effects.iter().map(|e| e.all_emitters().len()).sum();
@@ -134,6 +150,12 @@ impl Collected {
             "effects: {} particle effect(s), {emitters} emitter(s), {named} named -> {EFFECTS_FILE}",
             set.effects.len()
         );
+        if !set.beams.is_empty() {
+            eprintln!("effects: {} light beam(s)", set.beams.len());
+        }
+        for b in self.beams.iter().filter(|b| b.color.is_none()) {
+            eprintln!("effects: light beam {} authors no Color, not drawn", b.name);
+        }
         if !self.differing_copies.is_empty() {
             eprintln!(
                 "effects: {} NAME(s) have a later copy that differs from the first (first kept): {:08x?}",
@@ -169,7 +191,7 @@ pub fn bake_side(lvl_path: &str, outdir: &str, game: &str) -> Result<Option<FxSe
     let inner = mungefs::open(&buf).map_err(|e| anyhow!("{e}"))?;
     let chunks = mungefs::content_chunks(inner).map_err(|e| anyhow!("{e}"))?;
     let fx = Collected::from_chunks(chunks.iter())?;
-    if fx.effects.is_empty() {
+    if fx.effects.is_empty() && fx.beams.is_empty() {
         eprintln!("effects: {lvl_path} holds no particle effect");
         // As `Collected::write`: no stale file from an earlier bake.
         let _ = std::fs::remove_file(Path::new(outdir).join(EFFECTS_FILE));
@@ -230,6 +252,23 @@ pub fn bake_side(lvl_path: &str, outdir: &str, game: &str) -> Result<Option<FxSe
         .collect();
     let have_textures = crate::soldier::bake_textures_flagged(inner, &wanted, &flags, out, None)?;
     fx.write(out, game, &have_textures, &have_models)
+}
+
+fn beam(b: &LightBeamConfig) -> Option<FxBeam> {
+    Some(FxBeam {
+        hash: mungefs::fnv1a_lowercase(&b.name),
+        name: b.name.clone(),
+        color: b.color?,
+        flare_intensity: b.flare_intensity,
+        length: b.length,
+        initial_radius: b.initial_radius,
+        final_radius: b.final_radius,
+        fade_length: b.fade_length,
+        fade_factor: b.fade_factor,
+        draw_distance: b.draw_distance,
+        position: [b.position[0], b.position[1], -b.position[2]],
+        direction: [b.direction[0], b.direction[1], -b.direction[2]],
+    })
 }
 
 fn range(r: Range) -> FxRange {
