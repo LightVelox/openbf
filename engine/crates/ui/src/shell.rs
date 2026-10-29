@@ -616,7 +616,7 @@ impl ListCursor {
         c
     }
 
-    fn show(&mut self, n: usize, shown: usize) {
+    pub(crate) fn show(&mut self, n: usize, shown: usize) {
         if self.at < self.top {
             self.top = self.at;
         }
@@ -993,6 +993,18 @@ pub struct IaInput {
     pub r1: bool,
 }
 
+/// A visible target on the Instant Action screen, in menu model coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerTarget {
+    Command(usize),
+    Map(usize),
+    Mode(usize),
+    Era(usize),
+    Playlist(usize),
+    Overview(usize),
+    Option(usize, bool),
+}
+
 /// What a press asks the game to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IaCommand {
@@ -1347,6 +1359,59 @@ pub struct InstantAction {
 }
 
 impl InstantAction {
+    /// Put the mouse focus on a visible, enabled row. Keyboard/controller
+    /// input still uses the same cursors and confirmation path.
+    pub fn focus_pointer(&mut self, target: PointerTarget) -> bool {
+        match target {
+            PointerTarget::Command(k) if COMMANDS.get(k).is_some_and(|c| self.command_live(*c)) => {
+                self.command = k;
+                true
+            }
+            PointerTarget::Map(k) if self.map_rows().get(k).is_some_and(|r| r.enabled) => {
+                self.state = State::Map;
+                self.map_list.at = k;
+                self.map_list.show(self.map_rows().len(), LIST_ROWS);
+                true
+            }
+            PointerTarget::Mode(k) if self.mode_rows().get(k).is_some_and(|r| r.enabled) => {
+                self.state = State::Mode;
+                self.mode_list.at = k;
+                self.mode_list.show(self.mode_rows().len(), LIST_ROWS);
+                true
+            }
+            PointerTarget::Era(k) if self.side_rows().get(k).is_some_and(|r| r.enabled) => {
+                self.state = State::Era;
+                self.era_list.at = k;
+                self.era_list.show(self.side_rows().len(), ERA_ROWS);
+                true
+            }
+            PointerTarget::Playlist(k) if k <= self.playlist.len() => {
+                self.state = State::Playlist;
+                self.play_list.at = k;
+                self.play_list.show(self.playlist.len() + 1, LIST_ROWS);
+                true
+            }
+            PointerTarget::Overview(k)
+                if self.page == Page::Overview(k)
+                    || (self.overview().get(k).is_some_and(|(_, live)| *live)) =>
+            {
+                self.page = Page::Overview(k);
+                true
+            }
+            PointerTarget::Option(k, _) => {
+                if let Page::Group(g, mut cur) = self.page {
+                    if k < self.options.rows(g).len() {
+                        cur.at = k;
+                        cur.show(self.options.rows(g).len(), OPTION_ROWS);
+                        self.page = Page::Group(g, cur);
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
     /// The screen's first Enter (§1.3): an empty playlist, the command
     /// state, focus on the first live button (ADD).
     pub fn new(maps: Vec<MapEntry>, texts: IaTexts, options: SessionOptions) -> InstantAction {

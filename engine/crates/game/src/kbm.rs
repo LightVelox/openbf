@@ -268,7 +268,7 @@ impl Kbm {
         }
     }
 
-    pub fn window_event(&mut self, event: &WindowEvent, battle: bool) {
+    pub fn window_event(&mut self, event: &WindowEvent, battle: bool, allow_grab: bool) {
         if !battle {
             return;
         }
@@ -285,7 +285,7 @@ impl Kbm {
             WindowEvent::MouseInput { state, button, .. } => {
                 if self.grabbed || !state.is_pressed() {
                     self.press(Trigger::Mouse(*button), state.is_pressed());
-                } else {
+                } else if allow_grab {
                     self.click_in();
                 }
             }

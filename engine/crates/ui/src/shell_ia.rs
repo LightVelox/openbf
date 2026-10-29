@@ -24,6 +24,7 @@ use crate::spawn_draw::{
     UNSELECTED_TEXT,
 };
 use glam::Mat4;
+use manifest::hud::HudFont;
 
 /// The backdrop: `iface_instant_action`'s top 448 rows (§1.1, re-bf2-shell
 /// §3.4).
@@ -98,6 +99,137 @@ pub const STACK_X: [f32; 2] = [202.4, 306.4];
 pub const STACK_TOP: f32 = 150.3;
 const STACK_ROW: f32 = 21.0;
 const STACK_PITCH: f32 = 25.0;
+
+/// Hit-test the visible row geometry used by the Instant Action renderer.
+pub fn pointer_target(
+    ia: &InstantAction,
+    point: [f32; 2],
+    size: [f32; 2],
+    font: &HudFont,
+) -> Option<crate::shell::PointerTarget> {
+    if size[0] <= 0.0 || size[1] <= 0.0 {
+        return None;
+    }
+    let box_w = 4.0 / 3.0 * size[1];
+    let x = (point[0] - (size[0] - box_w) * 0.5) / (box_w / 512.0);
+    let y = point[1] / (size[1] / 448.0);
+    match ia.page {
+        Page::Missions => {
+            if x >= STACK_X[0] && x <= STACK_X[1] {
+                for k in 0..COMMANDS.len() {
+                    let y0 = STACK_TOP + STACK_PITCH * k as f32;
+                    if y >= y0 && y <= y0 + STACK_ROW && ia.command_live(COMMANDS[k]) {
+                        return Some(crate::shell::PointerTarget::Command(k));
+                    }
+                }
+            }
+            if ia.state == State::Playlist {
+                let rows = ia.play_rows();
+                let x0 = RIGHT_WINDOW[0] + LIST_IN[0];
+                let x1 = RIGHT_WINDOW[2] - LIST_IN[1];
+                let y0 = RIGHT_WINDOW[1] + LIST_PAD;
+                let row = ((y - y0) / ROW).floor() as isize + ia.play_list.top as isize;
+                if x >= x0 && x <= x1 && y >= y0 && row >= 0 {
+                    let k = row as usize;
+                    if k < rows.len() && k < ia.play_list.top + LIST_ROWS {
+                        return Some(crate::shell::PointerTarget::Playlist(k));
+                    }
+                }
+            } else {
+                let (rows, cur, row_h, pad, target) = match ia.state {
+                    State::Map => (
+                        ia.map_rows(),
+                        ia.map_list,
+                        ROW,
+                        LIST_PAD,
+                        crate::shell::PointerTarget::Map(0),
+                    ),
+                    State::Mode => (
+                        ia.mode_rows(),
+                        ia.mode_list,
+                        ROW,
+                        LIST_PAD,
+                        crate::shell::PointerTarget::Mode(0),
+                    ),
+                    State::Era => (
+                        ia.side_rows(),
+                        ia.era_list,
+                        ERA_ROW,
+                        ERA_PAD,
+                        crate::shell::PointerTarget::Era(0),
+                    ),
+                    _ => return None,
+                };
+                let x0 = LEFT_WINDOW[0] + LIST_IN[0];
+                let x1 = LEFT_WINDOW[2] - LIST_IN[1];
+                let y0 = LEFT_WINDOW[1] + pad;
+                let row = ((y - y0) / row_h).floor() as isize + cur.top as isize;
+                if x >= x0 && x <= x1 && y >= y0 && row >= 0 {
+                    let k = row as usize;
+                    if k < rows.len()
+                        && k < cur.top
+                            + if ia.state == State::Era {
+                                ERA_ROWS
+                            } else {
+                                LIST_ROWS
+                            }
+                        && rows[k].enabled
+                    {
+                        return Some(match target {
+                            crate::shell::PointerTarget::Map(_) => {
+                                crate::shell::PointerTarget::Map(k)
+                            }
+                            crate::shell::PointerTarget::Mode(_) => {
+                                crate::shell::PointerTarget::Mode(k)
+                            }
+                            _ => crate::shell::PointerTarget::Era(k),
+                        });
+                    }
+                }
+            }
+            None
+        }
+        Page::Overview(focus) => {
+            let labels: Vec<_> = ia
+                .overview()
+                .into_iter()
+                .map(|(g, _)| ia.texts.group(g).0)
+                .collect();
+            let widest = std::iter::once(ia.texts.session_options.as_str())
+                .chain(labels.iter().copied())
+                .map(|label| run_width(font, label, LABEL_STRETCH, false))
+                .fold(0.0, f32::max);
+            let w = widest + BAR_PAD;
+            let x0 = CENTRE_X - w * 0.5;
+            let bars = labels.len() + 1;
+            let height = bars as f32 * ROW_PITCH - (ROW_PITCH - ROW_H);
+            let top = CONTAINER_Y - CENTRE_LIFT - height * 0.5;
+            for (k, (_, live)) in ia.overview().iter().enumerate() {
+                let y0 = top + ROW_PITCH * (k + 1) as f32;
+                if *live && x >= x0 && x <= x0 + w && y >= y0 && y <= y0 + ROW_H {
+                    return Some(crate::shell::PointerTarget::Overview(k));
+                }
+            }
+            let _ = focus;
+            None
+        }
+        Page::Group(g, cur) => {
+            let x0 = (OPTIONS_WINDOW[0] + OPTIONS_WINDOW[2]) * 0.5 - OPTION_LIST_W * 0.5;
+            let x1 = (OPTIONS_WINDOW[0] + OPTIONS_WINDOW[2]) * 0.5 + OPTION_LIST_W * 0.5;
+            let y0 = OPTIONS_WINDOW[1] + OPTION_PAD;
+            let row = ((y - y0) / OPTION_ROW).floor() as isize + cur.top as isize;
+            let rows = ia.options.rows(g);
+            if x >= x0 && x <= x1 && y >= y0 && row >= cur.top as isize {
+                let k = row as usize;
+                if k < rows.len() && k < cur.top + OPTION_ROWS {
+                    let centre = (x0 + x1) * 0.5;
+                    return Some(crate::shell::PointerTarget::Option(k, x >= centre));
+                }
+            }
+            None
+        }
+    }
+}
 /// The bar tint: white focused, grey 150 otherwise (`analysis/re-bf2-menus.md`
 /// §5).
 const BAR_GREY: f32 = 150.0;
@@ -677,6 +809,52 @@ impl Ctx<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_hit_selects_the_visible_instant_action_row() {
+        use crate::shell::{Game, IaTexts, MapEntry, Mode, SessionOptions};
+        let map = MapEntry {
+            key: "test".into(),
+            game: Game::Bf2,
+            code: "t",
+            label: "Test map".into(),
+            description: String::new(),
+            modes: [vec![Mode::Con], Vec::new()],
+            baked: true,
+            missions: vec![(Mode::Con, ["rep".into(), "cis".into()])],
+        };
+        let mut ia = InstantAction::new(
+            vec![map],
+            IaTexts::new(&|_, e| e.to_owned()),
+            SessionOptions::default(),
+        );
+        ia.state = State::Map;
+        let x = (LEFT_WINDOW[0] + LIST_IN[0] + LEFT_WINDOW[2] - LIST_IN[1]) * 0.5;
+        let y = LEFT_WINDOW[1] + LIST_PAD + ROW * 0.5;
+        let point = [x * 1.25, y * (480.0 / 448.0)];
+        use manifest::hud::{HudFont, HudGlyph};
+        let font = HudFont {
+            name: BUTTON_FONT.into(),
+            line_height: 15,
+            pages: vec!["page0".into()],
+            glyphs: (32u8..127)
+                .map(|code| HudGlyph {
+                    code: u16::from(code),
+                    page: 0,
+                    advance: 8,
+                    x0: 0,
+                    x1: 8,
+                    y0: 2,
+                    y1: 12,
+                    uv: [0.0, 0.1, 0.0, 0.1],
+                })
+                .collect(),
+        };
+        let hit = pointer_target(&ia, point, [640.0, 480.0], &font);
+        assert_eq!(hit, Some(crate::shell::PointerTarget::Map(0)));
+        assert!(ia.focus_pointer(hit.unwrap()));
+        assert_eq!(ia.map_list.at, 0);
+    }
 
     #[test]
     fn the_windows_sit_where_the_script_puts_them() {

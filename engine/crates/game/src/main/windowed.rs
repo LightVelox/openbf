@@ -402,6 +402,10 @@ struct App {
     /// The bits pressed since the last frame read them: a tap that is let
     /// go inside one frame still counts.
     keys_tapped: u32,
+    /// Latest window-space pointer location for shell hit-testing.
+    mouse_position: Option<[f64; 2]>,
+    /// A left click waiting for the next shell frame.
+    mouse_shell_click: bool,
     kbm: game::kbm::Kbm,
     /// The PS2 shell's front screens (`None` until the shell first draws).
     front: Option<FrontShell>,
@@ -612,6 +616,8 @@ impl App {
             gameplay_stick: GameplayStick::default(),
             keys_held: 0,
             keys_tapped: 0,
+            mouse_position: None,
+            mouse_shell_click: false,
             kbm,
             front: None,
             sprint_latch: input::SprintLatch::default(),
@@ -675,6 +681,9 @@ impl App {
     /// playlist and options in `FrontShell`).
     fn init_shell(&mut self) {
         self.screen = Screen::Shell;
+        if let Some(window) = &self.window {
+            window.set_cursor_visible(false);
+        }
     }
 
     /// LAUNCH: the playlist in order, the first row now (§1.4, §7).
@@ -754,6 +763,9 @@ impl App {
             beep,
         });
         self.screen = Screen::Loading;
+        if let Some(window) = &self.window {
+            window.set_cursor_visible(true);
+        }
         true
     }
 
@@ -762,6 +774,9 @@ impl App {
     fn redraw_loading(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let Some(l) = self.loading.as_mut() else {
             self.screen = Screen::Shell;
+            if let Some(window) = &self.window {
+                window.set_cursor_visible(false);
+            }
             return;
         };
         if l.load_pending {
@@ -968,6 +983,9 @@ impl App {
         self.outcome_reported = false;
         self.round_recorded = false;
         self.screen = Screen::Battle;
+        if let Some(window) = &self.window {
+            window.set_cursor_visible(true);
+        }
         self.start_frame_record();
     }
 
@@ -1171,6 +1189,9 @@ impl winit::application::ApplicationHandler for App {
                 .expect("create window"),
         );
         let mut renderer = Renderer::new_windowed(window.clone()).expect("renderer");
+        if matches!(self.screen, Screen::Shell) {
+            window.set_cursor_visible(false);
+        }
         self.overlay = Some(ui::overlay::EguiOverlay::new(
             &window,
             renderer.device(),

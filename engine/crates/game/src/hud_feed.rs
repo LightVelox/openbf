@@ -121,6 +121,41 @@ fn load_mesh(path: &Path) -> Result<HudMesh> {
 }
 
 impl HudView {
+    /// Hit-test the shell's actually laid-out, visible menu rows.
+    pub fn shell_row_at(
+        &self,
+        menus: &ui::shell_ps2::ShellMenus,
+        point: [f32; 2],
+        size: [f32; 2],
+    ) -> Option<usize> {
+        let font = self.art.fonts.get(ui::spawn_draw::BUTTON_FONT)?;
+        ui::shell_ps2::row_at(font, menus, point, size)
+    }
+
+    /// Hit-test the title screen's rendered Start prompt.
+    pub fn shell_prompt_at(
+        &self,
+        menus: &ui::shell_ps2::ShellMenus,
+        point: [f32; 2],
+        size: [f32; 2],
+    ) -> bool {
+        self.art
+            .fonts
+            .get(ui::spawn_draw::BUTTON_FONT)
+            .is_some_and(|font| ui::shell_ps2::prompt_at(font, menus, point, size))
+    }
+
+    /// Hit-test Instant Action using the same font metrics as its draw pass.
+    pub fn instant_target(
+        &self,
+        ia: &ui::shell::InstantAction,
+        point: [f32; 2],
+        size: [f32; 2],
+    ) -> Option<ui::shell::PointerTarget> {
+        let font = self.art.fonts.get(ui::spawn_draw::BUTTON_FONT)?;
+        ui::shell_ia::pointer_target(ia, point, size, font)
+    }
+
     /// [`HudView::load`] for `r`'s frames.
     pub fn for_renderer(assets_dir: &Path, r: &render::Renderer) -> Result<Self> {
         Self::load(assets_dir, r.surface_format(), r.display_view_format())

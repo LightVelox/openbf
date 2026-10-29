@@ -460,7 +460,7 @@ impl App {
             .unwrap_or_else(|| FrontShell::new(&self.assets_dir));
         // A held arm presses again (menuref: from 0.62 s, every 0.167 s).
         edges |= front.repeat.step(self.prev_menu_buttons & 15, dt);
-        let input = ui::menu::MenuInput {
+        let mut input = ui::menu::MenuInput {
             up: edges & 1 != 0,
             down: edges & 2 != 0,
             left: edges & 4 != 0,
@@ -468,7 +468,7 @@ impl App {
             confirm: edges & 16 != 0,
             back: edges & 32 != 0,
         };
-        let start = edges & 64 != 0;
+        let mut start = edges & 64 != 0;
         if front.view.is_none() {
             if let Some(r) = &self.renderer {
                 front.view = game::hud_feed::HudView::for_renderer(&self.assets_dir, r)
@@ -476,6 +476,21 @@ impl App {
                         eprintln!("shell: no BF2 HUD bake ({e:#}); the menus are not drawn")
                     })
                     .ok();
+            }
+        }
+        let click = std::mem::take(&mut self.mouse_shell_click);
+        if let (Some(point), Some((w, h)), Some(view)) = (
+            self.mouse_position.map(|p| [p[0] as f32, p[1] as f32]),
+            self.renderer.as_ref().map(|r| r.size()),
+            front.view.as_ref(),
+        ) {
+            if !front.ia_open && front.settings.is_none() && front.controls.is_none() {
+                if let Some(row) = view.shell_row_at(&front.menus, point, [w as f32, h as f32]) {
+                    front.menus.focus_row(row);
+                    input.confirm |= click;
+                } else if click {
+                    start |= view.shell_prompt_at(&front.menus, point, [w as f32, h as f32]);
+                }
             }
         }
         let mut launch = None;
@@ -487,11 +502,32 @@ impl App {
             front.menus.tick(dt);
         }
         if let Some(ia) = front.ia.as_mut().filter(|_| front.ia_open) {
-            let ia_input = ui::shell::IaInput {
+            let mut ia_input = ui::shell::IaInput {
                 menu: input,
                 l1: edges & game::kbm::MENU_L1 != 0,
                 r1: edges & game::kbm::MENU_R1 != 0,
             };
+            if let (Some(point), Some((w, h))) = (
+                self.mouse_position.map(|p| [p[0] as f32, p[1] as f32]),
+                self.renderer.as_ref().map(|r| r.size()),
+            ) {
+                if let Some(target) = front
+                    .view
+                    .as_ref()
+                    .and_then(|view| view.instant_target(ia, point, [w as f32, h as f32]))
+                {
+                    if ia.focus_pointer(target) {
+                        ia_input.menu.confirm |=
+                            click && !matches!(target, ui::shell::PointerTarget::Option(..));
+                        if click {
+                            if let ui::shell::PointerTarget::Option(_, right) = target {
+                                ia_input.menu.left |= !right;
+                                ia_input.menu.right |= right;
+                            }
+                        }
+                    }
+                }
+            }
             match ia.step(ia_input, dt) {
                 Some(ui::shell::IaCommand::Back) => front.ia_open = false,
                 Some(ui::shell::IaCommand::Launch(rows)) => launch = Some((rows, ia.options)),
@@ -724,6 +760,7 @@ impl App {
                 if let Some(w) = warning {
                     ui::hud::draw_pad_warning(ctx, w);
                 }
+                ui::cursor::draw(ctx);
             });
             let view = &mut front.view;
             if let Err(e) = r.render_with_overlay(
