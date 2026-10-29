@@ -86,6 +86,7 @@ fn to_ron<T: Serialize>(v: &T) -> String {
 
 fn full_class() -> ManifestClass {
     ManifestClass {
+        effects: Vec::new(),
         name: "com_bldg_controlzone".into(),
         base: "commandpost".into(),
         geometry: Some("com_bldg_controlzone".into()),

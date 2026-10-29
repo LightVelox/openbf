@@ -45,6 +45,7 @@ mod chunks;
 pub mod draw;
 pub mod emitter;
 mod jet;
+mod props;
 mod repair;
 pub mod ripple;
 mod trail;
@@ -641,6 +642,7 @@ pub struct Fx {
     jet_frames: Vec<Option<Mat4>>,
     water: ripple::Water,
     chunks: chunks::Chunks,
+    attached: Vec<props::Attached>,
 }
 
 impl std::fmt::Debug for Fx {
@@ -692,6 +694,14 @@ impl Fx {
             fx.chunks = chunks::Chunks::load(&db, &names, &lib.model_dirs);
         }
         fx
+    }
+
+    /// Replace the static prop attachments when a scene or mode is loaded.
+    pub fn set_scene_effects(&mut self, scene: &crate::assets::Scene) {
+        self.attached = self
+            .library
+            .as_ref()
+            .map_or_else(Vec::new, |lib| props::load(scene, lib));
     }
 
     pub fn library(&self) -> Option<&Library> {
@@ -910,6 +920,11 @@ impl Fx {
                 e.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
             }
             self.chunks.draws(&mut assets, &mut out);
+            for attached in &self.attached {
+                if let Some(effect) = &attached.live {
+                    effect.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
+                }
+            }
             let sheet = assets.texture(ripple::TEXTURE);
             self.water.draws(camera.position, lift, sheet, &mut out);
         }
@@ -1192,11 +1207,17 @@ impl Fx {
         }
         self.live.retain(|e| !e.is_dead());
         self.water.update(dt);
+        for effect in &mut self.attached {
+            effect.step(dt);
+        }
     }
 
     /// Live placeholder puffs plus running particle effects.
     pub fn len(&self) -> usize {
-        self.puffs.len() + self.live.len() + self.chunks.len()
+        self.puffs.len()
+            + self.live.len()
+            + self.chunks.len()
+            + self.attached.iter().filter(|a| a.live.is_some()).count()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1210,6 +1231,7 @@ impl Fx {
         self.rounds = trail::Rounds::default();
         self.water.clear();
         self.chunks.clear();
+        self.attached.clear();
     }
 
     /// Camera-facing quads for the live effects. `quad` is the unit quad from
@@ -1276,44 +1298,72 @@ mod tests {
     mod jet;
     mod resupply;
 
-    #[test]
-    fn geometry_and_child_geometry_draw_meshes_with_the_particle_transform() {
-        let root = crate::assets::baked_root();
-        let lib = Library::load(&root, &root.join("bf2_geo1"), "bf2", &["rep", "cis"]);
-        let mut em = lib
-            .effects
-            .values()
-            .flat_map(|d| &d.emitters)
-            .find(|e| e.geometry.kind == manifest::FxType::Geometry)
-            .expect("real geometry emitter bake")
-            .clone();
+    /// One finite white particle, with no motion, child, sound or asset lookup.
+    pub(super) fn one_shot_emitter() -> FxEmitter {
         let zero = manifest::FxRange(0.0, 0.0);
         let one = manifest::FxRange(1.0, 0.0);
-        em.start_delay = zero;
-        em.burst_delay = zero;
-        em.burst_count = one;
-        em.max_particles = one;
-        em.size = one;
-        em.color = [one; 4];
+        FxEmitter {
+            label: "fixture".into(),
+            start_delay: zero,
+            burst_delay: zero,
+            burst_count: one,
+            max_particles: one,
+            color: [one; 4],
+            hsv: false,
+            size: one,
+            spawner: manifest::FxSpawner {
+                shape: manifest::FxShape::None,
+                shape_ranges: [zero; 9],
+                offset: [zero; 3],
+                position_scale: one,
+                velocity_scale: zero,
+                inherit_velocity_factor: zero,
+                size: one,
+                color: [one; 4],
+                hsv: false,
+                fade_in_time: 0.0,
+                start_rotation: zero,
+                rotation_velocity: zero,
+            },
+            transformer: manifest::FxTransformer {
+                lifetime: 1.0,
+                position: Vec::new(),
+                size: Vec::new(),
+                rotation: Vec::new(),
+                color: Vec::new(),
+            },
+            geometry: manifest::FxGeometry {
+                blend: manifest::FxBlend::Normal,
+                kind: manifest::FxType::Particle,
+                texture: None,
+                model: None,
+                child: None,
+                time_per_frame: 0.1,
+                frame_size: 1.0,
+                total_frames: 1.0,
+                blur_value: 0.0,
+                blur_res: 0,
+                spark_length: 0.0,
+                looping: false,
+            },
+            min_lod_dist: 0.0,
+            max_lod_dist: 100.0,
+            bounding_radius: 5.0,
+            no_register_step: false,
+            world_aligned: false,
+            sibling: None,
+            sound_name: None,
+        }
+    }
+
+    #[test]
+    fn geometry_and_child_geometry_draw_meshes_with_the_particle_transform() {
+        let mut em = one_shot_emitter();
         em.spawner.size = manifest::FxRange(2.0, 0.0);
-        em.spawner.shape = manifest::FxShape::None;
-        em.spawner.offset = [zero; 3];
-        em.spawner.velocity_scale = zero;
-        em.spawner.inherit_velocity_factor = zero;
         em.spawner.start_rotation = manifest::FxRange(std::f32::consts::FRAC_PI_2, 0.0);
-        em.spawner.rotation_velocity = zero;
-        em.spawner.fade_in_time = 0.0;
-        em.spawner.color = [one; 4];
-        em.spawner.hsv = false;
-        em.world_aligned = false;
-        em.transformer.position.clear();
-        em.transformer.size.clear();
-        em.transformer.rotation.clear();
-        em.transformer.color.clear();
         em.transformer.lifetime = 5.0;
+        em.geometry.kind = manifest::FxType::Geometry;
         em.geometry.model = Some("fixture".into());
-        em.geometry.child = None;
-        em.sibling = None;
         struct Assets;
         impl FxAssets for Assets {
             fn texture(&mut self, _: &str) -> Option<TextureHandle> {

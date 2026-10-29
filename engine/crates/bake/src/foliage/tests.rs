@@ -386,6 +386,7 @@ fn path_props_step_along_the_path() {
         props: vec![],
     }];
     let classes = [ManifestClass {
+        effects: Vec::new(),
         name: "end_prop_treebill".into(),
         base: "prop".into(),
         geometry: Some("end_prop_treebill".into()),

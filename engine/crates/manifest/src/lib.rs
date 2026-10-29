@@ -115,6 +115,9 @@ pub struct ManifestClass {
     /// written.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lights: Vec<ManifestClassLight>,
+    /// Particle effects attached at model-space bind frames.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<ManifestAttachedEffect>,
     /// The node rig of an armed building's model (card VTURD,
     /// `analysis/re-turret-draw.md` 2 [O]) and of a health / ammo / vehicle
     /// droid's (base `powerupstation`, card PWST): every `skel` node's bind
@@ -123,6 +126,16 @@ pub struct ManifestClass {
     /// class, and then not written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turret_rig: Option<ManifestTurretRig>,
+}
+
+/// A prop's attached effect and optional repeat-delay bounds in seconds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestAttachedEffect {
+    pub effect: String,
+    pub hardpoint: String,
+    pub pos: [f32; 3],
+    pub axes: [[f32; 3]; 3],
+    pub delay: Option<[f32; 2]>,
 }
 
 /// An armed building's or a powerup droid's model as rigid parts

@@ -245,16 +245,16 @@ fn main() -> Result<()> {
             println!("dropped {} of {n} draws ({drop})", n - draws.len());
         }
         let mut clear = gpu.clear;
-        if let Some(w) = weather.as_mut() {
+        let mut particles = if let Some(w) = weather.as_mut() {
             let wd = w.frame_draws(r, &cam, Vec3::ZERO);
             println!("weather: {} draws", wd.len());
-            r.set_particles(wd);
+            wd
         } else {
-            r.set_particles(Vec::new());
-        }
+            Vec::new()
+        };
         // The posts' holograms (card CPHOL); `PXC_HOLO=0` leaves them out.
         if std::env::var("PXC_HOLO").as_deref() != Ok("0") {
-            r.add_particles(game::holo::still_draws(&gpu.holo, &scene, &cam));
+            particles.extend(game::holo::still_draws(&gpu.holo, &scene, &cam));
         }
         if weather_only {
             draws.clear();
@@ -262,6 +262,25 @@ fn main() -> Result<()> {
             r.set_sky(Vec::new());
             r.set_grass(Vec::new(), Vec::new());
             r.set_frame_filter(None);
+        }
+        if let Some(time) = std::env::var("POSE_EFFECT_TIME")
+            .ok()
+            .and_then(|t| t.parse::<f32>().ok())
+            .filter(|t| t.is_finite() && *t >= 0.0)
+        {
+            let mut fx = game::fx::Fx::load(
+                map.parent().unwrap_or(Path::new(".")),
+                map,
+                &scene.manifest.source_game,
+                &[],
+            );
+            fx.set_scene_effects(&scene);
+            for _ in 0..(time * 30.0).ceil() as u32 {
+                fx.update(1.0 / 30.0);
+            }
+            fx.submit_with(r, &cam, particles);
+        } else {
+            r.set_particles(particles);
         }
         r.render_frame(&cam, &draws, skinned, clear, None)
             .map_err(|e| anyhow!("render: {e}"))?;

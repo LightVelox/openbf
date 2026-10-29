@@ -669,3 +669,5 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `game/tests/suite/guided_rockets.rs` — all 14 inherited guided launchers, award gating, camera/interpolation restoration, smooth mouse/controller turning at 60/75/144 Hz and all-side/map-local equipment census.
 
 - `game/src/fx/chunks.rs` 450 — cosmetic droid and vehicle chunk launch, bounded pool and floor contacts.
+- `bake/src/attached_effects.rs` 149 — ordered AttachEffect replay and baked hardpoint frames/repeat bounds.
+- `game/src/fx/props.rs` 174 — static prop effect frames and optional repeat timers, presentation only.

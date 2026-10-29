@@ -590,7 +590,7 @@ pub(super) fn bake_content(
                     e.name.clone(),
                     e.props
                         .iter()
-                        .filter(|p| crate::leafpatch::is_attach_prop(p.key_hash))
+                        .filter(|p| crate::attached_effects::is_prop(p.key_hash))
                         .map(|p| (p.key_hash, p.value.clone()))
                         .collect(),
                 ));
@@ -1255,6 +1255,11 @@ pub(super) fn bake_content(
             classes.iter().filter(|k| !k.attach.is_empty()).count()
         );
     }
+    crate::attached_effects::attach(
+        &attach_props,
+        &crate::hardpoints::Skeletons::of(&expanded),
+        &mut classes,
+    );
     // Card BPNT: the EntityLights each prop class hangs on its hardpoints.
     // BF2 only: BF1's sole point source is its explosions' flash (§11).
     if !entity_lights.is_empty() && source_game == "bf2" {

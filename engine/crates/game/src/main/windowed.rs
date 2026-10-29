@@ -860,6 +860,7 @@ impl App {
             &walk,
         );
         self.fx.set_water(&scene.manifest);
+        self.fx.set_scene_effects(scene);
         self.fx.preload(renderer);
         self.weather = game::weather::Weather::load(
             &scene.manifest,

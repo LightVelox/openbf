@@ -580,6 +580,7 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
         let mut fx =
             game::fx::Fx::for_walk(&assets_dir, &scene.dir, &scene.manifest.source_game, &walk);
         fx.set_water(&scene.manifest);
+        fx.set_scene_effects(&scene);
         let bolts = game::bolt_vis::BoltVis::new(&assets_dir, &scene.manifest.source_game);
         // The map's precipitation (card WTHR), on the sim's tick here.
         let weather = game::weather::Weather::load(

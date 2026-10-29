@@ -401,6 +401,7 @@ mod tests {
 
     fn class_named(name: &str, base: &str) -> ManifestClass {
         ManifestClass {
+            effects: Vec::new(),
             name: name.into(),
             base: base.into(),
             geometry: None,

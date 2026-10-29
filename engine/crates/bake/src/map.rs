@@ -387,6 +387,7 @@ struct ModeLayer {
 /// `bake_common` go through here.
 pub(crate) fn class_from_entc(e: &mungefs::entity::EntityClass) -> ManifestClass {
     ManifestClass {
+        effects: Vec::new(),
         name: e.name.clone(),
         base: e.base.clone(),
         geometry: e.geometry_name().map(str::to_owned),

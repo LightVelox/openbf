@@ -4,6 +4,7 @@
 pub mod adpcm;
 pub mod alpha;
 pub mod anim_sets;
+pub mod attached_effects;
 pub mod beep;
 pub mod bind_pose;
 pub mod classes;

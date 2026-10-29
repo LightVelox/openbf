@@ -172,6 +172,7 @@ mod tests {
         let inner = mungefs::open(&buf).unwrap();
         let chunks = mungefs::content_chunks(inner).unwrap();
         let mut k = ManifestClass {
+            effects: Vec::new(),
             name: "tat_hover_skiff".into(),
             base: "hover".into(),
             geometry: Some("all_hover_skiff".into()),
