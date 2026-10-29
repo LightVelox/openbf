@@ -125,10 +125,13 @@ pub fn known(sim: &Sim, team: u8) -> Vec<(UnitHandle, Vec3)> {
             continue;
         }
         for c in u.ai.contacts.iter().flatten() {
-            match out.iter_mut().find(|k| k.0 == c.handle) {
+            let Some(h) = c.handle.unit() else {
+                continue;
+            };
+            match out.iter_mut().find(|k| k.0 == h) {
                 Some(k) if c.last_seen > k.2 => (k.1, k.2) = (c.last_pos, c.last_seen),
                 Some(_) => {}
-                None => out.push((c.handle, c.last_pos, c.last_seen)),
+                None => out.push((h, c.last_pos, c.last_seen)),
             }
         }
     }

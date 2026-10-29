@@ -107,7 +107,7 @@ fn a_bot_that_takes_a_target_asks_its_acquired_call() {
         )
     };
     let (calls, target, enemy) = run(GroundRules::Bf1);
-    assert_eq!(target, Some(enemy), "it took the enemy");
+    assert_eq!(target, Some(enemy.into()), "it took the enemy");
     let acquired: Vec<_> = calls.iter().filter(|c| c.2 == Call::Acquired).collect();
     assert_eq!(acquired.len(), 1, "one take, one call: {calls:?}");
     // BF2: the take alone (its AcquiredTarget line, card UVO2); no
@@ -618,14 +618,14 @@ fn immediate_rocket_press(rules: GroundRules, human: bool, wall: bool) {
         assert_eq!(u.weapon.state, FireState::Idle);
         assert_eq!((u.weapon.fire_cmd, u.weapon.salvo_counter), (0, 0));
         u.ai.next_think = 1000;
-        u.ai.target = Some(target);
+        u.ai.target = Some(target.into());
         u.ai.tap_gate = false;
         u.ai.tap_byte = -2;
         u.ai.burst = 10;
         u.ai.err = 0.0;
         u.ai.aim_dir = Vec3::NEG_Z;
         u.ai.contacts[0] = Some(crate::perception::Contact {
-            handle: target,
+            handle: target.into(),
             first_seen: 0,
             last_seen: 100,
             last_pos: target_pos,

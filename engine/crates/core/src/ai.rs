@@ -114,7 +114,7 @@ pub mod walker_drive;
 pub mod why;
 
 pub(crate) use abilities::input as ability_input;
-pub use arsenal::vehicle_bonus;
+pub use arsenal::{droid_suited, vehicle_bonus};
 pub use avoid::ROUND_MAX;
 pub use behave::think;
 pub use command::CmdState;

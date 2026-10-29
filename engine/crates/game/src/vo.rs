@@ -441,9 +441,10 @@ impl Vo {
                 Event::Call { unit, call } => {
                     let Some(i) = idx(unit) else { continue };
                     let (event, object) = match call {
-                        core::sim::Call::Acquired => {
-                            (ACQUIRED_TARGET, sim.units[i].ai.target.and_then(idx))
-                        }
+                        core::sim::Call::Acquired => (
+                            ACQUIRED_TARGET,
+                            sim.units[i].ai.target.and_then(|t| t.unit()).and_then(idx),
+                        ),
                         core::sim::Call::Flee => (GRENADE, None),
                         _ => continue,
                     };

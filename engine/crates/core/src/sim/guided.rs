@@ -134,11 +134,18 @@ impl Sim {
     /// target it sees (lost, cloaked or behind cover).
     fn bot_guided_pad(&self, k: usize) -> Option<PadState> {
         let r = &self.guided[k];
-        let target = self.unit(r.owner).and_then(|u| u.ai.target).and_then(|h| {
-            self.unit(h)
-                .filter(|e| e.cloak.visible())
-                .map(|u| u.aim_point())
-        });
+        let target = self
+            .unit(r.owner)
+            .and_then(|u| u.ai.target)
+            .and_then(|h| match h {
+                crate::perception::Foe::Unit(h) => self
+                    .unit(h)
+                    .filter(|e| e.cloak.visible())
+                    .map(|u| u.aim_point()),
+                crate::perception::Foe::Droid(_) => {
+                    crate::perception::foe_motion(self, h).map(|(p, _)| p)
+                }
+            });
         let target = target.filter(|p| crate::perception::los(self, r.pos, *p))?;
         let local = r.rot.inverse() * (target - r.pos).normalize_or_zero();
         Some(PadState {

@@ -248,6 +248,8 @@ fn unit_line(snap: &Snapshot, p: &Probe) -> String {
     }
     if p.target >= 0 {
         let _ = write!(s, " | enemy #{} at {:.0} m", p.target, p.target_d);
+    } else if let Some(id) = p.target_droid {
+        let _ = write!(s, " | enemy droid {id} at {:.0} m", p.target_d);
     }
     let _ = write!(s, " | locus {}{} level {:.1}", p.locus, p.hub, p.level);
     s

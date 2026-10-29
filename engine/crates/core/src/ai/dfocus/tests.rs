@@ -39,7 +39,7 @@ fn past_grace(sim: &mut Sim) {
 fn record(sim: &mut Sim, bot: UnitHandle, h: UnitHandle, seen: bool, told: bool) {
     let (tick, at) = (sim.tick, sim.unit(h).expect("alive").capsule().center());
     sim.unit_mut(bot).expect("alive").ai.contacts[0] = Some(Contact {
-        handle: h,
+        handle: h.into(),
         first_seen: tick,
         last_seen: tick,
         last_pos: at,
@@ -222,7 +222,7 @@ fn a_focuser_keeps_him_for_the_memory_then_lets_go() {
     deal(&mut sim);
     let st = sim.unit(b).expect("alive").ai;
     assert_eq!(pick(&sim, b, &st), Some(human));
-    sim.unit_mut(b).expect("alive").ai.target = Some(human);
+    sim.unit_mut(b).expect("alive").ai.target = Some(human.into());
     // Out of sight now: a wall between them.
     if let Some(c) = sim.unit_mut(b).expect("alive").ai.contacts[0].as_mut() {
         c.seen_now = false;
@@ -256,7 +256,7 @@ fn several_humans_each_their_own_and_the_best_seen_first() {
     past_grace(&mut sim);
     let tick = sim.tick;
     let rec = |sim: &Sim, h: UnitHandle, seen: bool| Contact {
-        handle: h,
+        handle: h.into(),
         first_seen: tick,
         last_seen: tick,
         last_pos: sim.unit(h).expect("alive").capsule().center(),
@@ -337,7 +337,7 @@ fn in_play_hard_turns_to_the_human_but_not_through_a_wall() {
             sim.step(&[PadState::default()]);
         }
         let u = sim.unit(b).expect("alive");
-        (u.ai.target == Some(human), holds(&sim, b, human))
+        (u.ai.target == Some(human.into()), holds(&sim, b, human))
     };
     assert_eq!(run(Difficulty::Normal, false), (false, false));
     assert_eq!(run(Difficulty::Hard, false), (true, true));

@@ -89,7 +89,7 @@ fn bugx_a_a_bot_drops_its_dead_target_and_stops_firing() {
             .count();
     }
     assert!(shots > 0, "live control must shoot");
-    assert_eq!(w.sim.unit(bot).unwrap().ai.target, Some(target));
+    assert_eq!(w.sim.unit(bot).unwrap().ai.target, Some(target.into()));
     kill_with_blast(&mut w, target);
     assert!(
         w.sim.units[target.index as usize].body,
@@ -106,7 +106,7 @@ fn bugx_a_a_bot_drops_its_dead_target_and_stops_firing() {
         );
     }
     let ai = &w.sim.unit(bot).unwrap().ai;
-    assert_ne!(ai.target, Some(target), "dead target retained");
+    assert_ne!(ai.target, Some(target.into()), "dead target retained");
     assert!(ai.contacts.iter().flatten().all(|c| c.handle != target));
 }
 

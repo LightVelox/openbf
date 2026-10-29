@@ -27,6 +27,7 @@ use super::{
 use crate::collision::lead_point;
 use crate::fmath;
 use crate::perception::{self, Contact};
+use crate::remote::Droid;
 use crate::sim::{buttons, PadState, Sim};
 use crate::soldier::Stance;
 use crate::unit::{Unit, UnitHandle};
@@ -46,6 +47,9 @@ pub(super) enum AimRequest<'a> {
     /// Nobody known: turn to this point with the gun levelled (the
     /// travelling look).
     Travel(Vec3),
+    /// A SEEN enemy remote droid, fired on once its contact is fireable
+    /// (`analysis/re-remote-droid.md` 6).
+    Droid(&'a Droid, bool),
 }
 
 /// What the gunner answers, for the behaviour's position rules.
@@ -86,14 +90,21 @@ pub(super) fn track_error(sim: &Sim, st: &mut AiState, skill: &crate::skill::Ski
     let tracked = st
         .target
         .filter(|_| st.contacts.iter().flatten().any(|c| c.seen_now))
-        .and_then(|h| sim.unit(h));
+        .and_then(|h| match h {
+            perception::Foe::Unit(h) => sim
+                .unit(h)
+                .map(|o| (o.capsule().center(), o.consts.max_speed)),
+            perception::Foe::Droid(id) => {
+                let d = sim.live_droid(id)?;
+                Some((d.pos, sim.droid_class(d)?.max_speed))
+            }
+        });
     match tracked {
-        Some(o) => {
-            let p = o.capsule().center();
+        Some((p, top)) => {
             let think_dt = THINK_PERIOD as f32 / crate::TICK_HZ as f32;
             st.err -= think_dt * skill.err_decay;
             if st.err_pos != Vec3::ZERO {
-                st.err += ERR_GROWTH * (p - st.err_pos).length() / o.consts.max_speed.max(0.1);
+                st.err += ERR_GROWTH * (p - st.err_pos).length() / top.max(0.1);
             }
             st.err = st.err.clamp(skill.err_floor, ERR_MAX);
             st.err_pos = p;
@@ -145,15 +156,21 @@ pub(super) fn run(
     let (enemy, held, memory) = match *aim {
         AimRequest::Enemy(e, c) => (Some(e), Some(c), None),
         AimRequest::Memory(p) => (None, None, Some(p)),
-        AimRequest::Travel(_) => (None, None, None),
+        AimRequest::Travel(_) | AimRequest::Droid(..) => (None, None, None),
+    };
+    let droid = match *aim {
+        AimRequest::Droid(d, ready) => Some((d.pos, ready)),
+        _ => None,
     };
     // Card TOKN: a human this bot holds none of the tokens of - it shoots
     // beside him, and lobs its grenades short of him.
-    let barred = held.filter(|c| super::tokn::bars(sim, me, c.handle));
+    let barred = held
+        .and_then(|c| c.handle.unit())
+        .filter(|&h| super::tokn::bars(sim, me, h));
     // Card GRAI: what the think's weapon choice means this tick.
-    let armed = match enemy.filter(|_| support.is_none()) {
-        Some(_) => arsenal::armed(sim, u, st),
-        None => Armed::Hand,
+    let armed = match (enemy.is_some() || droid.is_some()) && support.is_none() {
+        true => arsenal::armed(sim, u, st),
+        false => Armed::Hand,
     };
     let mut reaches = false;
     let look_at = match (*aim, &armed) {
@@ -164,9 +181,7 @@ pub(super) fn run(
             let c = e.capsule().center();
             let err = seen_aim(sim, me, st, eye, e, 1e6, wc) - c;
             let mut feet = e.soldier.pos + Vec3::new(err.x, 0.0, err.z);
-            if let Some(off) =
-                barred.and_then(|c| super::tokn::short_of(sim, me, c.handle, eye, feet))
-            {
+            if let Some(off) = barred.and_then(|h| super::tokn::short_of(sim, me, h, eye, feet)) {
                 feet += off;
             }
             let (p, ok) = arsenal::lob_aim(sim, u, eye, feet, e.soldier.vel, gc);
@@ -175,9 +190,15 @@ pub(super) fn run(
         }
         (AimRequest::Enemy(e, _), _) => {
             let p = seen_aim(sim, me, st, eye, e, wc.ordnance.velocity, wc);
-            let off = barred.and_then(|c| super::tokn::miss_offset(sim, me, c.handle, eye, p));
+            let off = barred.and_then(|h| super::tokn::miss_offset(sim, me, h, eye, p));
             p + off.unwrap_or(Vec3::ZERO)
         }
+        (AimRequest::Droid(d, _), Armed::Thrown(gc, _)) => {
+            let (p, ok) = arsenal::lob_aim(sim, u, eye, d.pos, d.vel, gc);
+            reaches = ok;
+            p
+        }
+        (AimRequest::Droid(d, _), _) => droid_aim(sim, me, st, eye, d, wc.ordnance.velocity, wc),
         (AimRequest::Memory(p) | AimRequest::Travel(p), _) => p,
     };
     let to = look_at - eye;
@@ -189,7 +210,7 @@ pub(super) fn run(
     let dir = to / dist;
     // Aiming at a KNOWN enemy — seen or remembered — as against levelling the
     // gun on the walk.
-    let aiming = enemy.is_some() || memory.is_some();
+    let aiming = enemy.is_some() || memory.is_some() || droid.is_some();
     // D9: the AIM TRACKER. With a target the pad follows a steered direction,
     // not the wanted one: a second-order chase under the skill's acceleration
     // clamp and damping, with a 30° slew when the target is far off the
@@ -275,28 +296,36 @@ pub(super) fn run(
     fire_discipline(sim, me, u, st, wc, meter, &skill);
     // Card FFLN: a friend in the line of fire. The shot waits (below); the
     // behaviour steps a holder with no Tactician's position aside.
-    let line = enemy.and_then(|e| {
-        let range = (e.capsule().center() - eye).length();
-        // The cone a shot can leave in: the weapon's spread as it is now
-        // (a sniper's AI table, the posture, the recoil) round the aim.
-        let spread = u.weapon.yaw_spread(wc).max(u.weapon.pitch_spread(wc));
-        friend_in_line(
-            sim,
-            me,
-            u,
-            eye,
-            range,
-            LINE_SPREAD + spread,
-            Some(shot_late(wc)),
-        )
-        .or_else(|| friend_in_blast(sim, me, u, e.capsule().center(), wc))
-    });
+    let line = enemy
+        .map(|e| e.capsule().center())
+        .or(droid.map(|d| d.0))
+        .and_then(|at| {
+            let range = (at - eye).length();
+            // The cone a shot can leave in: the weapon's spread as it is now
+            // (a sniper's AI table, the posture, the recoil) round the aim.
+            let spread = u.weapon.yaw_spread(wc).max(u.weapon.pitch_spread(wc));
+            friend_in_line(
+                sim,
+                me,
+                u,
+                eye,
+                range,
+                LINE_SPREAD + spread,
+                Some(shot_late(wc)),
+            )
+            .or_else(|| friend_in_blast(sim, me, u, at, wc))
+        });
     let mut no_throw = false;
-    let range = match (enemy, memory) {
-        (Some(e), _) => {
-            let range = (e.capsule().center() - eye).length();
+    let target = enemy
+        .map(|e| {
             let ready =
                 held.is_some_and(|c| perception::fireable(&c, sim.tick, tier.reaction_ticks));
+            (e.capsule().center(), ready)
+        })
+        .or(droid);
+    let range = match target {
+        Some((at, ready)) => {
+            let range = (at - eye).length();
             let in_reach = match armed {
                 // Card CLSE4 (`analysis/re-soldier-ai.md` 20.2, both games):
                 // the trigger fires a tracked target only strictly inside
@@ -356,7 +385,7 @@ pub(super) fn run(
             nt.tokn_off = u8::from(barred.is_some() && pad.buttons & buttons::FIRE != 0);
             Some(range)
         }
-        (None, _) => {
+        None => {
             if wc.trigger_single {
                 tap(sim, me, st, wc, &skill, false);
             }
@@ -746,6 +775,41 @@ pub(super) fn seen_aim(
     aim + error_vector(sim, me, e, u.aim.dir * r, (aim - eye).length(), wc)
 }
 
+/// BF2's size term of the aim error at a remote droid: 0.17, read live as
+/// radius / ((3 - 2 vis) x err) (`analysis/re-soldier-ai.md` 21.3).
+pub(super) const DROID_AIM_SIZE: f32 = 0.17;
+
+/// [`seen_aim`] at a remote droid. The error block is the one the droid's
+/// controller hangs off (21.3: a unit's block is the controllable it drives):
+/// the owner's error, the stance slot's constant 1.0, the droid's own speed
+/// over its `MaxSpeed`, no concealment (5.3: 1.0 for what is not a soldier),
+/// and a human's only while the human drives it.
+pub(super) fn droid_aim(
+    sim: &Sim,
+    me: UnitHandle,
+    st: &AiState,
+    eye: Vec3,
+    d: &Droid,
+    speed: f32,
+    wc: &WeaponClass,
+) -> Vec3 {
+    let aim = lead_point(d.pos - eye, d.vel, speed).map_or(d.pos, |rel| eye + rel);
+    let (Some(u), Some(c)) = (sim.unit(me), sim.droid_class(d)) else {
+        return aim;
+    };
+    let cap = sim.difficulty_of(u.team).skill_at(u.skill).err_cap;
+    let moving = d.vel.length() / c.max_speed.max(0.1);
+    if sim.ground_rules != crate::soldier::GroundRules::Bf2 {
+        let r = radius(1.0, 1.0, st.err, moving, 1.0, cap);
+        return aim + unit_dir(me.index, sim.tick / THINK_PERIOD, me.gen, SALT_ERR_DIR) * r;
+    }
+    let owner = sim.unit(d.owner);
+    let err = owner.map_or(0.0, |o| o.aim.err);
+    let r = radius(DROID_AIM_SIZE, 1.0, err, moving, 1.0, cap);
+    let human = d.controlled && owner.is_some_and(|o| o.is_human());
+    aim + bubble(sim, me, human, u.aim.dir * r, (aim - eye).length(), wc)
+}
+
 /// BF2's error radius at a target (B2 `FUN_002ae4d0`, 18.2 and 18.3; 80 rows
 /// of PS2 RAM reproduce it, `tests/radius_rows.rs`): `size` x (3 - 2 x `vis`) x
 /// min(`err` x `stance` x (1 + 0.6 x `moving`), `cap`) - `size` the target's
@@ -797,14 +861,11 @@ pub(super) const ERR_BOT_SCALE: f32 = 0.3;
 /// shooter at full speed, and the two EntityFlyer terms (x 0.1 against a
 /// flyer when the shooter's state is 1; a flyer in state 2 exempt from the
 /// clamp - 17.2 steps 4 and 6: the port has no flyer).
-fn error_vector(
-    sim: &Sim,
-    me: UnitHandle,
-    e: &Unit,
-    mut off: Vec3,
-    d: f32,
-    wc: &WeaponClass,
-) -> Vec3 {
+fn error_vector(sim: &Sim, me: UnitHandle, e: &Unit, off: Vec3, d: f32, wc: &WeaponClass) -> Vec3 {
+    bubble(sim, me, e.is_human() || carries_human(sim, e), off, d, wc)
+}
+
+fn bubble(sim: &Sim, me: UnitHandle, human: bool, mut off: Vec3, d: f32, wc: &WeaponClass) -> Vec3 {
     off *= wc.ai_bubble_size;
     off.y = off.y.max(0.0);
     if sim.unit(me).is_some_and(|u| carries_human(sim, u)) {
@@ -812,7 +873,7 @@ fn error_vector(
     }
     // Card DPRX: a proxy is a human target too (the shooter test above
     // stays `is_player`: a proxy shooting aims with a bot's error).
-    if !(e.is_human() || carries_human(sim, e)) {
+    if !human {
         off *= ERR_BOT_SCALE;
     }
     off * (d / wc.ai_bubble_dist + 0.5).min(wc.ai_bubble_clamp)

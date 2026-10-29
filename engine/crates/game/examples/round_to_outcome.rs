@@ -2130,6 +2130,7 @@ fn fight_class(sim: &core::sim::Sim, u: &core::unit::Unit) -> usize {
     }
     if st
         .target
+        .and_then(|h| h.unit())
         .and_then(|h| sim.unit(h))
         .is_some_and(|t| t.mount.is_some())
     {
@@ -3326,7 +3327,7 @@ impl HeavyCensus {
                 .filter(|u| u.gen == h.gen && u.mount.is_none() && !u.is_player)
         };
         let target = |u: &core::unit::Unit| -> String {
-            let Some(e) = u.ai.target.and_then(|t| sim.unit(t)) else {
+            let Some(e) = u.ai.target.and_then(|t| t.unit()).and_then(|t| sim.unit(t)) else {
                 return "none".to_owned();
             };
             if let Some(m) = e.mount {
@@ -3432,6 +3433,7 @@ impl HeavyCensus {
                             let (from, at) = (u.muzzle(), v.capsule().center());
                             let aim =
                                 u.ai.target
+                                    .and_then(|t| t.unit())
                                     .and_then(|t| sim.unit(t))
                                     .map(|e| e.capsule().center());
                             let (d_target, along, off) = aim.map_or((-1.0, -1.0, -1.0), |a| {
@@ -5131,9 +5133,9 @@ fn run_map(
             let target = match u.ai.target {
                 Some(t) => {
                     let c = core::perception::contact_of(&u.ai, t);
-                    let d = w
-                        .sim
-                        .unit(t)
+                    let d = t
+                        .unit()
+                        .and_then(|t| w.sim.unit(t))
                         .map_or_else(|| c.map(|c| c.last_pos), |o| Some(o.capsule().center()))
                         .map_or(f32::NAN, |p| (p - eye).length());
                     let how = match c {
@@ -5144,8 +5146,8 @@ fn run_map(
                     };
                     let age = c.map_or(f32::NAN, |c| c.age_s(w.sim.tick));
                     format!(
-                        "{}@{d:.0}m {how} age {age:.1}  contacts {}  err {:.2}  burst {}  stance_want {}  cmd {cmd}",
-                        t.index,
+                        "{:?}@{d:.0}m {how} age {age:.1}  contacts {}  err {:.2}  burst {}  stance_want {}  cmd {cmd}",
+                        t,
                         u.ai.contacts.iter().flatten().count(),
                         u.aim.err,
                         burst,

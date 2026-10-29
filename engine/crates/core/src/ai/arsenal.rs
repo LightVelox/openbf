@@ -43,6 +43,7 @@
 use super::behave::Tick;
 use super::draw::{unit_unit, SALT_ARM, SALT_NUMBER};
 use super::state::{AiState, ArmState};
+use crate::remote::{Droid, DroidClass};
 use crate::sim::{buttons, Sim};
 use crate::soldier::GroundRules;
 use crate::unit::{Unit, UnitHandle};
@@ -114,6 +115,18 @@ pub(super) struct Cand<'a> {
     pub heavy: bool,
 }
 
+impl Cand<'_> {
+    /// A weapon the choice never takes: a repair tool, a dispenser, an
+    /// ability, a cloak, or one with nothing left.
+    fn idle(&self) -> bool {
+        self.class.repair.is_some()
+            || self.class.dispenses()
+            || self.class.ability.is_some()
+            || self.class.cloak.is_some()
+            || self.empty
+    }
+}
+
 /// The vehicle a choice is asked for (card HVYW, `re-soldier-ai.md` 22).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct VehAsk {
@@ -146,6 +159,47 @@ pub(super) struct Ask {
     pub vehicle: Option<VehAsk>,
     /// Card HVYW (OURS): the soldier stands in a crowd of [`CROWD`].
     pub crowd: bool,
+    /// The target is a remote droid of this MaxHealth (`kind` is its
+    /// health type), and the choice is for it ([`against_droid`]).
+    pub droid: Option<f32>,
+}
+
+/// May weapon `c` be used on a remote droid of `max_health` and health type
+/// `kind`, and its score against it? The PS2 asks a droid (B2 kind 1,
+/// `EntityDroid`) what it asks every target that is not a soldier
+/// (`analysis/re-soldier-ai.md` 22; B2 `FUN_002aaba0`, B1 `FUN_002380a8`):
+/// BF2's AI mask must hold the droid's health type (BF1 asks its mask of a
+/// soldier against a soldier only); then the weapon must not be too weak -
+/// BF2's rate x 10 s, BF1's one shot x min(the rounds issued, 50), over half
+/// the droid's MaxHealth. A foot soldier's weak weapon is used only on a
+/// flyer, hover, walker or building (22.1 step 5, B1 151700-151716), and a
+/// droid is none of them.
+pub(super) fn against_droid(c: &Cand, max_health: f32, kind: u32, bf2: bool) -> Option<f32> {
+    if bf2 && c.class.ai_target_kind >> kind.min(31) & 1 == 0 {
+        return None;
+    }
+    let (s, dealt) = scored(c, kind, bf2)?;
+    (dealt > 0.5 * max_health).then_some(s)
+}
+
+/// Weapon `c`'s score against health type `kind` and what the "too weak"
+/// test weighs of it (`re-soldier-ai.md` 22): BF2's score x 10 s, BF1's one
+/// shot x min(the rounds issued, 50). `None` when it scores nothing.
+fn scored(c: &Cand, kind: u32, bf2: bool) -> Option<(f32, f32)> {
+    let s = if bf2 {
+        score(c.class, kind)
+    } else {
+        shot(c.class, kind)
+    };
+    if s <= 0.0 {
+        return None;
+    }
+    let dealt = if bf2 {
+        s * 10.0
+    } else {
+        s * c.rounds.map_or(50.0, |r| r.min(50) as f32)
+    };
+    Some((s, dealt))
 }
 
 /// Card HVYW: may weapon `c` be used on the vehicle `v` at all, and its score
@@ -171,19 +225,7 @@ pub(super) fn against_vehicle(c: &Cand, v: &VehAsk, kind: u32, bf2: bool) -> Opt
     if bf2 && !c.heavy && c.class.ai_target_kind >> kind.min(31) & 1 == 0 {
         return None;
     }
-    let s = if bf2 {
-        score(c.class, kind)
-    } else {
-        shot(c.class, kind)
-    };
-    if s <= 0.0 {
-        return None;
-    }
-    let dealt = if bf2 {
-        s * 10.0
-    } else {
-        s * c.rounds.map_or(50.0, |r| r.min(50) as f32)
-    };
+    let (s, dealt) = scored(c, kind, bf2)?;
     let weak = dealt <= 0.5 * v.max_health;
     let by_ordnance = match c.class.ordnance.kind {
         OrdKind::Missile | OrdKind::Shell | OrdKind::Beam => true,
@@ -255,14 +297,7 @@ pub(super) fn choose<'a>(cands: impl Iterator<Item = Cand<'a>>, ask: &Ask) -> Op
         // is not passed over - the bot with the one weapon that hurts it
         // reloads where it stands instead of walking on for the four seconds.
         let reloads = ask.bf2 && c.busy && ask.vehicle.is_none();
-        if c.class.repair.is_some()
-            || c.class.dispenses()
-            || c.class.ability.is_some()
-            || c.class.cloak.is_some()
-            || c.empty
-            || (grenade && ask.barred)
-            || reloads
-        {
+        if c.idle() || (grenade && ask.barred) || reloads {
             continue;
         }
         // Card HVYW: a heavy weapon in a crowd is taken as a forced grenade
@@ -270,6 +305,11 @@ pub(super) fn choose<'a>(cands: impl Iterator<Item = Cand<'a>>, ask: &Ask) -> Op
         let heavy = c.heavy && ask.vehicle.is_none();
         let s = if let Some(v) = ask.vehicle {
             match against_vehicle(&c, &v, ask.kind, ask.bf2) {
+                Some(s) => s,
+                None => continue,
+            }
+        } else if let Some(max) = ask.droid {
+            match against_droid(&c, max, ask.kind, ask.bf2) {
                 Some(s) => s,
                 None => continue,
             }
@@ -574,7 +614,7 @@ pub(super) fn think(sim: &Sim, tk: &Tick, st: &mut AiState, enemy: Option<&Unit>
     if u.held.is_empty() || throwing(sim, u).is_some() {
         return;
     }
-    let (Some(e), Some(target)) = (enemy, st.target) else {
+    let (Some(e), Some(target)) = (enemy, st.target.and_then(|t| t.unit())) else {
         st.arm = ArmState {
             claim: st.arm.claim.filter(|c| sim.tick < c.1),
             ..ArmState::default()
@@ -630,6 +670,7 @@ pub(super) fn think(sim: &Sim, tk: &Tick, st: &mut AiState, enemy: Option<&Unit>
         bf2,
         vehicle,
         crowd,
+        droid: None,
         group,
         barred,
         forced: grenade_forced(
@@ -676,6 +717,62 @@ pub(super) fn think(sim: &Sim, tk: &Tick, st: &mut AiState, enemy: Option<&Unit>
     } else {
         st.arm.claim.filter(|c| sim.tick < c.1)
     };
+}
+
+/// The [`Ask`] for the droid `d` of class `c`, seen by `u` from `eye`.
+fn droid_ask(sim: &Sim, me: UnitHandle, eye: Vec3, d: &Droid, c: &DroidClass, forced: bool) -> Ask {
+    Ask {
+        kind: c.health_type as u32,
+        d2: (d.pos - eye).length_squared(),
+        bf2: sim.ground_rules == GroundRules::Bf2,
+        group: false,
+        barred: false,
+        forced,
+        coin: unit_unit(me.index, sim.tick, me.gen, SALT_ARM) < 0.5,
+        vehicle: None,
+        crowd: false,
+        droid: Some(c.max_health),
+    }
+}
+
+/// Whether a weapon `u` holds may be used on a droid of class `c` at all:
+/// the PS2's scan admits a candidate only through the weapon choice
+/// (B2 `FUN_002e3aa0` -> `FUN_002ac8f8`, `analysis/re-remote-droid.md` 6).
+pub fn droid_suited(sim: &Sim, u: &Unit, c: &DroidClass) -> bool {
+    let bf2 = sim.ground_rules == GroundRules::Bf2;
+    let kind = c.health_type as u32;
+    slots(sim, u)
+        .into_iter()
+        .flatten()
+        .any(|w| !w.idle() && against_droid(&w, c.max_health, kind, bf2).is_some())
+}
+
+/// [`think`] for a seen droid: the weapon the PS2's choice takes for it.
+pub(super) fn think_droid(sim: &Sim, tk: &Tick, st: &mut AiState, d: &Droid) {
+    let Tick { me, u, eye, .. } = *tk;
+    if u.held.is_empty() || throwing(sim, u).is_some() {
+        return;
+    }
+    let Some(c) = sim.droid_class(d) else {
+        return;
+    };
+    let forced = grenade_forced(
+        sim.ground_rules,
+        number(me),
+        sim.tick,
+        false,
+        tk.skill.grenade_chance,
+    );
+    let cands = slots(sim, u);
+    let pick = choose(
+        cands.into_iter().flatten(),
+        &droid_ask(sim, me, eye, d, c, forced),
+    );
+    st.arm.pick = pick.map(|p| p.0);
+    st.arm.in_range = pick.is_some_and(|p| p.1);
+    st.arm.vehicle = false;
+    st.arm.spare = pick.is_none();
+    st.arm.claim = st.arm.claim.filter(|c| sim.tick < c.1);
 }
 
 /// What the choice means for the pad this tick.

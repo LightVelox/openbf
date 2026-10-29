@@ -348,7 +348,7 @@ fn a_bot_flies_its_droid_at_the_nearest_enemy_and_fires() {
     let enemy = sim
         .spawn(&UnitSpec::trooper(1, Vec3::new(5.0, 0.0, -25.0)))
         .unwrap();
-    sim.unit_mut(owner).unwrap().ai.target = Some(enemy);
+    sim.unit_mut(owner).unwrap().ai.target = Some(enemy.into());
     // (In the open at 30 m it would not launch: card DROIDAI's tests below.)
     sim.launch_droid(owner.index as usize, weapon, 0.0);
     assert_eq!(crate::ai::ability_input(&sim, owner), None);
@@ -380,7 +380,7 @@ fn a_bots_droid_holds_fire_through_a_friend() {
     let friend = sim
         .spawn(&UnitSpec::trooper(0, Vec3::new(5.0, 0.0, -23.0)))
         .unwrap();
-    sim.unit_mut(owner).unwrap().ai.target = Some(enemy);
+    sim.unit_mut(owner).unwrap().ai.target = Some(enemy.into());
     sim.launch_droid(owner.index as usize, weapon, 0.0);
     let blaster = sim.weapon_classes[weapon]
         .remote
@@ -424,6 +424,23 @@ fn sprint_does_nothing_while_flying() {
         assert_eq!(play(buttons::SPRINT), plain, "bf2={bf2}");
         let (.., (_, body_vel, _, _)) = plain;
         assert!(body_vel.length() < 1e-4, "bf2={bf2}: the body stands");
+    }
+}
+
+#[test]
+fn a_weapon_switch_on_either_channel_hands_the_droid_back() {
+    for switch in [buttons::SWITCH_WEAPON, buttons::SWITCH_SECONDARY] {
+        let (mut sim, owner, _) = setup(false);
+        launch(&mut sim);
+        let (class, cur1) = {
+            let u = sim.unit(owner).unwrap();
+            (u.weapon_class, u.cur1)
+        };
+        press(&mut sim, switch);
+        assert!(!sim.droids[0].controlled, "{switch:#x}");
+        press(&mut sim, switch);
+        let u = sim.unit(owner).unwrap();
+        assert_eq!((u.weapon_class, u.cur1), (class, cur1), "{switch:#x}");
     }
 }
 
@@ -516,7 +533,7 @@ fn known_enemy(sim: &mut Sim, owner: UnitHandle, at: Vec3) -> UnitHandle {
     let st = &mut sim.unit_mut(owner).unwrap().ai;
     let slot = st.contacts.iter().position(Option::is_none).unwrap();
     st.contacts[slot] = Some(crate::perception::Contact {
-        handle: e,
+        handle: e.into(),
         first_seen: tick,
         last_seen: tick,
         last_pos: at,
@@ -721,4 +738,312 @@ fn a_flight_ends_after_30_s_and_the_bot_goes_in_itself() {
     let events = run(&mut sim, PadState::default(), 4.0);
     assert!(shots(&events, owner, 0) > 0, "the body fires its rifle");
     assert!(sim.controlled_droid(owner).is_none());
+}
+
+fn droid_watcher(sim: &mut Sim, weapon_class: Option<usize>) -> UnitHandle {
+    let trooper = UnitSpec::trooper(1, Vec3::new(0.0, 0.0, -20.0));
+    let bot = sim
+        .spawn(&UnitSpec {
+            controller: Controller::Ai,
+            weapon_class: weapon_class.unwrap_or(trooper.weapon_class),
+            ..trooper
+        })
+        .unwrap();
+    sim.units[bot.index as usize].soldier.yaw = std::f32::consts::PI;
+    bot
+}
+
+fn hold_droid(sim: &mut Sim) {
+    let d = &mut sim.droids[0];
+    d.pos = Vec3::new(0.0, 1.75, 0.0);
+    d.vel = Vec3::ZERO;
+}
+
+fn droid_contact(sim: &Sim, bot: UnitHandle) -> bool {
+    sim.unit(bot)
+        .unwrap()
+        .ai
+        .contacts
+        .iter()
+        .flatten()
+        .any(|c| c.handle.droid().is_some())
+}
+
+#[test]
+fn bots_target_and_shoot_an_enemy_droid_in_sight() {
+    let (mut sim, _, weapon) = setup(false);
+    if let Some(r) = sim.weapon_classes[weapon].remote.as_mut() {
+        r.droid.add_health = 0.0;
+    }
+    launch(&mut sim);
+    let bot = droid_watcher(&mut sim, None);
+    let health = sim.droids[0].health;
+    let (mut shots, mut targeted) = (0, false);
+    for _ in 0..(3.0 / TICK_DT) as usize {
+        hold_droid(&mut sim);
+        press(&mut sim, 0);
+        targeted |= matches!(
+            sim.unit(bot).unwrap().ai.target,
+            Some(crate::perception::Foe::Droid(_))
+        );
+        shots += sim
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::Shot { unit, .. } if *unit == bot))
+            .count();
+        if sim.droids.is_empty() {
+            break;
+        }
+    }
+    assert!(targeted, "the droid, nearer than its owner, is the target");
+    assert!(shots > 0, "the bot never fired");
+    assert!(
+        sim.droids.first().is_none_or(|d| d.health < health),
+        "no hit on the droid"
+    );
+}
+
+fn vehicle_only_rifle(sim: &mut Sim) -> usize {
+    let mut rifle = WeaponClass::bf1_rifle();
+    rifle.ai_target_kind = 1 << crate::weapon::HealthType::Vehicle as u32;
+    sim.add_weapon_class(rifle)
+}
+
+#[test]
+fn bf2s_ai_mask_keeps_a_droid_from_a_weapon_not_for_droids() {
+    let (mut sim, _, _) = setup(false);
+    sim.ground_rules = crate::soldier::GroundRules::Bf2;
+    launch(&mut sim);
+    let rifle = vehicle_only_rifle(&mut sim);
+    let bot = droid_watcher(&mut sim, Some(rifle));
+    for _ in 0..(2.0 / TICK_DT) as usize {
+        hold_droid(&mut sim);
+        press(&mut sim, 0);
+        assert!(!droid_contact(&sim, bot));
+    }
+}
+
+#[test]
+fn bf1_asks_no_ai_mask_of_a_droid() {
+    let (mut sim, _, _) = setup(false);
+    sim.ground_rules = crate::soldier::GroundRules::Bf1;
+    launch(&mut sim);
+    let rifle = vehicle_only_rifle(&mut sim);
+    let bot = droid_watcher(&mut sim, Some(rifle));
+    let mut seen = false;
+    for _ in 0..(2.0 / TICK_DT) as usize {
+        hold_droid(&mut sim);
+        press(&mut sim, 0);
+        seen |= droid_contact(&sim, bot);
+    }
+    assert!(seen);
+}
+
+#[test]
+fn a_weapon_too_weak_for_a_droid_does_not_take_it() {
+    let (mut sim, _, _) = setup(false);
+    launch(&mut sim);
+    let mut pea = WeaponClass::bf1_rifle();
+    pea.ordnance.max_damage = 0.01;
+    let pea = sim.add_weapon_class(pea);
+    let bot = droid_watcher(&mut sim, Some(pea));
+    for _ in 0..(2.0 / TICK_DT) as usize {
+        hold_droid(&mut sim);
+        press(&mut sim, 0);
+        assert!(!droid_contact(&sim, bot));
+    }
+}
+
+#[test]
+fn the_droid_yaw_stays_inside_one_turn() {
+    let (mut sim, _, _) = setup(false);
+    launch(&mut sim);
+    let spin = PadState {
+        rx: i16::MAX,
+        ..Default::default()
+    };
+    run(&mut sim, spin, 20.0);
+    let yaw = sim.droids[0].yaw;
+    assert!(
+        (-std::f32::consts::PI..=std::f32::consts::PI).contains(&yaw),
+        "{yaw}"
+    );
+}
+
+#[test]
+fn remote_classes_share_one_entry_per_blaster_and_shell() {
+    let (mut sim, _, weapon) = setup(false);
+    let count = sim.weapon_classes.len();
+    let mut other = sim.weapon_classes[weapon].clone();
+    other.name = "other_remotedroid".into();
+    if let Some(r) = other.remote.as_mut() {
+        r.blaster_index = usize::MAX;
+        r.shell_index = usize::MAX;
+    }
+    let second = sim.add_weapon_class(other);
+    assert_eq!(sim.weapon_classes.len(), count + 1);
+    let r = |i: usize| sim.weapon_classes[i].remote.as_ref().unwrap();
+    assert_eq!(r(second).blaster_index, r(weapon).blaster_index);
+    assert_eq!(r(second).shell_index, r(weapon).shell_index);
+    assert_ne!(r(weapon).blaster_index, 0);
+}
+
+fn droid_target(sim: &Sim, bot: UnitHandle) -> bool {
+    sim.unit(bot)
+        .unwrap()
+        .ai
+        .target
+        .is_some_and(|t| t.droid().is_some())
+}
+
+fn bot_shots(sim: &Sim, bot: UnitHandle) -> usize {
+    sim.events
+        .iter()
+        .filter(|e| matches!(e, Event::Shot { unit, .. } if *unit == bot))
+        .count()
+}
+
+/// Watch the held droid until the bot `bot` has it as its target.
+fn until_droid_target(sim: &mut Sim, bot: UnitHandle) {
+    for _ in 0..(2.0 / TICK_DT) as usize {
+        hold_droid(sim);
+        press(sim, 0);
+        if droid_target(sim, bot) {
+            return;
+        }
+    }
+    panic!("the droid never became the target");
+}
+
+/// A 6 m tall, 100 m wide wall across z = -10, between the watcher and the
+/// held droid.
+fn wall_before_droid(sim: &mut Sim) {
+    sim.collision.push_body(crate::collision::Body::new(
+        glam::Mat4::from_translation(Vec3::new(0.0, 3.0, -10.0)),
+        crate::collision::Shape::Box {
+            half: Vec3::new(50.0, 3.0, 0.5),
+        },
+    ));
+}
+
+#[test]
+fn a_friendly_droid_is_never_a_contact() {
+    let (mut sim, _, _) = setup(false);
+    launch(&mut sim);
+    let bot = droid_watcher(&mut sim, None);
+    sim.droids[0].team = sim.unit(bot).unwrap().team;
+    for _ in 0..(2.0 / TICK_DT) as usize {
+        hold_droid(&mut sim);
+        press(&mut sim, 0);
+        assert!(!droid_contact(&sim, bot));
+    }
+}
+
+#[test]
+fn a_wall_hides_the_droid() {
+    let (mut sim, _, _) = setup(false);
+    launch(&mut sim);
+    let bot = droid_watcher(&mut sim, None);
+    wall_before_droid(&mut sim);
+    for _ in 0..(2.0 / TICK_DT) as usize {
+        hold_droid(&mut sim);
+        press(&mut sim, 0);
+        assert!(!droid_contact(&sim, bot));
+    }
+}
+
+#[test]
+fn a_droid_out_of_sight_is_remembered_unfired_at_and_then_forgotten() {
+    let (mut sim, _, _) = setup(false);
+    launch(&mut sim);
+    let bot = droid_watcher(&mut sim, None);
+    sim.droids[0].health = f32::MAX;
+    until_droid_target(&mut sim, bot);
+    wall_before_droid(&mut sim);
+    let grace = crate::ai::THINK_PERIOD as usize + 1;
+    let mut remembered = false;
+    for k in 0..(4.0 / TICK_DT) as usize {
+        hold_droid(&mut sim);
+        press(&mut sim, 0);
+        let held = sim
+            .unit(bot)
+            .unwrap()
+            .ai
+            .contacts
+            .iter()
+            .flatten()
+            .find(|c| c.handle.droid().is_some())
+            .copied();
+        let lost = k > grace && held.is_some_and(|c| !c.seen_now);
+        if lost && droid_target(&sim, bot) {
+            assert_eq!(bot_shots(&sim, bot), 0, "fired at a droid it lost");
+        }
+        remembered |= lost;
+    }
+    assert!(remembered, "the lost droid was not kept as a memory");
+    assert!(
+        !droid_contact(&sim, bot),
+        "the lost droid was never forgotten"
+    );
+    assert!(!droid_target(&sim, bot));
+}
+
+#[test]
+fn a_destroyed_droid_is_dropped_and_the_bot_turns_on_the_soldier() {
+    let (mut sim, owner, _) = setup(false);
+    launch(&mut sim);
+    let bot = droid_watcher(&mut sim, None);
+    until_droid_target(&mut sim, bot);
+    sim.droids[0].health = 0.0;
+    press(&mut sim, 0);
+    assert!(sim.droids.is_empty());
+    for _ in 0..(2.0 / TICK_DT) as usize {
+        press(&mut sim, 0);
+    }
+    assert!(!droid_contact(&sim, bot));
+    assert_eq!(sim.unit(bot).unwrap().ai.target, Some(owner.into()));
+}
+
+#[test]
+fn a_seated_gunner_takes_a_droid_without_the_weapon_test() {
+    use crate::vehicle::{SeatKind, SeatSetup, VehicleKind, VehicleSpec};
+    let (mut sim, _, _) = setup(false);
+    launch(&mut sim);
+    hold_droid(&mut sim);
+    let mut pea = WeaponClass::bf1_rifle();
+    pea.ordnance.max_damage = 0.01;
+    let pea = sim.add_weapon_class(pea);
+    let bot = droid_watcher(&mut sim, Some(pea));
+    let sees = |sim: &Sim| {
+        let u = sim.unit(bot).unwrap();
+        let mut st = u.ai;
+        crate::perception::scan(sim, bot, &mut st, sim.unit_tier(u));
+        st.contacts
+            .iter()
+            .flatten()
+            .any(|c| c.handle.droid().is_some())
+    };
+    assert!(!sees(&sim), "on foot the pea is too weak for the droid");
+    sim.hover_params = vec![Some(crate::vehicle::hover::tests::skiff())];
+    sim.seat_setup = vec![Some(SeatSetup {
+        radius: 5.0,
+        boardable: vec![true; 2],
+        exit_drop: 10.0,
+        ai_size: 1,
+        guns: Vec::new(),
+    })];
+    let v = sim.spawn_vehicle(&VehicleSpec {
+        kind: VehicleKind::Hover,
+        class: 0,
+        home_team: None,
+        neutral_when_empty: true,
+        spawn_pad: None,
+        pos: Vec3::new(0.0, 0.0, -20.0),
+        yaw: std::f32::consts::PI,
+        max_health: 1000.0,
+        health_type: crate::weapon::HealthType::Vehicle,
+        seats: vec![SeatKind::Pilot, SeatKind::Gunner(0)],
+    });
+    assert!(sim.seat_unit(bot, v, 1));
+    assert!(sees(&sim), "a seated unit is not asked the weapon choice");
 }

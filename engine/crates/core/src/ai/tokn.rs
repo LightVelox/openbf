@@ -176,7 +176,7 @@ fn placed(sim: &Sim, bot: UnitHandle, human: UnitHandle) -> Option<f32> {
     let (b, h) = (sim.unit(bot)?, sim.unit(human)?);
     // Card DFOCUS: at Hard and Elite a bot that sees him may take one to
     // make him its target.
-    if b.ai.target != Some(human) && !super::dfocus::may_focus(sim, bot, human) {
+    if b.ai.target != Some(human.into()) && !super::dfocus::may_focus(sim, bot, human) {
         return None;
     }
     let (eye, c) = (b.muzzle(), h.capsule().center());
@@ -227,7 +227,9 @@ pub fn deal(sim: &mut Sim) {
             .alive_units()
             .filter(|(h, _)| !tokens.iter().any(|t| t.bot == *h && t.human == human))
             // Card DFOCUS: a focuser of another human is not offered his.
-            .filter(|(h, u)| u.ai.target == Some(human) || !tokens.iter().any(|t| t.bot == *h))
+            .filter(|(h, u)| {
+                u.ai.target == Some(human.into()) || !tokens.iter().any(|t| t.bot == *h)
+            })
             .filter_map(|(h, _)| placed(sim, h, human).map(|s| (s, h)))
             .collect();
         wait.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.index.cmp(&b.1.index)));

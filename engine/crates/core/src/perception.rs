@@ -53,11 +53,53 @@ pub const RETARGET_TICKS: u64 = 45;
 /// (RE §5.2).
 pub const HYSTERESIS: f32 = 10.0;
 
+/// What a contact and a target are: an enemy unit, or an enemy remote
+/// droid by its id (`analysis/re-remote-droid.md` 6: the PS2's perception
+/// holds entities, and the droid is one).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Foe {
+    Unit(UnitHandle),
+    Droid(u64),
+}
+
+impl Foe {
+    pub fn unit(self) -> Option<UnitHandle> {
+        match self {
+            Foe::Unit(h) => Some(h),
+            Foe::Droid(_) => None,
+        }
+    }
+
+    pub fn droid(self) -> Option<u64> {
+        match self {
+            Foe::Droid(id) => Some(id),
+            Foe::Unit(_) => None,
+        }
+    }
+
+    /// The live unit this foe is, if it is one.
+    pub fn live_unit(self, sim: &Sim) -> Option<&crate::unit::Unit> {
+        self.unit().and_then(|h| sim.unit(h))
+    }
+}
+
+impl From<UnitHandle> for Foe {
+    fn from(h: UnitHandle) -> Self {
+        Foe::Unit(h)
+    }
+}
+
+impl PartialEq<UnitHandle> for Foe {
+    fn eq(&self, h: &UnitHandle) -> bool {
+        *self == Foe::Unit(*h)
+    }
+}
+
 /// One remembered enemy. `last_pos` is where it was when it was last SEEN or
 /// HEARD — the point a unit that lost sight aims and walks at.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Contact {
-    pub handle: UnitHandle,
+    pub handle: Foe,
     /// Tick the slot was created — the reaction timer's zero.
     pub first_seen: u64,
     /// Tick of the last sighting or hearing.
@@ -77,8 +119,16 @@ impl Contact {
     /// Feed into the sim hash. Every field: two units whose memories differ
     /// are different worlds even when they are looking at the same enemy.
     pub fn hash_into(&self, eat: &mut impl FnMut(&[u8])) {
-        eat(&self.handle.index.to_le_bytes());
-        eat(&self.handle.gen.to_le_bytes());
+        match self.handle {
+            Foe::Unit(h) => {
+                eat(&h.index.to_le_bytes());
+                eat(&h.gen.to_le_bytes());
+            }
+            Foe::Droid(id) => {
+                eat(b"DROID");
+                eat(&id.to_le_bytes());
+            }
+        }
         eat(&self.first_seen.to_le_bytes());
         eat(&self.last_seen.to_le_bytes());
         for v in [self.last_pos.x, self.last_pos.y, self.last_pos.z] {
@@ -222,7 +272,8 @@ pub fn fireable(c: &Contact, tick: u64, reaction_ticks: u64) -> bool {
 }
 
 /// This unit's record of `h`, if it holds one.
-pub fn contact_of(st: &AiState, h: UnitHandle) -> Option<Contact> {
+pub fn contact_of(st: &AiState, h: impl Into<Foe>) -> Option<Contact> {
+    let h = h.into();
     st.contacts
         .iter()
         .flatten()
@@ -270,7 +321,7 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
         let gone = match slot {
             Some(c) => {
                 c.seen_now = false;
-                tick.saturating_sub(c.last_seen) > MEMORY_TICKS || sim.unit(c.handle).is_none()
+                tick.saturating_sub(c.last_seen) > MEMORY_TICKS || !alive(sim, c.handle)
             }
             None => false,
         };
@@ -284,7 +335,7 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
     //    index order on ties) and stops once six enemies are seen.
     //    Card TEAM: the candidates are the unit grid's within the farthest
     //    view distance (a standing body's), in unit-index order as before.
-    let mut cand: Vec<(f32, u32, UnitHandle, Vec3)> = Vec::new();
+    let mut cand: Vec<(f32, (u8, u64), Foe, Vec3)> = Vec::new();
     let mut near: Vec<u32> = Vec::new();
     sim.units_within(
         eye,
@@ -306,7 +357,18 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
         if d2 >= vd * vd {
             continue;
         }
-        cand.push((d2, h.index, h, p));
+        cand.push((d2, (0, u64::from(h.index)), Foe::Unit(h), p));
+    }
+    let droid_reach = droid_view_distance(tier.view_mult);
+    for d in &sim.droids {
+        if d.team == u.team || !d.alive() || !droid_admitted(sim, u, d) {
+            continue;
+        }
+        let off = d.pos - eye;
+        let d2 = off.dot(off);
+        if in_cone(view, off, d2, sim.omni_radius) && d2 < droid_reach * droid_reach {
+            cand.push((d2, (1, d.id), Foe::Droid(d.id), d.pos));
+        }
     }
     cand.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
     // The unit's own target is always ray-tested first, so a firefight never
@@ -322,12 +384,13 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
         if seen >= CONTACTS {
             break;
         }
+        let past = h.unit().unwrap_or(me);
         if los_seat(
             sim,
             eye,
             p,
-            past_mounts(sim, me, h),
-            past_buildings(sim, me, h),
+            past_mounts(sim, me, past),
+            past_buildings(sim, me, past),
         ) {
             see(st, h, tick, p);
             seen += 1;
@@ -358,13 +421,50 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
         let hit_me = u
             .last_hit
             .is_some_and(|(s, t)| s == h && tick.checked_sub(t).is_some_and(|d| d < THINK_PERIOD));
-        if (shot || hit_me) && hear(st, h, tick, o.soldier.pos, false) {
+        if (shot || hit_me) && hear(st, Foe::Unit(h), tick, o.soldier.pos, false) {
             heard += 1;
         }
     }
 
     let held = st.contacts.iter().flatten().count() as u8;
     (held, heard)
+}
+
+/// [`view_distance`] for a remote droid, by the same `(20·bound_radius + 30)
+/// × mult × vis` (B2 `FUN_002e3910`). PROVISIONAL as the soldier's is: the
+/// PS2's bound radius is the droid model's, ours the droid's collision sphere
+/// ([`crate::remote::RADIUS`]).
+pub fn droid_view_distance(view_mult: f32) -> f32 {
+    (20.0 * crate::remote::RADIUS + 30.0) * view_mult * VIS
+}
+
+/// Whether `h` is still there to be remembered: a live unit, or a live droid.
+pub fn alive(sim: &Sim, h: Foe) -> bool {
+    match h {
+        Foe::Unit(h) => sim.unit(h).is_some(),
+        Foe::Droid(id) => sim.live_droid(id).is_some(),
+    }
+}
+
+/// Where `h` is and how fast it moves: a unit's body centre, a droid's
+/// position.
+pub fn foe_motion(sim: &Sim, h: Foe) -> Option<(Vec3, Vec3)> {
+    match h {
+        Foe::Unit(h) => sim.unit(h).map(|o| (o.capsule().center(), o.soldier.vel)),
+        Foe::Droid(id) => sim.live_droid(id).map(|d| (d.pos, d.vel)),
+    }
+}
+
+/// The PS2's suitability test at the scan (B2 `FUN_002e3aa0` ->
+/// `FUN_002ac8f8`): a soldier takes a droid (kind 1, `EntityDroid`) by the
+/// soldier-against-soldier rule (`FUN_002abe18` = `FUN_002abd38`), which asks
+/// the weapon choice; a candidate no weapon it holds is suited to is not one.
+/// A seated unit is not asked, as it is not of a soldier.
+fn droid_admitted(sim: &Sim, u: &crate::unit::Unit, d: &crate::remote::Droid) -> bool {
+    u.mount.is_some()
+        || sim
+            .droid_class(d)
+            .is_some_and(|c| crate::ai::droid_suited(sim, u, c))
 }
 
 /// Card TEAM: a friend this near passes on what it sees (m; the bot
@@ -402,8 +502,8 @@ pub fn tell(sim: &Sim, me: UnitHandle, st: &mut AiState) -> u8 {
             continue;
         }
         for c in o.ai.contacts.iter().flatten().filter(|c| c.seen_now) {
-            if sim
-                .unit(c.handle)
+            if c.handle
+                .live_unit(sim)
                 .is_some_and(|e| e.team != u.team && e.cloak.visible())
                 && hear(st, c.handle, sim.tick, c.last_pos, true)
             {
@@ -428,10 +528,10 @@ fn restart_tracker(st: &mut AiState) {
 /// the interval and the hysteresis, as a new target is taken. Returns true
 /// when it was another target before.
 pub fn take_target(st: &mut AiState, h: UnitHandle, tick: u64) -> bool {
-    if st.target == Some(h) || contact_of(st, h).is_none() {
+    if st.target == Some(h.into()) || contact_of(st, h).is_none() {
         return false;
     }
-    st.target = Some(h);
+    st.target = Some(h.into());
     st.last_switch = tick;
     restart_tracker(st);
     true
@@ -439,7 +539,7 @@ pub fn take_target(st: &mut AiState, h: UnitHandle, tick: u64) -> bool {
 
 /// The slot for `h`: its own, else a free one, else the one whose record is
 /// oldest (lowest slot index on ties). A new slot starts the reaction timer.
-fn slot_for(st: &mut AiState, h: UnitHandle, tick: u64, pos: Vec3) -> usize {
+fn slot_for(st: &mut AiState, h: Foe, tick: u64, pos: Vec3) -> usize {
     if let Some(i) = st
         .contacts
         .iter()
@@ -466,7 +566,7 @@ fn slot_for(st: &mut AiState, h: UnitHandle, tick: u64, pos: Vec3) -> usize {
     i
 }
 
-fn see(st: &mut AiState, h: UnitHandle, tick: u64, pos: Vec3) {
+fn see(st: &mut AiState, h: Foe, tick: u64, pos: Vec3) {
     let i = slot_for(st, h, tick, pos);
     if let Some(c) = st.contacts[i].as_mut() {
         c.last_seen = tick;
@@ -482,7 +582,7 @@ fn see(st: &mut AiState, h: UnitHandle, tick: u64, pos: Vec3) {
 /// (the design's "seen_now stays false" for a heard record). Card TEAM: a
 /// `told` record (a friend's, [`tell`]) never overwrites one of the unit's
 /// own: its own memory of a target lapses as it would untold.
-fn hear(st: &mut AiState, h: UnitHandle, tick: u64, pos: Vec3, told: bool) -> bool {
+fn hear(st: &mut AiState, h: Foe, tick: u64, pos: Vec3, told: bool) -> bool {
     if contact_of(st, h).is_some_and(|c| c.seen_now || told && !c.told) {
         return false;
     }
@@ -530,18 +630,19 @@ pub fn choose_target_with(
     let scale = view_distance(Stance::Stand, tier.view_mult);
     let score = |c: &Contact| -> f32 {
         let d = (c.last_pos - eye).length();
-        let human = sim.unit(c.handle).is_some_and(|o| o.is_human());
+        let human = c.handle.live_unit(sim).is_some_and(|o| o.is_human());
         let base = (200.0 - 100.0 * d / scale) * if human { tier.pressure } else { 1.0 };
         if c.seen_now {
             // Card HVYW (OURS): a bot with a launcher prefers the vehicle.
-            base + sim
-                .unit(c.handle)
+            base + c
+                .handle
+                .live_unit(sim)
                 .map_or(0.0, |o| crate::ai::vehicle_bonus(sim, u, o))
         } else {
             base - 10.0 * c.age_s(tick)
         }
     };
-    let mut best: Option<(f32, UnitHandle)> = None;
+    let mut best: Option<(f32, Foe)> = None;
     for c in st.contacts.iter().flatten().filter(|c| keep(c.last_pos)) {
         let s = score(c);
         if best.is_none_or(|(bs, _)| s > bs) {
@@ -937,7 +1038,7 @@ mod tests {
             })
             .unwrap();
         s.units[f.index as usize].ai.contacts[0] = Some(Contact {
-            handle: e,
+            handle: e.into(),
             first_seen: 0,
             last_seen: 0,
             last_pos: Vec3::new(0.0, 0.9, 30.0),
@@ -1000,7 +1101,7 @@ mod tests {
     fn a_told_record_never_overwrites_the_units_own() {
         let (mut s, a, e, _) = told_scene(Vec3::new(15.0, 0.0, 0.0), true);
         let own = Contact {
-            handle: e,
+            handle: e.into(),
             first_seen: 1,
             last_seen: 2,
             last_pos: Vec3::new(3.0, 0.0, 28.0),
@@ -1019,7 +1120,7 @@ mod tests {
         assert_eq!(tell(&s, a, &mut st), 1);
         assert!(contact_of(&st, e).is_some_and(|c| c.told));
         // Seen, it is the unit's own again.
-        see(&mut st, e, s.tick + 1, Vec3::new(0.0, 0.9, 30.0));
+        see(&mut st, e.into(), s.tick + 1, Vec3::new(0.0, 0.9, 30.0));
         assert!(contact_of(&st, e).is_some_and(|c| c.seen_now && !c.told && !c.heard));
     }
 
@@ -1074,7 +1175,7 @@ mod tests {
                 }
                 if own {
                     st.contacts[0] = Some(Contact {
-                        handle: e,
+                        handle: e.into(),
                         first_seen: 5,
                         last_seen: t,
                         last_pos: Vec3::new(0.0, 0.9, 30.0),
@@ -1085,7 +1186,11 @@ mod tests {
                 }
                 think(&s, a, &mut st);
             }
-            assert_eq!(st.target, Some(e), "own {own}: the enemy is the target");
+            assert_eq!(
+                st.target,
+                Some(e.into()),
+                "own {own}: the enemy is the target"
+            );
             st.hold.is_some_and(|h| s.tick < h.until)
         };
         for cover in [true, false] {
@@ -1109,7 +1214,7 @@ mod tests {
             let (pad, _) = think(&s, a, &mut st);
             assert_eq!(pad.buttons & buttons::FIRE, 0, "no shot at tick {t}");
         }
-        assert_eq!(st.target, Some(e), "the told enemy is the target");
+        assert_eq!(st.target, Some(e.into()), "the told enemy is the target");
         let c = contact_of(&st, e).expect("still held");
         assert!(c.heard && !c.seen_now);
     }
@@ -1134,7 +1239,7 @@ mod tests {
             let (mut s, a, far, near) = build(second);
             s.tick = tick;
             let mut st = AiState {
-                target: Some(far),
+                target: Some(far.into()),
                 last_switch: 0,
                 ..Default::default()
             };
@@ -1143,7 +1248,7 @@ mod tests {
             // mean anything.
             assert!(contact_of(&st, far).is_some());
             choose_target(&s, a, &mut st, normal());
-            (st.target == Some(near), far, near)
+            (st.target == Some(near.into()), far, near)
         };
         let (switched, ..) = run(gap(9.0), RETARGET_TICKS);
         assert!(!switched, "+9 points does not beat +10 hysteresis");
@@ -1155,13 +1260,17 @@ mod tests {
         let (mut s, a, far, near) = build(gap(11.0));
         s.units[far.index as usize].alive = false;
         let mut st = AiState {
-            target: Some(far),
+            target: Some(far.into()),
             last_switch: 0,
             ..Default::default()
         };
         scan(&s, a, &mut st, normal());
         choose_target(&s, a, &mut st, normal());
-        assert_eq!(st.target, Some(near), "a lost target is replaced at once");
+        assert_eq!(
+            st.target,
+            Some(near.into()),
+            "a lost target is replaced at once"
+        );
     }
 
     /// The PRESSURE weight (decision 3): at Hard a human is worth ×1.3, so a
@@ -1190,9 +1299,9 @@ mod tests {
             (st.target, bot, human)
         };
         let (t, bot, _) = pick(normal());
-        assert_eq!(t, Some(bot), "Normal takes the nearer bot");
+        assert_eq!(t, Some(bot.into()), "Normal takes the nearer bot");
         let (t, _, human) = pick(Difficulty::Hard.tier());
-        assert_eq!(t, Some(human), "Hard leans on the human");
+        assert_eq!(t, Some(human.into()), "Hard leans on the human");
     }
 
     /// A unit that LOSES sight aims at the last known position and does not
@@ -1219,7 +1328,7 @@ mod tests {
         ));
         s.tick += THINK_PERIOD;
         let (pad, _) = think(&s, a, &mut st);
-        assert_eq!(st.target, Some(e), "still the target");
+        assert_eq!(st.target, Some(e.into()), "still the target");
         let c = contact_of(&st, e).unwrap();
         assert!(!c.seen_now, "out of sight");
         assert_eq!(pad.buttons & buttons::FIRE, 0, "never fires at a memory");
@@ -1268,7 +1377,11 @@ mod tests {
         probe(&mut s, "last_pos", &|c| c.last_pos.x += 1.0);
         probe(&mut s, "seen_now", &|c| c.seen_now = !c.seen_now);
         probe(&mut s, "heard", &|c| c.heard = !c.heard);
-        probe(&mut s, "handle", &|c| c.handle.gen += 1);
+        probe(&mut s, "handle", &|c| {
+            if let Foe::Unit(h) = &mut c.handle {
+                h.gen += 1
+            }
+        });
         // ... the empty slot's sentinel: dropping a contact must move it too.
         let keep = s.units[a.index as usize].ai.contacts[0];
         s.units[a.index as usize].ai.contacts[0] = None;
@@ -1283,7 +1396,7 @@ mod tests {
         s.units[a.index as usize].last_hit = None;
         assert_eq!(s.hash(), with_contact, "both restored");
         // ... and the target / last_switch pair.
-        s.units[a.index as usize].ai.target = Some(e);
+        s.units[a.index as usize].ai.target = Some(e.into());
         let with_target = s.hash();
         assert_ne!(with_target, with_contact, "the target is state");
         s.units[a.index as usize].ai.last_switch = 7;

@@ -670,7 +670,7 @@ mod tests {
         };
         let ally = spawn(&mut w, mine, 10.0);
         let enemy = spawn(&mut w, 1 - mine, 30.0);
-        w.sim.units[ally.index as usize].ai.target = Some(enemy);
+        w.sim.units[ally.index as usize].ai.target = Some(enemy.into());
         let mut v = Commander::new(
             BattleLines::default(),
             ["rep", "cis"],

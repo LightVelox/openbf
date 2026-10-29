@@ -18,7 +18,7 @@ fn field(d: Difficulty, dists: &[f32]) -> (Sim, UnitHandle, Vec<UnitHandle>) {
                     ..UnitSpec::trooper(1, Vec3::new(0.0, 0.0, -z))
                 })
                 .expect("bot");
-            sim.unit_mut(h).expect("alive").ai.target = Some(human);
+            sim.unit_mut(h).expect("alive").ai.target = Some(human.into());
             h
         })
         .collect();
@@ -244,7 +244,7 @@ fn a_human_in_a_vehicle_gets_token_holders() {
         !crate::perception::los(&sim, eye, c),
         "the hull is in the way"
     );
-    sim.unit_mut(bot).expect("alive").ai.target = Some(rider);
+    sim.unit_mut(bot).expect("alive").ai.target = Some(rider.into());
     deal(&mut sim);
     assert!(holds(&sim, bot, rider));
     assert!(!bars(&sim, bot, rider));

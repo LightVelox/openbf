@@ -174,7 +174,7 @@ pub fn remembers(sim: &Sim, bot: UnitHandle, human: UnitHandle) -> bool {
         return false;
     };
     on_against(sim, h.team)
-        && b.ai.target == Some(human)
+        && b.ai.target == Some(human.into())
         && own(&b.ai, human, sim.tick).is_some_and(|c| {
             reach(sim, b, h).is_some_and(|r| (c.last_pos - b.muzzle()).length() <= r)
         })
@@ -210,7 +210,7 @@ pub fn pick(sim: &Sim, me: UnitHandle, st: &crate::ai::AiState) -> Option<UnitHa
 /// Where a focuser that lost sight of its target walks: his last seen
 /// point, when within [`PUSH`] of `pos`.
 pub fn push(sim: &Sim, me: UnitHandle, st: &crate::ai::AiState, pos: Vec3) -> Option<Vec3> {
-    let h = st.target?;
+    let h = st.target?.unit()?;
     if pick(sim, me, st) != Some(h) {
         return None;
     }

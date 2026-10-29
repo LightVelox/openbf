@@ -632,7 +632,7 @@ fn get_out_autonomous_turret_offer_honors_the_same_deadline() {
     s.tick = 600; // Last scheduled turret offer before take9 + 600.
     let last_pos = s.unit(enemy).unwrap().capsule().center();
     s.unit_mut(bot).unwrap().ai.contacts[0] = Some(crate::perception::Contact {
-        handle: enemy,
+        handle: enemy.into(),
         first_seen: 600,
         last_seen: 600,
         last_pos,

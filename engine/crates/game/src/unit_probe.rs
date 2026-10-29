@@ -9,6 +9,7 @@
 //! indices — so a ring of rows allocates nothing per sample.
 
 use core::ai::{SteerPick, StopKind};
+use core::perception::Foe;
 use core::sim::Sim;
 use core::unit::{Unit, UnitHandle};
 use glam::Vec3;
@@ -218,6 +219,9 @@ pub struct Probe {
     /// The enemy it has (a unit slot) and the range to it.
     pub target: i32,
     pub target_d: f32,
+    /// The remote droid it has as its enemy instead (its id).
+    #[serde(default)]
+    pub target_droid: Option<u64>,
     /// Ticks into the progress window, ticks in windows without progress,
     /// ticks the no-net-progress watch has run (card RCYC).
     pub stuck_t: u16,
@@ -257,7 +261,7 @@ pub const LEGEND: &[(&str, &str)] = &[
     ("hold", "2 holding a position, 1 owing hubs, 0 no"),
     ("hold_goal/hold_spot/hold_left/hold_side/hold_commit/hold_blocked", "a hold (hold 2): where it stands or steps to now, the position taken, seconds of dwell left, the side the last strafe went (0 none yet), seconds the goal is still committed, ticks the steering was turned off the line to the goal"),
     ("fmode/tpos/tpos_at/tpos_bits/tpos_hits/tpos_phase", "card TPOS: the fight's mode (0 none 1 stand 2 walk 3 pause 4 move 5 take = walking to a Tactician's position 6 cover = at it); the position held (table index, null none) and its point; bits 1 covered from the target, 2 firing, 4 lean -1, 8 lean +1; hits taken at it; seconds to the phase's end (the hide / fire swap, or the walk's deadline)"),
-    ("target/target_d", "the enemy unit slot and range"),
+    ("target/target_d/target_droid", "the enemy unit slot (or remote droid id) and range"),
     ("stuck_t/stuck/stall", "ticks (30/s): progress window, no-progress run, no-net-progress watch"),
     ("lost/lost_tries", "off the level: 1 suspected 2 confirmed; jump tries"),
     ("board/board_at", "vehicle slot it walks to board and where that vehicle is"),
@@ -421,12 +425,20 @@ impl Probe {
                 .tpos
                 .held
                 .map_or(0.0, |_| secs_to(u.ai.tpos.phase_until)),
-            target: u.ai.target.map_or(-1, |t| t.index as i32),
+            target: u
+                .ai
+                .target
+                .and_then(|t| t.unit())
+                .map_or(-1, |t| t.index as i32),
             target_d: u
                 .ai
                 .target
-                .and_then(|t| sim.unit(t))
-                .map_or(-1.0, |t| t.soldier.pos.distance(p)),
+                .and_then(|t| match t {
+                    Foe::Unit(h) => sim.unit(h).map(|o| o.soldier.pos),
+                    Foe::Droid(id) => sim.live_droid(id).map(|d| d.pos),
+                })
+                .map_or(-1.0, |t| t.distance(p)),
+            target_droid: u.ai.target.and_then(|t| t.droid()),
             stuck_t: r.map_or(0, |r| r.stuck_ticks),
             stuck: r.map_or(0, |r| r.stuck_run),
             stall: u.ai.stall.map_or(0, |s| s.ticks),

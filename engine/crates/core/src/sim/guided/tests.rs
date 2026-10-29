@@ -230,7 +230,7 @@ fn bot_steers_a_rocket_and_all_state_replays_from_recorded_pads() {
         .spawn(&UnitSpec::trooper(1, Vec3::new(20.0, 0.0, -30.0)))
         .unwrap();
     a.unit_mut(owner).unwrap().controller = Controller::Ai;
-    a.unit_mut(owner).unwrap().ai.target = Some(target);
+    a.unit_mut(owner).unwrap().ai.target = Some(target.into());
     a.guided[0].rot = glam::Quat::IDENTITY;
     assert!(a.bot_guided_pad(0).unwrap().rx > 0);
     let hash = a.hash();

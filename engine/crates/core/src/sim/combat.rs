@@ -192,7 +192,10 @@ impl Sim {
                 // beside him; a bolt that meets him anyway is real (counted).
                 if crate::ai::tokn::bars(self, b.owner, h) {
                     self.nav_stats.tokn_stray += 1;
-                    if self.unit(b.owner).is_some_and(|o| o.ai.target != Some(h)) {
+                    if self
+                        .unit(b.owner)
+                        .is_some_and(|o| o.ai.target != Some(h.into()))
+                    {
                         self.nav_stats.tokn_cross += 1;
                     }
                 }

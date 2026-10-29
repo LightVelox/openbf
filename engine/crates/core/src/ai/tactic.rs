@@ -975,6 +975,7 @@ pub(super) fn choose(
     // Card DFOCUS: a fellow focuser's bearing from the human it focuses.
     let fellows = st
         .target
+        .and_then(|t| t.unit())
         .map_or_else(Vec::new, |h| crate::ai::dfocus::fellows(sim, me, h, aim));
     // A teammate's position or body within SPREAD, or (card DFOCUS) a
     // position on a fellow focuser's line of approach.
