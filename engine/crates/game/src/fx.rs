@@ -25,7 +25,8 @@
 //! blast at or below the water + 0.3 m spawns `WaterEffect` instead of
 //! `Effect`; a round in flight carries its `TrailEffect` (`trail.rs`); a
 //! soldier in a jet stance carries his class's `JetEffect` (`jet.rs`).
-//! Still to come: the vehicles' own Damage / Chunk / Thrust / Wake / Stomp
+//! Cosmetic droid and vehicle chunks launch separately (`chunks`, named deviations
+//! in FEEL_NOTES). Still to come: vehicle Damage / ChunkTrail / Thrust / Wake / Stomp
 //! effects.
 //!
 //! The muzzle flash is not a particle effect (§7): it is a model the held
@@ -40,6 +41,7 @@
 
 mod abilities;
 mod children;
+mod chunks;
 pub mod draw;
 pub mod emitter;
 mod jet;
@@ -217,6 +219,7 @@ pub struct Library {
     effects: HashMap<u32, Arc<EffectDef>>,
     /// The layers' `textures/` dirs, map first.
     texture_dirs: Vec<PathBuf>,
+    model_dirs: Vec<PathBuf>,
 }
 
 impl Library {
@@ -266,6 +269,7 @@ impl Library {
             era,
             effects,
             texture_dirs: Vec::new(),
+            model_dirs: Vec::new(),
         }
     }
 
@@ -307,7 +311,17 @@ impl Library {
             }
         }
         let mut lib = Library::from_sets(era, sets, &mut Lcg(0x5eed_f00d));
+        lib.model_dirs = dirs.iter().map(|d| d.join("models")).collect();
         lib.texture_dirs = dirs.iter().map(|d| d.join("textures")).collect();
+        let side = assets_dir.join(format!("side_{game}"));
+        lib.model_dirs.push(side.join("weapons"));
+        lib.texture_dirs.push(side.join("textures"));
+        let mut vehicles = pak::read_dir(side.join("vehicles")).unwrap_or_default();
+        vehicles.sort();
+        for v in vehicles {
+            lib.model_dirs.push(v.join("models"));
+            lib.texture_dirs.push(v.join("textures"));
+        }
         lib
     }
 
@@ -440,6 +454,16 @@ impl LiveEffect {
         texture: &mut dyn FnMut(&str) -> Option<TextureHandle>,
         out: &mut Vec<ParticleDraw>,
     ) {
+        self.draws_with(eye, forward, &mut TextureOnly(texture), out);
+    }
+
+    fn draws_with(
+        &self,
+        eye: Vec3,
+        forward: Vec3,
+        assets: &mut dyn FxAssets,
+        out: &mut Vec<ParticleDraw>,
+    ) {
         let era = self.def.era;
         let d = (self.frame.pos - eye).dot(forward);
         for (i, inst) in self.instances.iter().enumerate() {
@@ -452,7 +476,7 @@ impl LiveEffect {
                 continue;
             }
             if em.geometry.kind == manifest::FxType::Emitter {
-                children::draw(self, i, era, eye, forward, texture, out);
+                children::draw(self, i, era, eye, forward, assets, out);
                 continue;
             }
             let ps = inst.particles(em, era, self.t, self.frame, self.def.cache(i), |k| {
@@ -465,9 +489,109 @@ impl LiveEffect {
                 .geometry
                 .texture
                 .as_deref()
-                .and_then(|n| texture(&n.to_ascii_lowercase()));
-            draw::emitter_draws(em, era, &ps, terms, self.frame.pos, eye, forward, tex, out);
+                .and_then(|n| assets.texture(&n.to_ascii_lowercase()));
+            if em.geometry.kind == manifest::FxType::Geometry {
+                if let Some(model) = em
+                    .geometry
+                    .model
+                    .as_deref()
+                    .and_then(|n| assets.model(&n.to_ascii_lowercase()))
+                {
+                    for p in &ps {
+                        if p.rgba[3] > 0.0 {
+                            model.draws(
+                                draw::geometry_matrix(p),
+                                draw::bytes(p, terms.alpha(p.idx)),
+                                self.frame.pos,
+                                em.geometry.blend == manifest::FxBlend::Additive,
+                                out,
+                            );
+                        }
+                    }
+                }
+            } else {
+                draw::emitter_draws(em, era, &ps, terms, self.frame.pos, eye, forward, tex, out);
+            }
         }
+    }
+}
+
+trait FxAssets {
+    fn texture(&mut self, name: &str) -> Option<TextureHandle>;
+    fn model(&mut self, name: &str) -> Option<Arc<draw::EffectModel>>;
+}
+
+struct TextureOnly<'a>(&'a mut dyn FnMut(&str) -> Option<TextureHandle>);
+impl FxAssets for TextureOnly<'_> {
+    fn texture(&mut self, name: &str) -> Option<TextureHandle> {
+        (self.0)(name)
+    }
+    fn model(&mut self, _: &str) -> Option<Arc<draw::EffectModel>> {
+        None
+    }
+}
+
+struct Lookup<'a> {
+    r: &'a mut Renderer,
+    lib: &'a Library,
+    textures: &'a mut HashMap<String, Option<TextureHandle>>,
+    models: &'a mut HashMap<String, Option<Arc<draw::EffectModel>>>,
+}
+
+impl FxAssets for Lookup<'_> {
+    fn texture(&mut self, name: &str) -> Option<TextureHandle> {
+        sheet(self.r, &self.lib.texture_dirs, self.textures, name)
+    }
+
+    /// `<layer>/models/<name>.glb` from the first layer that holds it, its
+    /// sheets from any layer; None (once, with a line) when none does.
+    fn model(&mut self, name: &str) -> Option<Arc<draw::EffectModel>> {
+        if let Some(m) = self.models.get(name) {
+            return m.clone();
+        }
+        let file = format!("{name}.glb");
+        let glb = self
+            .lib
+            .model_dirs
+            .iter()
+            .map(|d| d.join(&file))
+            .find(|p| pak::exists(p));
+        let cpu = match glb.as_deref().map(crate::assets::load_glb) {
+            Some(Ok(c)) => Some(c),
+            Some(Err(e)) => {
+                eprintln!("effect model {name}: {e:#} (drawn as nothing)");
+                None
+            }
+            None => {
+                eprintln!("effect model {name}: in no layer (drawn as nothing)");
+                None
+            }
+        };
+        let m = cpu.map(|cpu| {
+            let mut parts = Vec::new();
+            for (start, count, material, _, _) in &cpu.submeshes {
+                let tex = sheet(
+                    self.r,
+                    &self.lib.texture_dirs,
+                    self.textures,
+                    &material.to_ascii_lowercase(),
+                );
+                let tris = cpu.indices[*start as usize..(*start + *count) as usize]
+                    .iter()
+                    .map(|&i| {
+                        let i = i as usize;
+                        (
+                            Vec3::from(cpu.positions[i]),
+                            cpu.uvs.get(i).copied().unwrap_or([0.0; 2]),
+                        )
+                    })
+                    .collect();
+                parts.push((tex, tris));
+            }
+            Arc::new(draw::EffectModel { parts })
+        });
+        self.models.insert(name.to_owned(), m.clone());
+        m
     }
 }
 
@@ -508,6 +632,7 @@ pub struct Fx {
     live: Vec<LiveEffect>,
     rng: Option<Lcg>,
     textures: HashMap<String, Option<TextureHandle>>,
+    models: HashMap<String, Option<Arc<draw::EffectModel>>>,
     /// The `SoundName` of each effect an explosion spawned since the last
     /// [`Fx::take_sounds`], and where (card WSND).
     sounds: Vec<(String, Vec3)>,
@@ -515,6 +640,7 @@ pub struct Fx {
     /// The drawn jet frames by unit index ([`Fx::set_jet_frames`]).
     jet_frames: Vec<Option<Mat4>>,
     water: ripple::Water,
+    chunks: chunks::Chunks,
 }
 
 impl std::fmt::Debug for Fx {
@@ -547,7 +673,25 @@ impl Fx {
             walk.teams[0].faction.as_str(),
             walk.teams[1].faction.as_str(),
         ];
-        Fx::load(assets_dir, map_dir, game, &factions)
+        let mut fx = Fx::load(assets_dir, map_dir, game, &factions);
+        if let (Some(lib), Ok(mut db)) = (
+            fx.library.as_ref(),
+            crate::roster::load_classdb(&assets_dir.join("classes"), game, &factions),
+        ) {
+            if let Err(e) = db.load_map(map_dir) {
+                eprintln!("chunk classes: {e:#}");
+            }
+            let mut names = walk.vehicle_classes.clone();
+            names.extend(
+                walk.teams
+                    .iter()
+                    .flat_map(|t| t.classes.iter().map(|c| c.name.clone())),
+            );
+            names.sort();
+            names.dedup();
+            fx.chunks = chunks::Chunks::load(&db, &names, &lib.model_dirs);
+        }
+        fx
     }
 
     pub fn library(&self) -> Option<&Library> {
@@ -690,7 +834,7 @@ impl Fx {
         &self.live
     }
 
-    /// Upload every sheet the library's effects can draw (card HITCH): at the
+    /// Upload every sheet and model the library’s effects can draw (card HITCH): at the
     /// battle's load, so no effect's first spawn reads a file and makes a
     /// texture inside a frame. Returns how many were wanted.
     pub fn preload(&mut self, r: &mut Renderer) -> usize {
@@ -698,6 +842,7 @@ impl Fx {
             return 0;
         };
         let mut names: Vec<String> = Vec::new();
+        let mut models: Vec<String> = self.chunks.models().map(str::to_ascii_lowercase).collect();
         for def in lib.effects.values() {
             let mut next: Vec<&FxEmitter> = def.emitters.iter().collect();
             while let Some(em) = next.pop() {
@@ -706,6 +851,9 @@ impl Fx {
                     if !names.contains(&n) {
                         names.push(n);
                     }
+                }
+                if let Some(n) = &em.geometry.model {
+                    models.push(n.to_ascii_lowercase());
                 }
                 next.extend(em.sibling.as_deref());
                 next.extend(em.geometry.child.as_deref());
@@ -717,6 +865,17 @@ impl Fx {
         names.sort();
         for n in &names {
             sheet(r, &lib.texture_dirs, &mut self.textures, n);
+        }
+        models.sort();
+        models.dedup();
+        let mut assets = Lookup {
+            r,
+            lib,
+            textures: &mut self.textures,
+            models: &mut self.models,
+        };
+        for name in models {
+            assets.model(&name);
         }
         names.len()
     }
@@ -741,13 +900,17 @@ impl Fx {
         let mut out = extra;
         let lift = self.ride_the_water(crate::water_anim::clock(r.water_time) as f32);
         if let Some(lib) = &self.library {
-            let cache = &mut self.textures;
-            let dirs = &lib.texture_dirs;
-            let mut texture = |name: &str| sheet(r, dirs, cache, name);
+            let mut assets = Lookup {
+                r,
+                lib,
+                textures: &mut self.textures,
+                models: &mut self.models,
+            };
             for e in &self.live {
-                e.draws(camera.position, camera.forward(), &mut texture, &mut out);
+                e.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
             }
-            let sheet = texture(ripple::TEXTURE);
+            self.chunks.draws(&mut assets, &mut out);
+            let sheet = assets.texture(ripple::TEXTURE);
             self.water.draws(camera.position, lift, sheet, &mut out);
         }
         r.set_particles(out);
@@ -756,6 +919,7 @@ impl Fx {
     /// Read this tick's sim events into effects.
     pub fn ingest(&mut self, walk: &WalkSim) {
         self.ingest_sim(&walk.sim);
+        self.chunks.tick(walk);
         self.follow_jets(&walk.sim, |u| {
             walk.teams[usize::from(u.team).min(1)]
                 .class(u.spec.class)
@@ -1032,7 +1196,7 @@ impl Fx {
 
     /// Live placeholder puffs plus running particle effects.
     pub fn len(&self) -> usize {
-        self.puffs.len() + self.live.len()
+        self.puffs.len() + self.live.len() + self.chunks.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1045,6 +1209,7 @@ impl Fx {
         self.sounds.clear();
         self.rounds = trail::Rounds::default();
         self.water.clear();
+        self.chunks.clear();
     }
 
     /// Camera-facing quads for the live effects. `quad` is the unit quad from
@@ -1110,6 +1275,83 @@ mod tests {
 
     mod jet;
     mod resupply;
+
+    #[test]
+    fn geometry_and_child_geometry_draw_meshes_with_the_particle_transform() {
+        let root = crate::assets::baked_root();
+        let lib = Library::load(&root, &root.join("bf2_geo1"), "bf2", &["rep", "cis"]);
+        let mut em = lib
+            .effects
+            .values()
+            .flat_map(|d| &d.emitters)
+            .find(|e| e.geometry.kind == manifest::FxType::Geometry)
+            .expect("real geometry emitter bake")
+            .clone();
+        let zero = manifest::FxRange(0.0, 0.0);
+        let one = manifest::FxRange(1.0, 0.0);
+        em.start_delay = zero;
+        em.burst_delay = zero;
+        em.burst_count = one;
+        em.max_particles = one;
+        em.size = one;
+        em.color = [one; 4];
+        em.spawner.size = manifest::FxRange(2.0, 0.0);
+        em.spawner.shape = manifest::FxShape::None;
+        em.spawner.offset = [zero; 3];
+        em.spawner.velocity_scale = zero;
+        em.spawner.inherit_velocity_factor = zero;
+        em.spawner.start_rotation = manifest::FxRange(std::f32::consts::FRAC_PI_2, 0.0);
+        em.spawner.rotation_velocity = zero;
+        em.spawner.fade_in_time = 0.0;
+        em.spawner.color = [one; 4];
+        em.spawner.hsv = false;
+        em.world_aligned = false;
+        em.transformer.position.clear();
+        em.transformer.size.clear();
+        em.transformer.rotation.clear();
+        em.transformer.color.clear();
+        em.transformer.lifetime = 5.0;
+        em.geometry.model = Some("fixture".into());
+        em.geometry.child = None;
+        em.sibling = None;
+        struct Assets;
+        impl FxAssets for Assets {
+            fn texture(&mut self, _: &str) -> Option<TextureHandle> {
+                None
+            }
+            fn model(&mut self, _: &str) -> Option<Arc<draw::EffectModel>> {
+                Some(Arc::new(draw::EffectModel {
+                    parts: vec![(None, vec![(Vec3::X, [0.0; 2]); 3])],
+                }))
+            }
+        }
+        for nested in [false, true] {
+            let mut root = em.clone();
+            if nested {
+                root.geometry.kind = manifest::FxType::Emitter;
+                root.geometry.child = Some(Box::new(em.clone()));
+            }
+            let def = Arc::new(EffectDef::new(1, None, vec![root], Era::Bf2, &mut Lcg(1)));
+            let mut effect = LiveEffect::new(def, Frame::at(Vec3::ZERO), &mut Lcg(1));
+            effect.advance(0.5);
+            let mut out = Vec::new();
+            effect.draws_with(
+                Vec3::new(0.0, 0.0, 10.0),
+                Vec3::NEG_Z,
+                &mut Assets,
+                &mut out,
+            );
+            assert_eq!(out.len(), 1, "nested={nested}");
+            let render::ParticleShape::Mesh { tris } = &out[0].shape else {
+                panic!("geometry became a sprite")
+            };
+            assert!(
+                (tris[0].0 - Vec3::new(0.0, 0.0, -2.0)).length() < 0.00001,
+                "raw radians, size without sprite multiplier: {:?}",
+                tris[0].0
+            );
+        }
+    }
 
     fn puff(kind: Kind) -> Puff {
         Puff {

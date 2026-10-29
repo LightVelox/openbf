@@ -495,6 +495,9 @@ mod tests {
             "gallery.rs",
             "sounds.rs",
             "water_anim.rs",
+            // Effect triangles and cosmetic debris never write simulation state.
+            "fx/draw.rs",
+            "fx/chunks.rs",
             // The soldier animator poses what the sim decided; it holds no
             // `Sim` and nothing reads a pose back (card ANIML).
             "animator.rs",

@@ -667,3 +667,5 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `core/src/sim/droid_death/tests.rs` 330 — Card DROIDDEATH's referees (`analysis/re-droid-death.md`): the death roll's 6 in 10 with no damage threshold, the push roll's mark, the burst
 - `core/src/sim/guided/tests.rs` 373 — guided launch, control, collision, detonation and hand-back tests.
 - `game/tests/suite/guided_rockets.rs` — all 14 inherited guided launchers, award gating, camera/interpolation restoration, smooth mouse/controller turning at 60/75/144 Hz and all-side/map-local equipment census.
+
+- `game/src/fx/chunks.rs` 450 — cosmetic droid and vehicle chunk launch, bounded pool and floor contacts.

@@ -431,6 +431,8 @@ struct Burst {
 /// One evaluated particle, in the world.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Particle {
+    /// Rotation of the emitter node at this particle’s birth.
+    pub basis: Mat3,
     pub pos: Vec3,
     pub vel: Vec3,
     pub size: f32,
@@ -666,6 +668,7 @@ impl Instance {
         let s = self.size;
         let (pos, vel) = position_chain(&tr.position, pos, vel, age, s);
         let size = size_chain(&tr.size, v.size * s, age);
+        let basis = rot;
         let rot = rotation_chain(&tr.rotation, rot0, v.rotvel, age);
         let mut rgba = color_chain(&tr.color, rgba, age);
         for (c, m) in rgba.iter_mut().zip(self.rgba) {
@@ -683,6 +686,7 @@ impl Instance {
             None
         };
         Some(Particle {
+            basis,
             pos,
             vel,
             size,

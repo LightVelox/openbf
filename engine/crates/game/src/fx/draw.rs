@@ -29,14 +29,16 @@
 //!   nothing), half-width size′, U = the particle's rotation; no thinning,
 //!   no distance alpha. Its colour is the newest point's — PROVISIONAL (the
 //!   PS2 colours each vertex).
-//! - **GEOMETRY** — not drawn yet (card FXP2's resume).
+//! - **GEOMETRY** (§6.6): the cached model at T(pos)·basis·R_y(raw radians)·S(size),
+//!   with the particle tint and fade, no sprite size multiplier. The caller
+//!   resolves its model and blend; children share that resolver.
 //!
 //! Colour (§6.8): HSV → RGB, then bytes `(int)(c·255)` — clamped here where
 //! the PS2 byte wraps past 1.0. The per-view fades are taken against one
 //! camera (the first view) for every view.
 
 use super::emitter::{hsv_to_rgb, Era, Particle};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use manifest::{FxBlend, FxEmitter, FxType};
 use render::{ParticleDraw, ParticleShape, TextureHandle};
 
@@ -154,6 +156,51 @@ const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 fn cell_4x4(f: u32) -> [f32; 4] {
     let (u, v) = ((f & 3) as f32 * 0.25, ((f >> 2) & 3) as f32 * 0.25);
     [u, v, u + 0.25, v + 0.25]
+}
+
+/// A GEOMETRY emitter's model: its triangles in model space, one list per
+/// sheet (`<layer>/models/<name>.glb`).
+#[derive(Debug, Clone, Default)]
+pub struct EffectModel {
+    pub parts: Vec<(Option<TextureHandle>, crate::soldier_vis::Tris)>,
+}
+
+impl EffectModel {
+    /// The model placed by `m`, one draw per sheet.
+    pub fn draws(
+        &self,
+        m: Mat4,
+        color: [u8; 4],
+        key: Vec3,
+        additive: bool,
+        out: &mut Vec<ParticleDraw>,
+    ) {
+        for (tex, tris) in &self.parts {
+            out.push(ParticleDraw {
+                shape: ParticleShape::Mesh {
+                    tris: tris
+                        .iter()
+                        .map(|(p, uv)| (m.transform_point3(*p), *uv))
+                        .collect(),
+                },
+                key,
+                color,
+                texture: *tex,
+                additive,
+            });
+        }
+    }
+}
+
+/// A GEOMETRY particle's model matrix (§6.6): `T(pos)·basis·R_y(rot)·S(size)`
+/// — B1 245040–245110 builds the rows (cos·s, 0, −sin·s), (0, s, 0),
+/// (sin·s, 0, cos·s), multiplies them by the node's rotation rows and puts
+/// the particle's position in the last row.
+pub fn geometry_matrix(p: &Particle) -> Mat4 {
+    Mat4::from_translation(p.pos)
+        * Mat4::from_mat3(p.basis)
+        * Mat4::from_rotation_y(p.rot)
+        * Mat4::from_scale(Vec3::splat(p.size))
 }
 
 /// One emitter instance's particles as draws, `origin` its frame's
@@ -347,6 +394,7 @@ mod tests {
         assert_eq!(cell_4x4(6), [0.5, 0.25, 0.75, 0.5]);
         assert_eq!(cell_4x4(16), cell_4x4(0), "f & 15");
         let p = Particle {
+            basis: glam::Mat3::IDENTITY,
             pos: Vec3::ZERO,
             vel: Vec3::ZERO,
             size: 1.0,
@@ -359,6 +407,7 @@ mod tests {
         };
         assert_eq!(bytes(&p, 0.5), [255, 0, 0, 127]);
         let p = Particle {
+            basis: glam::Mat3::IDENTITY,
             rgba: [1.5, 0.5, -1.0, 1.0],
             hsv: false,
             ..p

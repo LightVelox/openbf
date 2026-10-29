@@ -2,9 +2,9 @@
 //! Sampling, sibling offsets and parent bounds reproduce the authored PS2
 //! emitter traversal; these particles affect drawing, never simulation state.
 
-use super::{Era, Frame, Lcg, LiveEffect};
+use super::{Era, Frame, FxAssets, Lcg, LiveEffect};
 use glam::{Mat3, Vec3};
-use render::{ParticleDraw, TextureHandle};
+use render::ParticleDraw;
 
 const PARENTS: u32 = 31;
 const STEP: f32 = 0.3;
@@ -90,7 +90,7 @@ pub(super) fn draw(
     era: Era,
     eye: Vec3,
     forward: Vec3,
-    texture: &mut dyn FnMut(&str) -> Option<TextureHandle>,
+    assets: &mut dyn FxAssets,
     out: &mut Vec<ParticleDraw>,
 ) {
     let Some(def) = &effect.def.children[index] else {
@@ -121,6 +121,6 @@ pub(super) fn draw(
             child_inst.update_path(child_em, now, false, |time| frame_at(&nodes, time));
             child_inst.rgba = parent.rgba;
         }
-        child.draws(eye, forward, texture, out);
+        child.draws_with(eye, forward, assets, out);
     }
 }
