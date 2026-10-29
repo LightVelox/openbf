@@ -12,6 +12,10 @@ recompiles and re-packs):
   5. bake every asset                           -> engine/assets_baked/    (rebake.sh)
   6. copy the game, strip the copy, append assets_baked/ + missions/  -> --out
 
+A readable source summary and <output>.sources.json list inputs read this run,
+unused optional inputs and stored map-local texture provenance. Cached data is
+labelled separately; unsupported inputs are never claimed as consumed.
+
 The result plays from anywhere with nothing beside it. It holds the games' own
 content, so it is for your machine only: never upload or share it. Needs
 cargo, python3, bash and ffmpeg (the bake encodes speech to OGG); `strip` is
@@ -22,11 +26,13 @@ runs the bake; the output is dist/openbf.exe).
 import argparse
 import glob
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE = os.path.join(ROOT, "engine")
@@ -138,6 +144,140 @@ def missing_music():
     return out
 
 
+RON_STRING = r'"(?:\\.|[^"\\])*"'
+
+
+def ron_array(text, key, required=False):
+    """Read one generated RON array, preserving quoted brackets and escapes."""
+    match = re.search(r'\b' + re.escape(key) + r'\s*:\s*\[', text)
+    if not match:
+        if required:
+            raise ValueError(f"missing {key} array")
+        return ""
+    start, depth, quoted, escaped = match.end(), 1, False, False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char == '[':
+            depth += 1
+        elif char == ']':
+            depth -= 1
+            if depth == 0:
+                return text[start:index]
+    raise ValueError(f"unterminated {key} array")
+
+
+def map_texture_sources(baked):
+    """Stored map-local provenance, not a claim about files read this run."""
+    maps = []
+    pair = r'\(\s*(' + RON_STRING + r')\s*,\s*(' + RON_STRING + r')\s*,?\s*\)'
+    for manifest in sorted(Path(baked).glob('*/manifest.ron')):
+        row = {"map": manifest.parent.name}
+        try:
+            text = manifest.read_text(encoding="utf-8")
+            game = re.search(r'\bsource_game\s*:\s*(' + RON_STRING + ')', text)
+            game = json.loads(game[1]) if game else None
+            if game not in ("bf1", "bf2"):
+                raise ValueError("unrecognized source_game")
+            raw = ron_array(text, "textures", required=True)
+            names = [json.loads(m) for m in re.findall(RON_STRING, raw)]
+            if re.sub(RON_STRING, '', raw).strip(' \r\n\t,'):
+                raise ValueError("unrecognized textures array")
+            raw = ron_array(text, "texture_tiers")
+            tiers = [(json.loads(a), json.loads(b)) for a, b in re.findall(pair, raw)]
+            if re.sub(pair, '', raw).strip(' \r\n\t,'):
+                raise ValueError("unrecognized texture_tiers array")
+            textures = manifest.parent / 'textures'
+            row.update(source_game=game, base_source=f"{game} PS2",
+                       base_textures=sum((textures / f'{n.lower()}.ktx2').is_file() for n in set(names)),
+                       missing_base_textures=sorted(n for n in set(names) if not (textures / f'{n.lower()}.ktx2').is_file()),
+                       pc_alternatives=sorted({n for n, source in tiers if source == 'pc' and (textures / f'{n}.tier2.ktx2').is_file()}),
+                       missing_alternatives=sorted({n for n, _ in tiers if not (textures / f'{n}.tier2.ktx2').is_file()}),
+                       unrecognized_tiers=sorted({source for _, source in tiers if source != 'pc'}))
+        except (OSError, ValueError) as error:
+            row['error'] = str(error)
+        maps.append(row)
+    return maps
+
+
+def source_report(root, baked, missions, images, extracted_used=(), images_used=(), full_bake=False):
+    """Only successful pack steps establish which inputs were consumed."""
+    root = Path(root)
+    inputs = []
+
+    def note(path, label, used, reason):
+        inputs.append(dict(path=str(Path(path).absolute()), label=label,
+                           present=Path(path).exists(), status='used' if used else 'unused', reason=reason))
+
+    selected = set()
+    for game, image in images.items():
+        selected.add(Path(image).absolute())
+        used = game in images_used
+        note(image, f'{game} requested PS2 image', used,
+             'extracted successfully this run' if used else 'not read or verified this run; cached extraction used')
+        tree = root / 'extracted' / game
+        used = game in extracted_used
+        note(tree, f'{game} extracted PS2 data', used,
+             'read by mission generation or bake this run' if used else 'not read this run; cached bake and missions packed')
+    iso = root / 'iso'
+    if iso.is_dir():
+        for path in sorted(p for p in iso.iterdir() if p.is_file()):
+            if path.absolute() not in selected:
+                inputs.append(dict(path=str(path.absolute()), label='other source file', present=True,
+                                   status='not recognized', reason='no supported reader selected; file was not read'))
+    pc = root / 'PC_swbf2_exe' / 'Star Wars Battlefront II Classic/GameData/data/_lvl_pc'
+    recipe = (root / 'scripts/rebake.sh').read_text(encoding='utf-8')
+    match = re.search(r'^BF2_MAPS="([^"]*)"', recipe, re.M)
+    known_pc = {'ingame.lvl', 'side/rep.lvl', 'side/cis.lvl', 'tat/tat2.lvl'}
+    if match:
+        known_pc.update(token.lower() + '.lvl' for token in match[1].split())
+    read_pc = sorted(str(pc / name) for name in known_pc if full_bake and (pc / name).is_file())
+    note(pc, 'optional BF2 PC texture directory', bool(read_pc),
+         'existing libraries passed to the supported PC texture reader' if read_pc else
+         'no PC libraries read this run (missing optional input or cached bake)')
+    note(baked, 'baked game assets', True, 'packed into the game; stored provenance listed separately')
+    note(missions, 'mission data', True, 'packed into the game')
+    return dict(schema=1, inputs=inputs, pc_libraries_read=read_pc, maps=map_texture_sources(baked),
+                limits='Map-local base and alternative textures only. Shared/side model bakes do not retain per-texture source metadata. Other formats are not claimed as read.')
+
+
+def write_source_report(out, report):
+    path = str(out) + '.sources.json'
+    temporary = path + '.new'
+    try:
+        with open(temporary, 'w', encoding='utf-8') as target:
+            json.dump(report, target, indent=2, ensure_ascii=False)
+            target.write('\n')
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+    print('\nGame sources (this run):')
+    for row in report['inputs']:
+        print(f"  {row['status']}: {row['label']} — {row['path']!r}; {row['reason']}")
+    print('Stored map-local texture provenance:')
+    for row in report['maps']:
+        if 'error' in row:
+            print(f"  {row['map']}: not recognized — {row['error']}")
+        else:
+            print(f"  {row['map']}: {row['base_textures']} {row['base_source']} base, "
+                  f"{len(row['pc_alternatives'])} PC alternatives; "
+                  f"{len(row['missing_base_textures'])} missing base / {len(row['missing_alternatives'])} missing alternatives")
+            if row['unrecognized_tiers']:
+                print(f"    unrecognized provenance tags: {row['unrecognized_tiers']!r}")
+    print(report['limits'])
+    print(f'Source report: {path}')
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso1", default=os.path.join(ROOT, "iso", "SWBF1.iso"), help="Star Wars: Battlefront (PS2) disc image")
@@ -146,6 +286,8 @@ def main():
     ap.add_argument("--rebake", action="store_true", help="bake every asset again even when assets_baked/ exists")
     a = ap.parse_args()
     out = os.path.abspath(a.out)
+    images_used, extracted_used = set(), set()
+    full_bake = False
     if out.startswith(os.path.join(ENGINE, "")) or os.path.isdir(out):
         sys.exit(f"pack: --out {out} must be a file outside engine/")
     need("cargo", "the Rust toolchain, https://rustup.rs")
@@ -162,6 +304,7 @@ def main():
         if not os.path.isfile(iso):
             sys.exit(f"pack: no disc image at {iso} (pass --iso1 / --iso2)")
         run([bake, "extract-iso", iso, os.path.join(EXTRACTED, g, "lvl")])
+        images_used.add(g)
 
     step("3/6 the Lua scripts")
     for g, lvls in LUA.items():
@@ -171,6 +314,7 @@ def main():
                 continue
             run([sys.executable, "-I", os.path.join(ROOT, "scripts", "extract_lua.py"),
                  os.path.join(lvl_root(g), lvl), "--out", d])
+            extracted_used.add(g)
 
     step("4/6 the missions")
     # A checkout that tracks the missions in git (the dev tree) keeps its own; only a generated set goes stale.
@@ -184,6 +328,7 @@ def main():
         if why:
             print(f"   making the missions again: {why}")
         run([sys.executable, "-I", os.path.join(ROOT, "scripts", "gen_missions.py"), "--ps2-only", "--out", MISSIONS])
+        extracted_used.update(("bf1", "bf2"))
         with open(MISSION_STAMP, "w") as fh:
             fh.write(inputs_hash(MISSION_INPUTS) + "\n")
 
@@ -196,6 +341,8 @@ def main():
             print(f"   baking again: the bake in {BAKED} was {why}")
         need("ffmpeg", "the bake encodes speech and effects to OGG")
         run([bash, os.path.join(ROOT, "scripts", "rebake.sh")])
+        full_bake = True
+        extracted_used.update(("bf1", "bf2"))
         with open(BAKE_STAMP, "w") as fh:
             fh.write(inputs_hash(BAKE_INPUTS) + "\n")
     else:
@@ -205,6 +352,7 @@ def main():
             print(f"   {n} music streams not copied out yet: rebaking the sound groups")
             need("ffmpeg", "the bake encodes speech and effects to OGG")
             run([bash, os.path.join(ROOT, "scripts", "rebake.sh"), "sounds", "global-sound"])
+            extracted_used.update(("bf1", "bf2"))
     left = missing_music()
     if left:
         sys.exit(f"pack: {len(left)} music streams still missing after the bake, e.g. {left[0]}")
@@ -235,6 +383,9 @@ def main():
     size = os.path.getsize(out)
     print(f"\ndone: {out} ({size / 2**30:.2f} GiB). Run it from anywhere; nothing else is needed beside it.")
     print("It contains the games' own content: keep it on your machine, never upload or share it.")
+    report = source_report(ROOT, BAKED, MISSIONS, {"bf1": a.iso1, "bf2": a.iso2},
+                           extracted_used, images_used, full_bake)
+    write_source_report(out, report)
 
 
 if __name__ == "__main__":

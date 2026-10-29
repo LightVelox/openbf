@@ -234,6 +234,112 @@ class BotTests(unittest.TestCase):
 
 
 class PackTests(unittest.TestCase):
+    def test_sources_distinguish_reads_cache_optional_and_unknown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'scripts').mkdir()
+            (root / 'scripts/rebake.sh').write_text('BF2_MAPS="MUS/MUS1"\n')
+            (root / 'iso').mkdir()
+            images = {g: root / 'iso' / (g + '.iso') for g in ('bf1', 'bf2')}
+            for image in images.values():
+                image.touch()
+            (root / 'iso/unknown.bin').write_bytes(b'unsupported')
+            baked, missions = root / 'baked', root / 'missions'
+            baked.mkdir()
+            missions.mkdir()
+            report = pack.source_report(root, baked, missions, images, ['bf1'], ['bf1'])
+            rows = {r['label']: r for r in report['inputs']}
+            self.assertEqual(rows['bf1 requested PS2 image']['status'], 'used')
+            self.assertEqual(rows['bf2 requested PS2 image']['status'], 'unused')
+            self.assertEqual(rows['bf2 extracted PS2 data']['status'], 'unused')
+            self.assertEqual(rows['other source file']['status'], 'not recognized')
+            self.assertFalse(rows['optional BF2 PC texture directory']['present'])
+            pc = root / 'PC_swbf2_exe/Star Wars Battlefront II Classic/GameData/data/_lvl_pc'
+            (pc / 'mus').mkdir(parents=True)
+            (pc / 'mus/mus1.lvl').touch()
+            (pc / 'unsupported.lvl').touch()
+            self.assertEqual(pack.source_report(root, baked, missions, images)['pc_libraries_read'], [])
+            report = pack.source_report(root, baked, missions, images, full_bake=True)
+            self.assertEqual(report['pc_libraries_read'], [str(pc / 'mus/mus1.lvl')])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                path = pack.write_source_report(root / 'game', report)
+            self.assertEqual(__import__('json').loads(Path(path).read_text()), report)
+            self.assertFalse(Path(path + '.new').exists())
+            self.assertIn('not recognized', output.getvalue())
+
+    def test_pack_records_successful_steps_and_writes_beside_output(self):
+        for rebake in (False, True):
+            with self.subTest(rebake=rebake), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                engine = root / 'engine'
+                baked, missions = engine / 'assets_baked', engine / 'missions'
+                (baked / 'classes').mkdir(parents=True)
+                (baked / 'classes/bf1_all.ron').touch()
+                missions.mkdir()
+                (missions / 'one.ron').touch()
+                (root / 'scripts').mkdir()
+                (root / 'scripts/rebake.sh').write_text('BF2_MAPS="MUS/MUS1"\n')
+                for game, lvls in pack.LUA.items():
+                    lvl = root / 'extracted' / game / 'lvl/DATA/_LVL_PS2'
+                    lvl.mkdir(parents=True)
+                    (lvl / 'CORE.LVL').touch()
+                    for sub in lvls:
+                        lua = root / 'extracted' / game / 'lua' / sub
+                        lua.mkdir(parents=True)
+                        (lua / 'one.lua').touch()
+                target = engine / 'target'
+                (target / 'release').mkdir(parents=True)
+                (target / 'release' / ('game' + pack.EXE)).write_bytes(b'binary')
+                out = root / 'dist/game'
+                def run(command, **kwargs):
+                    if '--write-pack' in command:
+                        Path(command[2]).write_bytes(b'packed')
+                values = dict(ROOT=str(root), ENGINE=str(engine), EXTRACTED=str(root / 'extracted'),
+                              BAKED=str(baked), MISSIONS=str(missions), TARGET=str(target),
+                              BAKE_STAMP=str(root / 'extracted/bake.sha'),
+                              MISSION_STAMP=str(root / 'extracted/mission.sha'))
+                args = ['pack.py', '--out', str(out)] + (['--rebake'] if rebake else [])
+                with mock.patch.multiple(pack, **values), mock.patch.object(sys, 'argv', args), \
+                        mock.patch.object(pack, 'need'), mock.patch.object(pack, 'run', side_effect=run), \
+                        mock.patch.object(pack, 'find_bash', return_value='bash'), \
+                        mock.patch.object(pack, 'stale', return_value=None), \
+                        mock.patch.object(pack, 'inputs_hash', return_value='hash'), \
+                        mock.patch.object(pack, 'missing_music', return_value=[]), \
+                        mock.patch.object(pack.shutil, 'which', return_value=None), \
+                        mock.patch.object(pack.subprocess, 'run', return_value=mock.Mock(stdout='tracked')), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    pack.main()
+                report = __import__('json').loads(Path(str(out) + '.sources.json').read_text())
+                extracted = [r for r in report['inputs'] if r['label'].endswith('extracted PS2 data')]
+                self.assertEqual({r['status'] for r in extracted}, {'used' if rebake else 'unused'})
+                self.assertTrue(out.is_file())
+
+    def test_map_sources_count_existing_files_without_inventing_tiers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            texture_dir = root / 'map/textures'
+            texture_dir.mkdir(parents=True)
+            manifest = root / 'map/manifest.ron'
+            manifest.write_text('(source_game: "bf2", textures: ["lava", "missing", "bracket]"], '
+                                'texture_tiers: [("lava", "pc"), ("missing", "pc"), ("odd", "unknown")])')
+            (texture_dir / 'lava.ktx2').touch()
+            (texture_dir / 'bracket].ktx2').touch()
+            (texture_dir / 'lava.tier2.ktx2').touch()
+            (texture_dir / 'odd.tier2.ktx2').touch()
+            row, = pack.map_texture_sources(root)
+            self.assertEqual(row['base_textures'], 2)
+            self.assertEqual(row['missing_base_textures'], ['missing'])
+            self.assertEqual(row['pc_alternatives'], ['lava'])
+            self.assertEqual(row['missing_alternatives'], ['missing'])
+            self.assertEqual(row['unrecognized_tiers'], ['unknown'])
+            manifest.write_text('(source_game: "unrecognized", textures: [])')
+            self.assertIn('error', pack.map_texture_sources(root)[0])
+            manifest.write_text('(source_game: "bf1", textures: [broken])')
+            self.assertIn('error', pack.map_texture_sources(root)[0])
+            manifest.write_text('(source_game: "bf1", textures: ["unfinished"')
+            self.assertIn('error', pack.map_texture_sources(root)[0])
+
     def test_shipping_inputs_invalidate_hash_and_fold_line_endings(self):
         added = ('engine/crates/bake/src/effect_names.txt', 'engine/Cargo.toml', 'engine/Cargo.lock')
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(pack, 'ROOT', temp):
