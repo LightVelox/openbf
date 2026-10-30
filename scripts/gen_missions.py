@@ -935,14 +935,19 @@ def facts_from_calls(seq):
          "vo_bleed": [], "vo_low": [], "vo_oob": [],
          "mus_amb": [], "mus_vic": [], "mus_def": [], "sound": [],
          "shots": [], "ai_view": None, "ai_aggr": {}, "ai_snipe": None,
-         "ai_capture": {}, "ai_damage": [], "fly": None}
+         "ai_capture": {}, "ai_damage": [], "fly": None,
+         "bird_count": 0, "bird_types": {}}
 
     def ti(v):
         return int(v) if isinstance(v, float) and v == int(v) else None
 
     for c in seq:
         a = c.args
-        if c.name == "SetTeamName" and len(a) >= 2 and isinstance(a[1], str):
+        if c.name == "SetNumBirdTypes" and a and ti(a[0]) is not None:
+            d["bird_count"] = min(3, max(0, ti(a[0])))
+        elif c.name == "SetBirdType" and len(a) >= 3 and ti(a[0]) is not None and isinstance(a[2], str):
+            d["bird_types"][ti(a[0])] = (a[1], a[2])
+        elif c.name == "SetTeamName" and len(a) >= 2 and isinstance(a[1], str):
             t = ti(a[0])
             if t:
                 d["names"][t] = FACTION.get(a[1].strip().lower(), a[1])
@@ -1131,6 +1136,8 @@ def build(key, game, planet, era, pc_stem, ps2_name):
     m.mus_amb = (ps2 or {}).get("mus_amb", [])
     m.mus_vic = (ps2 or {}).get("mus_vic", [])
     m.mus_def = (ps2 or {}).get("mus_def", [])
+    m.birds = [(ps2 or {}).get("bird_types", {}).get(i, (1.0, ""))
+               for i in range((ps2 or {}).get("bird_count", 0))]
     m.sound = (ps2 or {}).get("sound", [])
     m.shots = (ps2 or {}).get("shots", [])
     # Card MAIS: the script's AI knobs (the PS2 bytecode only).
@@ -1329,6 +1336,8 @@ def ron(m):
         L.append("    // SetMaxPlayerFlyHeight: the soldiers' fly-height "
                  "ceiling (world y).")
         L.append("    max_player_fly_height: Some(%s)," % fmtf(m.fly))
+    if m.birds:
+        L.append("    birds: [%s]," % ", ".join('(%s, "%s")' % (fmtf(size), name) for size, name in m.birds))
     if m.sound:
         L.append("    // The sound sub-levels the script loads, in order "
                  "(ReadDataFile")

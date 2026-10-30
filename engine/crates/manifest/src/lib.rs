@@ -322,6 +322,11 @@ pub struct ManifestGeometry {
     /// other manifests do not change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub far: Option<String>,
+    /// A vehicle chunk geometry's `skel` nodes in model space (issue #49):
+    /// where its `ChunkSmokeNodeName` smoke rides. Empty on every other
+    /// geometry, and skipped when empty so the other manifests do not change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hardpoints: Vec<ManifestHardpoint>,
 }
 
 /// Zero Editor path (spawn paths, AI paths): nodes = (position, quaternion
@@ -1135,6 +1140,24 @@ pub struct FxSet {
     pub game: String,
     /// The effects in first-seen order, one per NAME hash.
     pub effects: Vec<FxEffect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beams: Vec<FxBeam>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FxBeam {
+    pub hash: u32,
+    pub name: String,
+    pub color: [u8; 4],
+    pub flare_intensity: f32,
+    pub length: f32,
+    pub initial_radius: [f32; 2],
+    pub final_radius: [f32; 2],
+    pub fade_length: f32,
+    pub fade_factor: f32,
+    pub draw_distance: f32,
+    pub position: [f32; 3],
+    pub direction: [f32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -149,6 +149,8 @@ pub struct MissionDef {
     /// script on both discs.
     #[serde(default)]
     pub sound: Vec<(String, String)>,
+    #[serde(default)]
+    pub birds: Vec<(f32, String)>,
     /// The spawn screens' backdrops (card SSELB, re-spawn-flow §1.1):
     /// `AddCameraShot(qw, qx, qy, qz, x, y, z)` in call order, the first 16
     /// (the PS2's cap, B2:31916). Every mission script on both discs calls

@@ -160,6 +160,16 @@ pub(crate) struct BoltRun {
     pub texture: Option<TextureHandle>,
     pub vertices: std::ops::Range<u32>,
     pub glow: bool,
+    pub solid: bool,
+    pub cutout: bool,
+}
+
+pub(crate) struct DisplayPipelines {
+    pub core: wgpu::RenderPipeline,
+    pub glow: wgpu::RenderPipeline,
+    pub solid: wgpu::RenderPipeline,
+    pub cutout: wgpu::RenderPipeline,
+    pub format: wgpu::TextureFormat,
 }
 
 #[derive(Debug, Default)]

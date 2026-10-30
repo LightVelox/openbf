@@ -834,6 +834,11 @@ impl App {
         self.hud_view = load_hud_view(&dir, renderer);
         self.bolts = game::bolt_vis::BoltVis::new(&self.assets_dir, &scene.manifest.source_game);
         let setup = setup.unwrap_or(&self.setup);
+        if let Some(mission) = setup.mission.as_ref() {
+            if let Err(error) = game::forest::configure(renderer, scene, Some(mission)) {
+                eprintln!("forest: {error:#}");
+            }
+        }
         let mut walk = make_walk(scene, setup);
         // `[ours]` The session's cheats, whatever the setup says (CHEAT2).
         self.cheats.install(&mut walk.sim);
@@ -1838,6 +1843,7 @@ impl winit::application::ApplicationHandler for App {
                     // the sim's bolts (card FXB).
                     match &self.walk {
                         Some((walk, _)) => {
+                            game::forest::submit_actors(r, &walk.sim);
                             gpu.pose_doors(&walk.sim.doors);
                             gpu.pose_turrets(&walk.sim, &walk.vehicle_seats);
                             gpu.pose_stations(&walk.sim);
@@ -1864,6 +1870,8 @@ impl winit::application::ApplicationHandler for App {
                             self.fx.submit_with(r, &camera, particles);
                         }
                         None => {
+                            r.set_leaf_time(None);
+                            r.set_leaf_actors(Vec::new());
                             r.set_bolts(Vec::new());
                             r.set_particles(Vec::new());
                             r.set_terrain_lights(Default::default());

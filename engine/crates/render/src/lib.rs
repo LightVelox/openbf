@@ -98,12 +98,12 @@ pub use draw::{
     fragment_kept, DrawCmd, DrawLayer, Fade, LightPath, LodSide, LodSwitch, SkinnedDrawCmd,
     IFACE_AMBIENT, IFACE_DIR_CAMERA,
 };
-pub use falling::LeafEmitter;
+pub use falling::{ForestBirdType, LeafActor, LeafEmitter};
 pub use filter::{box_side, FrameFilter};
 pub use frame::{FrameStats, OverlayFn};
 pub use grass::{sprite_quad, sway, GrassClass, GrassPatch, GrassSprite, ViewAxes};
 pub use leaf::{LeafClass, LeafObject, LeafSprite};
-pub use light_beam::Beam;
+pub use light_beam::{Beam, Cross, TOP_ALPHA as BEAM_TOP_ALPHA};
 pub use lighting::{
     encode as srgb_encode, light_sum, DirLight, FarFade, Fog, Lighting, WaterShading,
 };
@@ -343,6 +343,9 @@ pub struct Renderer {
     /// write) and this frame's bolts, set by [`Renderer::set_bolts`].
     bolt_core_pipeline: wgpu::RenderPipeline,
     bolt_glow_pipeline: wgpu::RenderPipeline,
+    bolt_solid_pipeline: wgpu::RenderPipeline,
+    leaf_cutout_pipeline: wgpu::RenderPipeline,
+    particle_display: Option<bolt::DisplayPipelines>,
     bolts: bolt::BoltState,
     /// The sky's star field (`stars.rs`, issue #16): vs `grass.wgsl`, fs
     /// `fs_bolt_glow`, additive with no depth, in the sky pass; the

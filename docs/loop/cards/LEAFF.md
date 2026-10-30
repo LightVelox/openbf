@@ -1,34 +1,46 @@
 ---
 id: LEAFF
-title: Falling leaves: the PS2's LeafSpawner drops leaf particles from drawn leaf patches (YAV, DAG1, KAS2 classes set 6 per patch) — the port has none
+title: Forest leaves, ground gusts and leafpatch bird anchors
 milestone: M1
 value: 2
-phase: re
-status: todo
+phase: implement
+status: review
 deps: LEAF
 files:
 declares:
 needs:
-branch:
-resume:
+branch: main
+resume: Ground gusts, soldier/vehicle stirring, native draw state and corrected bird anchors implemented; evidence in analysis/re-falling-leaves.md.
 created: 2026-09-30
-defer: post-alpha
 public_issue: https://github.com/sprucey149/openbf/issues/15
 ---
-## Why
-The leafpatch object is also a `LeafSpawner` (RTTI `9LeafPatch` / `11LeafSpawner`): when a patch is first drawn it spawns up to its class's byte +0x80 (hash 0xfd7fae90; 6 on the YAV leafpatch/leafpatch2, DAG1 and KAS2 classes) leaf particles at random points in its ellipsoid, from a pool of 100 that also refills every 30 s from patches near each camera. Decoration (the drifting leaves under the canopy); the port draws none.
 
-## Evidence
-`analysis/re-leafpatch.md` §8 (B1 `FUN_001b1f00` 57236–57260, `FUN_001af8d0` the particle init with the terrain height, `FUN_001b0c30` the pool/refill, 56583 the layer-0x100 query; B2 twin `FUN_001c9468`, layer 0x200). The particle motion, texture, size, fade and lifetime are UNREAD.
+Airborne leaves already landed in ae4d886, "Falling leaves beneath forest
+canopies". This change extends that implementation and its shared 100-leaf pool.
 
-## Acceptance
-RE: the particle's update and draw (`FUN_001afdb0`/`FUN_001b03e0`/`FUN_001b0130` region) with the §5 discipline and a PCSX2 check (a live sampler or a patched state that zeroes the count); then a build card: leaves falling under YAV/DAG1/KAS2 canopies, decoration only.
+Ground gusts attempt 20 terrain-following leaves every 30 seconds near an
+authored emitter. Native impulse/decay move them. Moving soldier and vehicle
+footprints stir once per contact. This trigger is a named presentation
+extension using read-only sim state and the original kick. Traced native
+kick callers were gusts/projectile hits; original actor trigger parity is
+not established.
 
-## Notes
-- 2026-09-30 (LEAF RE): the same object also has a SOUND slot — class byte +0x81 (hash 0x3b1948f3, ≤ 5; 3 on the YAV,
-  DAG1 and KAS2 classes incl. the YAV bushes): each draw passes the patch's position to B1 `FUN_0019cd78` (B2
-  `FUN_001b7b28`), which keeps the nearest five positions per type — [H] an ambient-sound anchor (leaf rustle / birds).
-  Read it with the particles or split it off (re-leafpatch §8).
+The reported sound anchor belongs to BirdParticleManager. The property supplies
+nearby anchors/counts for 30-second (BF1) / 20-second (BF2) bursts, script-authored textures/sizes and
+five-second life. No shipped mission assigns the separate bird/grass sound
+slots, so no invented leaf sound is added. Evidence and equations are in
+analysis/re-falling-leaves.md.
 
-## Planner note (2026-09-30, M-ALPHA)
-`defer: post-alpha` — not needed for the alpha's six showcase maps or its checklist. Value 2 (kept).
+Leaves and birds use native atlas orientation, unfogged particle blending and
+quarter-alpha cutoff. Battle clocks pause with the sim; scene changes clear
+all state. Maps without falling emitters do not enable these additions.
+
+Local original-game checks cover 63 flutter + 15 tumble leaves, one ground
+impulse and three bird trajectories/wing pairs. Both-disc census verifies
+six-per-patch falling counts and three-per-anchor bird counts. GPU checks cover
+cutout/blending, ordinary particle controls and scene clear. forest_capture
+reproduces local before/after views and requires identical RGBA on a non-emitting
+control. Game files and images stay ignored.
+
+The maintainer requested a commit on main and packed dist/openbf.exe refresh.
+This card does not assert upstream integration or exact original actor triggers.

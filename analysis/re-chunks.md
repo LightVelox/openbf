@@ -1,0 +1,133 @@
+# OPUS RE (2026-10-29) - [O] UNAUDITED
+# RE: BF2's destruction chunks as rigid bodies — trails, smoke, terrain hits, node origins (issue #49)
+
+**The question** (issue #49): the port flew a dead vehicle's chunks as spheres with a trail-less bounce. The PS2
+flies each one as a rigid body on its model's collision prim, with `ChunkTrailEffect` trails, a
+`ChunkSmokeEffect` on rest and a `ChunkTerrainEffect` burst, and starts it at the vehicle's `ChunkNodeName`.
+Addresses are BF2 (SWBFRNT2.ELF).
+
+## 1. The template (ODF handler, ~B2:127400–127620)
+
+`ChunkGeometryName` opens a template and sets its defaults:
+
+| Field | Default | Key |
+|---|---|---|
+| gravity | (0, −9.8, 0) | ChunkGravity (75 BF2 chunks author "0 0 0", mostly space `_sc` classes) |
+| +0x94 bounciness | 0.6 | ChunkBounciness |
+| +0x98 stickiness | 0.7 | ChunkStickiness |
+| +0xa0 death speed | −1 | ChunkDeathSpeed (SIMPLE only) |
+| +0xa8 lifetime | −1 | ChunkLifetime |
+| +0xe0 linear damping | 0.001 | ChunkLinearDamping |
+| +0xe4 angular damping | 0.004 | ChunkAngularDamping |
+| +0x58 budget | 0 | ChunkTerrainCollisions (a byte) |
+| +0x60 mode | 0 | ChunkPhysics: FULL 0, SIMPLE 1 (and any unknown word), STATIC 2, LEAF 3, 4 the cockpit |
+| +0x70 omega | 0 | ChunkOmega, a world-frame angular velocity |
+
+- `ChunkNodeName` (0xebf014fd) stores the node's hash at class +0x138 + slot·4.
+- Up to 3 trails and 3 smokes per slot; the counters reset at `ChunkGeometryName`. A `ChunkTrailNodeName` /
+  `ChunkSmokeNodeName` names the most recent effect's node.
+- `ChunkTrailNodeName` is never authored. `ChunkSmokeNodeName` (`hp_smoke1`…) is authored 68 times.
+
+## 2. The body
+
+- **The prim.** The model loader (FUN_00160380) registers each prim of a model's `prim` chunk as "<model>%d".
+  The template takes "<model>0" when there is no "<model>1"; otherwise its prim is a sphere at the model's bbox
+  centre, radius the half diagonal.
+- **Census.** Every chunk model on both discs has exactly one prim.
+  - BF2: 83 spheres, 39 cylinders, 38 boxes.
+  - BF1: 69 spheres, 36 cylinders, 2 boxes.
+  - DATA type 0 = sphere (r), 2 = cylinder (r, full height), 4 = box (half extents).
+- **Inertia per unit mass (FUN_00160b28).**
+  - box: ((y²+z²), (x²+z²), (x²+y²)) × 0.33333 on the half extents
+  - sphere: 0.4·r²
+  - cylinder: Iyy = r²/2, Ixx = Izz = r²/4 + h²/12
+- **Mass.** 40 (+0x3d0), inverse 0.025 (+0x3d4). The inverse inertia is 1/(40·I), or 1 when I ≤ 0.
+- **Bound radius.** sphere r; box |h|; cylinder √(r² + (h/2)²).
+- **Frames.** The body frame is start × prim-local, and the model is drawn at body × prim-local⁻¹.
+
+## 3. The launch (FUN_00213630) and init (FUN_001d5b00)
+
+- **Start.** The vehicle's matrix (+0x48..+0x54) times the `ChunkNodeName` node's matrix, when the node is found.
+  - The node table comes from the vehicle's vtable +0x4c (else +0x48 fills a local one). It is a hash → matrix map
+    looked up by FUN_00539150 (open addressing, 0x80 slots).
+  - Its keys are the model's skeleton bones; node names are kept on the disc only as `skel` strings.
+  - Census: of the authored `ChunkNodeName`s, only the hailfire's `wheel_left` / `wheel_right` (both games) name a
+    bone. `Wing_gun_housing_2` and `main_backdoor_R` (gunships, X-wing, landspeeder) appear nowhere but the ODF
+    PROPs, so their lookup fails and the chunk starts at the vehicle's matrix.
+  - The spider's chunks name `cis_walk_spider`, which is the model's own NAME, not a bone. Whether the table keys
+    it is not traced; its root sits at the model origin either way.
+- **Velocity.**
+  - The direction is from the cluster's centroid, with ChunkUpFactor × the distance added to y.
+  - ChunkSpeed ≥ 0: parent velocity × inherit + direction × speed.
+  - ChunkSpeed < 0: U(15, 30) / r along the direction (r = the vehicle's bound radius) when the squared distance
+    is > 1. LEAF scales the result by 0.25 before the check below.
+  - If |v| < 5 after that: v = direction × U(4, 6), with y raised to 2 + U(0, 1) when below 2.
+- **Spin.** L = I_w·Ω and ω = Ω (ChunkOmega).
+- **STATIC chunks** start with count 1 and budget 0, at rest.
+- **Trails** start at spawn (FUN_001d6368).
+- **The pool.** 8 clusters × 10 chunks, reused round-robin.
+
+## 4. The tick (FUN_001d6608)
+
+1. **The lifetime timer.** It runs when the chunk is at rest, when the map has no terrain, or when the budget is
+   0xff. The life is:
+   - 53 s for modes 2 and 4;
+   - otherwise 8 s on BF2 and 3 s on BF1;
+   - ChunkLifetime when it is ≥ 0;
+   - 30 s for budget 0xff.
+
+   The chunk is killed when the timer reaches its life.
+2. **Integration.**
+   - The +0x370 contact flag resets.
+   - F = m·g − c_lin·v.
+   - Modes other than 1 and 4: L −= c_ang·L·dt, then ω = I_w⁻¹·L.
+   - The body rotates by ω·dt when |ω·dt| > 0.0001.
+   - v += F/m·dt, then pos += v·dt.
+3. **Settling.** Only when count > budget.
+   - It casts a down ray of length r·1.001 against terrain and buildings (mask 0x90). It settles when the hit
+     fraction is < 0.75 (0.3 for mode 4).
+   - It also settles when the mode is 2, or when count > budget + 5.
+   - Settling clears `moving` and starts the smoke (FUN_001d64b8). An explosion cluster sets its timer to 3.0.
+4. **Below the terrain** (gated by DAT_0060bed4, "terrain loaded"). The test uses the integrated position: when
+   pos.y + r < the terrain height and a 256 m down ray finds no building (0x10), the chunk dies (FUN_001d5850).
+   FUN_00161c60 returns the hit fraction (1.0 = none).
+
+## 5. The FULL contact (FUN_001d7740)
+
+- Soldiers (layer 2) are ignored, and a chunk takes one impulse per tick (the +0x370 flag).
+- At the contact point: vp = v + ω×r, vn = vp·n, t = −unit(vp − n·vn).
+- **Over budget on terrain.** If vn < 0, the contact is terrain (0x80) and count ≥ budget:
+  - when count == budget, play ChunkTerrainEffect at (p.x, terrain height, p.z) and count + 1;
+  - either way, return with no impulse and no push-out.
+- **Otherwise:**
+  - j = (−e·vn − vn) / (1/m + ((I⁻¹(r×n))×r)·n)
+  - v += n·j/m; L += r×(n·j); ω = I⁻¹L
+  - Friction acts on L only, when vt = (v + ω×r)·t < 0:
+    - jf = −vt·μ / (1/m + ((I⁻¹(r×t))×r)·t)
+    - L += r×(t·jf)
+  - Then count + 1, and the generic FUN_00169668 pushes the body out by the depth along the normal.
+- The SIMPLE handler (FUN_001d7250) is a linear-only bounce with the ChunkDeathSpeed kill. No chunk authors SIMPLE.
+
+## 6. Trails and smoke
+
+- A trail with no node rides the body frame; with a node, the model × node.
+- The smoke rides model × node (identity with no node).
+- Killing a chunk (FUN_001d5850) stops both.
+
+## 7. The port
+
+`game::fx::chunks` runs §2–§6.
+- The bake writes chunk models' prims (vehicles.ron `collision`) and their skeleton hardpoints (`geometries[].hardpoints`).
+- `vehicle_chunks` (example) captures a pad vehicle's death on GEO1. The fighter tank shows its trails, its
+  `dirtspray` bursts after its budget, and the `hp_smoke1` plume of the settled piece.
+
+**[ours]**
+- Contacts come from the terrain and the map's static bodies only: no vehicle hulls, and no damage to units.
+- SIMPLE uses the FULL handler, since SIMPLE is never authored.
+- The push-out ignores the chunk's own collision layer, which is not traced.
+- Droid chunks keep the mesh-bounds sphere (no prims are baked for them), and droid `ChunkNodeName` bones are unused.
+
+**Observed.** A parked hailfire's hull (`hailfire_chunk3`, ChunkSpeed 20, UpFactor 0) starts 0.66 m below the
+vehicle origin. That origin is itself under the ground: 0.148 m on the PS2 (RE_LOG, the hover rest census) and
+0.18 m in the port. The centroid direction points down, so §4 removes the hull on its first tick in the port.
+The law reads the same on the PS2, but this is not checked against PS2 footage.

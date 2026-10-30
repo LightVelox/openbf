@@ -1,7 +1,51 @@
 //! Static prop effects at their baked hardpoint frames, including repeat delays.
-use super::{EffectDef, Frame, Lcg, Library, LiveEffect};
+use super::{EffectDef, Era, Frame, Lcg, Library, LiveEffect};
 use glam::{Mat3, Mat4, Vec3};
 use std::sync::Arc;
+
+pub(super) struct Glow {
+    beam: render::Beam,
+    color: [u8; 4],
+}
+
+impl Glow {
+    fn new(def: &manifest::FxBeam, frame: Frame, era: Era) -> Self {
+        let axis = frame.rot * Vec3::from(def.direction);
+        Self {
+            beam: render::Beam {
+                base: frame.pos + frame.rot * Vec3::from(def.position),
+                axis,
+                length: def.length,
+                r0: def.initial_radius[0],
+                r1: def.final_radius[0],
+                soft: def.fade_length,
+                visible: def.draw_distance,
+                gs_rgb: match era {
+                    Era::Bf1 => 0.5,
+                    Era::Bf2 => 1.0,
+                },
+                top: def.fade_factor,
+                cross: Some(render::Cross {
+                    x: frame.rot.x_axis,
+                    z: frame.rot.z_axis,
+                    r0z: def.initial_radius[1],
+                    r1z: def.final_radius[1],
+                }),
+            },
+            color: def.color,
+        }
+    }
+
+    pub(super) fn draw(&self) -> render::ParticleDraw {
+        render::ParticleDraw {
+            shape: render::ParticleShape::Beam(self.beam),
+            key: self.beam.base + self.beam.axis * (self.beam.length * 0.5),
+            color: self.color,
+            texture: None,
+            additive: true,
+        }
+    }
+}
 
 pub(super) struct Attached {
     def: Arc<EffectDef>,
@@ -71,8 +115,9 @@ pub(super) fn frame(matrix: Mat4, local: &manifest::ManifestAttachedEffect) -> F
     }
 }
 
-pub(super) fn load(scene: &crate::assets::Scene, library: &Library) -> Vec<Attached> {
+pub(super) fn load(scene: &crate::assets::Scene, library: &Library) -> (Vec<Attached>, Vec<Glow>) {
     let mut out = Vec::new();
+    let mut glows = Vec::new();
     let mut missing = std::collections::HashSet::new();
     let mut rng = Lcg(crate::classdb::fnv1a_lowercase(&scene.manifest.map));
     let paths = scene
@@ -98,12 +143,14 @@ pub(super) fn load(scene: &crate::assets::Scene, library: &Library) -> Vec<Attac
                     effect.delay,
                     rng.step(),
                 ));
+            } else if let Some(def) = library.beam(&effect.effect) {
+                glows.push(Glow::new(def, frame(matrix, effect), library.era));
             } else if missing.insert(effect.effect.to_ascii_lowercase()) {
                 eprintln!("prop effect {}: not in the map's library", effect.effect);
             }
         }
     }
-    out
+    (out, glows)
 }
 
 #[cfg(test)]

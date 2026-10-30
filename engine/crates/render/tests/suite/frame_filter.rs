@@ -239,6 +239,7 @@ fn airborne_leaf_draw_and_scene_clear() {
     r.set_leaf_fall(
         vec![LeafEmitter {
             count: 1,
+            birds: 0,
             radius: 0.0,
             height: 0.0,
             scale: 1.0,

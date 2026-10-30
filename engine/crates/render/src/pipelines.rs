@@ -437,6 +437,63 @@ impl Renderer {
             ..PipelineDesc::world("bolt glow pipeline", &pipeline_layout, &grass_vb)
         }
         .build(&device, &bolt_shader, format);
+        let bolt_solid_pipeline = PipelineDesc {
+            vs: "vs_grass",
+            fs: "fs_bolt_solid",
+            ..PipelineDesc::world("bolt solid pipeline", &pipeline_layout, &grass_vb)
+        }
+        .build(&device, &bolt_shader, format);
+        let leaf_cutout_pipeline = PipelineDesc {
+            vs: "vs_grass",
+            fs: "fs_leaf_particle",
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            depth_write: false,
+            ..PipelineDesc::world("leaf cutout pipeline", &pipeline_layout, &grass_vb)
+        }
+        .build(&device, &bolt_shader, format);
+        let display_format = match &target {
+            Target::Window { config, .. } => config.view_formats.first().copied(),
+            Target::Headless { .. } => Some(crate::device::HEADLESS_FORMAT.remove_srgb_suffix()),
+        };
+        let particle_display = display_format.map(|display| {
+            let twin = |label: &str, fs: &str, blend: Option<wgpu::BlendState>, depth_write| {
+                PipelineDesc {
+                    vs: "vs_grass",
+                    fs,
+                    blend,
+                    depth_write,
+                    ..PipelineDesc::world(label, &pipeline_layout, &grass_vb)
+                }
+                .build(&device, &bolt_shader, display)
+            };
+            crate::bolt::DisplayPipelines {
+                core: twin(
+                    "bolt core display pipeline",
+                    "fs_bolt_core_display",
+                    Some(wgpu::BlendState::ALPHA_BLENDING),
+                    false,
+                ),
+                glow: twin(
+                    "bolt glow display pipeline",
+                    "fs_bolt_glow_display",
+                    Some(additive),
+                    false,
+                ),
+                solid: twin(
+                    "bolt solid display pipeline",
+                    "fs_bolt_solid_display",
+                    None,
+                    true,
+                ),
+                cutout: twin(
+                    "leaf cutout display pipeline",
+                    "fs_leaf_particle_display",
+                    Some(wgpu::BlendState::ALPHA_BLENDING),
+                    false,
+                ),
+                format: display,
+            }
+        });
         // BF2's terrain light pass (card FXBL, `terrain_light.rs`): the
         // world vertex layout through `vs_terrain_light`, GS ALPHA 0x148 and
         // TEST 0x53001 = an add, depth tested on the terrain's own depth, no
@@ -597,6 +654,9 @@ impl Renderer {
             falling: Default::default(),
             bolt_core_pipeline,
             bolt_glow_pipeline,
+            bolt_solid_pipeline,
+            leaf_cutout_pipeline,
+            particle_display,
             bolts: Default::default(),
             star_pipeline,
             stars: Default::default(),

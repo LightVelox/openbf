@@ -69,6 +69,17 @@ pub enum ParticleShape {
     Mesh {
         tris: Vec<(Vec3, [f32; 2])>,
     },
+    SolidMesh {
+        tris: Vec<(Vec3, [f32; 2])>,
+    },
+    CutoutMesh {
+        tris: Vec<(Vec3, [f32; 2])>,
+    },
+    CutoutQuad {
+        pos: Vec3,
+        a: Vec3,
+        b: Vec3,
+    },
     Shaded {
         tris: Vec<(Vec3, [f32; 2], [u8; 4])>,
     },
@@ -172,7 +183,7 @@ pub fn particle_vertices(d: &ParticleDraw, camera: &Camera) -> Vec<GrassVertex> 
             angle,
             uv,
         } => sprite(&mut out, *pos, (*half, *angle), *uv, (right, up), color),
-        ParticleShape::Quad { pos, a, b } => {
+        ParticleShape::Quad { pos, a, b } | ParticleShape::CutoutQuad { pos, a, b } => {
             let v = [
                 vtx(*pos - *a + *b, [0.0, 0.0], color),
                 vtx(*pos + *a + *b, [1.0, 0.0], color),
@@ -181,7 +192,9 @@ pub fn particle_vertices(d: &ParticleDraw, camera: &Camera) -> Vec<GrassVertex> 
             ];
             out.extend([v[0], v[1], v[2], v[2], v[1], v[3]]);
         }
-        ParticleShape::Mesh { tris } => {
+        ParticleShape::Mesh { tris }
+        | ParticleShape::SolidMesh { tris }
+        | ParticleShape::CutoutMesh { tris } => {
             out.extend(tris.iter().map(|(p, uv)| vtx(*p, *uv, color)));
         }
         ParticleShape::Shaded { tris } => {
@@ -247,7 +260,7 @@ pub(crate) fn build(bolts: &[BoltDraw], particles: &[ParticleDraw], camera: &Cam
     // Stable: equal keys keep their order (spawn order within an effect).
     items.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut out = BoltFrame::default();
-    let push = |out: &mut BoltFrame, verts: Vec<GrassVertex>, tex, additive| {
+    let push = |out: &mut BoltFrame, verts: Vec<GrassVertex>, tex, additive, solid, cutout| {
         if verts.is_empty() {
             return;
         }
@@ -255,13 +268,21 @@ pub(crate) fn build(bolts: &[BoltDraw], particles: &[ParticleDraw], camera: &Cam
         out.vertices.extend(verts);
         let end = out.vertices.len() as u32;
         match out.runs.last_mut() {
-            Some(r) if r.texture == tex && r.glow == additive && r.vertices.end == first => {
+            Some(r)
+                if r.texture == tex
+                    && r.glow == additive
+                    && r.solid == solid
+                    && r.cutout == cutout
+                    && r.vertices.end == first =>
+            {
                 r.vertices.end = end;
             }
             _ => out.runs.push(BoltRun {
                 texture: tex,
                 vertices: first..end,
                 glow: additive,
+                solid,
+                cutout,
             }),
         }
     };
@@ -269,7 +290,7 @@ pub(crate) fn build(bolts: &[BoltDraw], particles: &[ParticleDraw], camera: &Cam
         match item {
             Item::Bolt(b) => {
                 for (verts, tex, glow) in crate::bolt::bolt_vertices(b, camera) {
-                    push(&mut out, verts, tex, glow);
+                    push(&mut out, verts, tex, glow, false, false);
                 }
             }
             Item::Particle(p) => {
@@ -286,6 +307,12 @@ pub(crate) fn build(bolts: &[BoltDraw], particles: &[ParticleDraw], camera: &Cam
                         particle_vertices(p, camera),
                         p.texture,
                         p.additive,
+                        !p.additive && matches!(p.shape, ParticleShape::SolidMesh { .. }),
+                        !p.additive
+                            && matches!(
+                                p.shape,
+                                ParticleShape::CutoutQuad { .. } | ParticleShape::CutoutMesh { .. }
+                            ),
                     );
                 }
             }

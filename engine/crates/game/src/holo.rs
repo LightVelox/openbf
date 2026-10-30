@@ -386,6 +386,8 @@ pub fn holo_draws(
             soft: (0.2 * c.height).min(1.0),
             visible: c.visible,
             gs_rgb: if art.bf1 { 0.5 } else { 1.0 },
+            top: render::BEAM_TOP_ALPHA,
+            cross: None,
         }),
         key: origin + Vec3::Y * (c.height * 0.5),
         color: rgba((255.0 * h.intensity * c.beam_intensity) as u8),

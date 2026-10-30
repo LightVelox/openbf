@@ -1226,6 +1226,7 @@ pub fn upload_scene(r: &mut Renderer, scene: &Scene) -> Result<SceneGpu> {
         .iter()
         .map(|g| render::LeafEmitter {
             count: g.falling_count,
+            birds: g.bird_count,
             radius: g.radius,
             height: g.height,
             scale: g.scale,
@@ -1241,6 +1242,10 @@ pub fn upload_scene(r: &mut Renderer, scene: &Scene) -> Result<SceneGpu> {
         Box::new(move |x, z| g.height_at(x, z)) as Box<dyn Fn(f32, f32) -> f32 + Send + Sync>
     });
     r.set_leaf_fall(emitters, falling_texture, ground);
+    if let Some(wind) = &scene.manifest.wind {
+        r.set_leaf_wind(Vec3::new(wind.velocity[0], 0.0, wind.velocity[1]));
+    }
+    crate::forest::configure_default(r, scene)?;
     let mut untextured: Vec<(String, String, usize)> = census
         .failed
         .into_iter()

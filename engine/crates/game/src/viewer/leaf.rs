@@ -399,6 +399,7 @@ mod tests {
             name: name.into(),
             texture: String::new(),
             falling_count: 0,
+            bird_count: 0,
             particles: fl["n"].as_u64().unwrap() as u32,
             min_size: f(&fl["minsize"]),
             max_size: f(&fl["maxsize"]),

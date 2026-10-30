@@ -218,6 +218,7 @@ impl EffectDef {
 pub struct Library {
     pub era: Era,
     effects: HashMap<u32, Arc<EffectDef>>,
+    beams: HashMap<u32, manifest::FxBeam>,
     /// The layers' `textures/` dirs, map first.
     texture_dirs: Vec<PathBuf>,
     model_dirs: Vec<PathBuf>,
@@ -244,7 +245,11 @@ impl Library {
     /// `sets` highest layer first: an effect in two layers is the first's.
     pub fn from_sets(era: Era, sets: Vec<FxSet>, rng: &mut Lcg) -> Library {
         let mut effects = HashMap::new();
+        let mut beams = HashMap::new();
         for set in sets {
+            for b in set.beams {
+                beams.entry(b.hash).or_insert(b);
+            }
             let effect_era = match set.game.as_str() {
                 "bf1" => Era::Bf1,
                 "bf2" => Era::Bf2,
@@ -269,6 +274,7 @@ impl Library {
         Library {
             era,
             effects,
+            beams,
             texture_dirs: Vec::new(),
             model_dirs: Vec::new(),
         }
@@ -328,6 +334,10 @@ impl Library {
 
     pub fn get(&self, name: &str) -> Option<&Arc<EffectDef>> {
         self.effects.get(&crate::classdb::fnv1a_lowercase(name))
+    }
+
+    pub fn beam(&self, name: &str) -> Option<&manifest::FxBeam> {
+        self.beams.get(&crate::classdb::fnv1a_lowercase(name))
     }
 
     pub fn len(&self) -> usize {
@@ -505,6 +515,7 @@ impl LiveEffect {
                                 draw::bytes(p, terms.alpha(p.idx)),
                                 self.frame.pos,
                                 em.geometry.blend == manifest::FxBlend::Additive,
+                                era,
                                 out,
                             );
                         }
@@ -570,7 +581,7 @@ impl FxAssets for Lookup<'_> {
         };
         let m = cpu.map(|cpu| {
             let mut parts = Vec::new();
-            for (start, count, material, _, _) in &cpu.submeshes {
+            for (start, count, material, _, flags) in &cpu.submeshes {
                 let tex = sheet(
                     self.r,
                     &self.lib.texture_dirs,
@@ -587,7 +598,7 @@ impl FxAssets for Lookup<'_> {
                         )
                     })
                     .collect();
-                parts.push((tex, tris));
+                parts.push((tex, tris, *flags));
             }
             Arc::new(draw::EffectModel { parts })
         });
@@ -643,6 +654,7 @@ pub struct Fx {
     water: ripple::Water,
     chunks: chunks::Chunks,
     attached: Vec<props::Attached>,
+    beams: Vec<props::Glow>,
 }
 
 impl std::fmt::Debug for Fx {
@@ -691,17 +703,17 @@ impl Fx {
             );
             names.sort();
             names.dedup();
-            fx.chunks = chunks::Chunks::load(&db, &names, &lib.model_dirs);
+            fx.chunks = chunks::Chunks::load(&db, &names, &lib.model_dirs, lib.era);
         }
         fx
     }
 
     /// Replace the static prop attachments when a scene or mode is loaded.
     pub fn set_scene_effects(&mut self, scene: &crate::assets::Scene) {
-        self.attached = self
+        (self.attached, self.beams) = self
             .library
             .as_ref()
-            .map_or_else(Vec::new, |lib| props::load(scene, lib));
+            .map_or_else(Default::default, |lib| props::load(scene, lib));
     }
 
     pub fn library(&self) -> Option<&Library> {
@@ -919,7 +931,13 @@ impl Fx {
             for e in &self.live {
                 e.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
             }
-            self.chunks.draws(&mut assets, &mut out);
+            self.chunks.draws(
+                lib.era,
+                camera.position,
+                camera.forward(),
+                &mut assets,
+                &mut out,
+            );
             for attached in &self.attached {
                 if let Some(effect) = &attached.live {
                     effect.draws_with(camera.position, camera.forward(), &mut assets, &mut out);
@@ -928,13 +946,14 @@ impl Fx {
             let sheet = assets.texture(ripple::TEXTURE);
             self.water.draws(camera.position, lift, sheet, &mut out);
         }
+        out.extend(self.beams.iter().map(props::Glow::draw));
         r.set_particles(out);
     }
 
     /// Read this tick's sim events into effects.
     pub fn ingest(&mut self, walk: &WalkSim) {
         self.ingest_sim(&walk.sim);
-        self.chunks.tick(walk);
+        self.chunks.tick(walk, self.library.as_ref());
         self.follow_jets(&walk.sim, |u| {
             walk.teams[usize::from(u.team).min(1)]
                 .class(u.spec.class)
@@ -1207,6 +1226,7 @@ impl Fx {
         }
         self.live.retain(|e| !e.is_dead());
         self.water.update(dt);
+        self.chunks.update(dt);
         for effect in &mut self.attached {
             effect.step(dt);
         }
@@ -1232,6 +1252,7 @@ impl Fx {
         self.water.clear();
         self.chunks.clear();
         self.attached.clear();
+        self.beams.clear();
     }
 
     /// Camera-facing quads for the live effects. `quad` is the unit quad from
@@ -1371,7 +1392,7 @@ mod tests {
             }
             fn model(&mut self, _: &str) -> Option<Arc<draw::EffectModel>> {
                 Some(Arc::new(draw::EffectModel {
-                    parts: vec![(None, vec![(Vec3::X, [0.0; 2]); 3])],
+                    parts: vec![(None, vec![(Vec3::X, [0.0; 2]); 3], 0)],
                 }))
             }
         }
@@ -1392,8 +1413,11 @@ mod tests {
                 &mut out,
             );
             assert_eq!(out.len(), 1, "nested={nested}");
-            let render::ParticleShape::Mesh { tris } = &out[0].shape else {
-                panic!("geometry became a sprite")
+            let render::ParticleShape::SolidMesh { tris } = &out[0].shape else {
+                panic!(
+                    "an opaque segment at full alpha draws solid: {:?}",
+                    out[0].shape
+                )
             };
             assert!(
                 (tris[0].0 - Vec3::new(0.0, 0.0, -2.0)).length() < 0.00001,
@@ -1401,6 +1425,72 @@ mod tests {
                 tris[0].0
             );
         }
+    }
+
+    #[test]
+    fn geometry_segments_follow_the_model_draw_rules() {
+        let c = [200, 100, 50, 255];
+        let faded = [200, 100, 50, 128];
+        assert_eq!(draw::geometry_look(Era::Bf2, false, 0x10000, c), None);
+        assert_eq!(
+            draw::geometry_look(Era::Bf2, false, 0x10000, faded),
+            Some((false, faded))
+        );
+        assert_eq!(draw::geometry_look(Era::Bf2, true, 0, c), Some((true, c)));
+        assert_eq!(
+            draw::geometry_look(Era::Bf1, false, 0x04, c),
+            Some((false, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf1, false, 0x06, c),
+            Some((false, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf1, false, 0x84, c),
+            Some((true, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf2, false, 0x44, c),
+            Some((true, c))
+        );
+        assert_eq!(
+            draw::geometry_look(Era::Bf2, false, 0x84, c),
+            Some((false, c))
+        );
+    }
+
+    #[test]
+    fn a_fading_lightning_model_blends_by_its_sheet_and_an_opaque_one_draws_solid() {
+        let model = draw::EffectModel {
+            parts: vec![(None, vec![(Vec3::X, [0.0; 2]); 3], 0x10000)],
+        };
+        let mut out = Vec::new();
+        model.draws(
+            Mat4::IDENTITY,
+            [255, 255, 255, 254],
+            Vec3::ZERO,
+            false,
+            Era::Bf2,
+            &mut out,
+        );
+        model.draws(
+            Mat4::IDENTITY,
+            [255, 255, 255, 255],
+            Vec3::ZERO,
+            false,
+            Era::Bf2,
+            &mut out,
+        );
+        assert!(matches!(out[0].shape, render::ParticleShape::Mesh { .. }));
+        assert_eq!(
+            (out[0].color, out[0].additive),
+            ([255, 255, 255, 254], false)
+        );
+        assert!(matches!(
+            out[1].shape,
+            render::ParticleShape::SolidMesh { .. }
+        ));
+        assert_eq!(out[1].color, [255; 4]);
     }
 
     fn puff(kind: Kind) -> Puff {

@@ -18,6 +18,7 @@ pub mod fx;
 pub mod hud;
 pub mod iso;
 pub mod light;
+pub mod lightbeam;
 pub mod locl;
 pub mod model;
 pub mod particle;

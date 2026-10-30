@@ -571,3 +571,28 @@ Not matched:
 - Wader ripples (kind 1, `FUN_00478778`), `FUN_00216b30` and the grenade-base ripple (the port has no grenade base).
 - The frustum test (the port draws every ripple in the pool) and fog on the ring.
 - BF2 was not measured.
+
+## 16. BLUR, the blend space and GEOMETRY segment looks (2026-10-29) [V][O] UNAUDITED
+
+- [O] **BLUR writes no particle colour** (B1 records 571949–571961, B2 715450–715452): pass 1's ALPHA byte 0x40 is
+  A Cs, B Cs, C As, D Cd = **Cd** (only the particle's alpha reaches the frame's alpha plane); pass 2's 0x54 =
+  (Cs − Cd)·Ad + Cd with Cs a screen copy, laid in through that alpha. The texture's colour never shows. The port draws
+  nothing for BLUR (MUS1's `mus_sfx_blur` heat rows were white sheets as a NORMAL sprite); the haze of pass 2 stays §11 [H].
+- [D] **Particles blend in display bytes** (§6.7's ALPHA 0x44 / 0x48 act on the GS's stored bytes). Drawn on the sRGB
+  target they blended in linear light: a faint fringe (BF2 `underlitesmoke2`, a 16-colour sheet whose alphas run 0, 15,
+  32, 48, 59, 100…) nearly vanished and the body appeared at once — GEO1's smoke column looked thin and cut. Bolts and
+  particles now draw in their own pass through the frame's non-sRGB view, the texel re-encoded before the vertex colour
+  modulates it (`render::bolt::DisplayPipelines`; GPU suite `particle_blend`). Filtering stays in linear light.
+- [O] **GEOMETRY draw flags, BF2** (`FUN_00377cc0` 361960–361968): the model is drawn with F = 1 for NORMAL, 0x800001 for
+  ADDITIVE, 0x41 for BLUR, colour = the particle's bytes. **Segment look** (B1 `RedModel::Draw` 557304–557311 and the
+  normal class 594259–594365; B2 `FUN_0058ed70`, `analysis/re-material-flags.md`): translucent when the emitter is
+  ADDITIVE, the tint's alpha is not 255, or the segment blends (0x04 without 0x02); a translucent segment is additive
+  when the emitter is ADDITIVE or the MTRL additive bit is set (B1 0x80, B2 0x40) and takes the particle's colour; an
+  opaque one is white, unblended, depth written. Port: `fx::draw::geometry_look`, `ParticleShape::SolidMesh`.
+  PROVISIONAL: an alpha-tested (0x02) segment is drawn blended by its sheet rather than tested at AREF 0x60.
+- [V] **Effect model sheets keep their disc alpha.** BF2 END1's bunker class runs `Emitter = "bunker_lightning
+  hp_lightning"`: 14 GEOMETRY emitters drawing `bunker_lightning1..4` (segment 0x10000) whose tint flashes 0 → 0.996 →
+  0, so the segment is always translucent. Its 32-bpp sheet is red with **alpha 0** behind white bolts (disc texels
+  `[00,00,00,a7]`), but the map bake dropped alpha from any sheet no MASK/BLEND segment names, so it drew a red sheet.
+  The map bake now keeps the alpha of every texture a GEOMETRY model names (`fx_model_named`), and the side/common
+  effect bake keeps it for all its model sheets.

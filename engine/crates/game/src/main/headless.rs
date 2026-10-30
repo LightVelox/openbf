@@ -125,6 +125,7 @@ impl ReplayFrame {
         r.time = (walk.sim.tick as f32 * core::TICK_DT) % render::TIME_WRAP;
         r.water_time = walk.sim.tick as f64 / f64::from(core::TICK_HZ);
         gpu.animate_water_live(r, cam.position)?;
+        game::forest::submit_actors(r, &walk.sim);
         gpu.pose_doors(&walk.sim.doors);
         gpu.pose_turrets(&walk.sim, &walk.vehicle_seats);
         gpu.pose_stations(&walk.sim);
@@ -565,7 +566,11 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
         let log: InputLog =
             ron::from_str(&std::fs::read_to_string(log_path)?).context("parse walk log")?;
         let cube = upload_unit_cube(&mut r)?;
-        let mut walk = make_walk(&scene, &BattleSetup::from_args(v, log.seed)?);
+        let replay_setup = BattleSetup::from_args(v, log.seed)?;
+        if let Some(mission) = replay_setup.mission.as_ref() {
+            game::forest::configure(&mut r, &scene, Some(mission))?;
+        }
+        let mut walk = make_walk(&scene, &replay_setup);
         let assets_dir = std::path::Path::new(&v.map)
             .parent()
             .map(std::path::Path::to_path_buf)

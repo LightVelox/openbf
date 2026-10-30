@@ -12,3 +12,7 @@ bytemuck = { workspace = true }
 pollster = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

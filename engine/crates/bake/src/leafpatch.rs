@@ -62,6 +62,7 @@ pub fn leaf_class(name: &str, props: &[(u32, String)]) -> ManifestLeafClass {
         name: name.to_owned(),
         texture: "grass".into(),
         falling_count: 0,
+        bird_count: 0,
         particles: 50,
         min_size: 10.0,
         max_size: 15.0,
@@ -87,6 +88,7 @@ pub fn leaf_class(name: &str, props: &[(u32, String)]) -> ManifestLeafClass {
         let fl = |k: usize| f.get(k).copied().flatten();
         let one = |d: f32| fl(0).unwrap_or(d);
         match *h {
+            0x3b19_48f3 => g.bird_count = int(v).map_or(0, |n| n.min(5) as u8),
             0xfd7f_ae90 => {
                 g.falling_count = int(v).map_or(g.falling_count, |n| n.clamp(0, 50) as u8)
             }
@@ -209,6 +211,63 @@ mod tests {
                 leaf_class("leaf", &props(&[(0xfd7f_ae90, value)])).falling_count,
                 count
             );
+        }
+    }
+
+    #[test]
+    fn falling_leaf_map_census_matches_both_discs() {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../extracted"));
+        for (game, expected) in [
+            ("bf1", vec!["YAV1", "YAV2", "YAV2_H"]),
+            ("bf2", vec!["DAG1", "KAS2", "YAV1"]),
+        ] {
+            let dir = root.join(game).join("lvl/DATA/_LVL_PS2");
+            let Ok(dirs) = std::fs::read_dir(&dir) else {
+                eprintln!("SKIP: {}", dir.display());
+                continue;
+            };
+            let mut found = Vec::new();
+            for entry in dirs.flatten().filter(|e| e.path().is_dir()) {
+                if ![
+                    "BES", "COR", "DAG", "DEA", "END", "FEL", "GEO", "HOT", "KAM", "KAS", "MUS",
+                    "MYG", "NAB", "POL", "RHN", "TAN", "TAT", "UTA", "YAV",
+                ]
+                .contains(&entry.file_name().to_str().unwrap_or(""))
+                {
+                    continue;
+                }
+                for entry in std::fs::read_dir(entry.path()).unwrap().flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) != Some("LVL") {
+                        continue;
+                    }
+                    let buf = std::fs::read(&path).unwrap();
+                    let chunks = mungefs::content_chunks(mungefs::open(&buf).unwrap()).unwrap();
+                    let mut emits = false;
+                    for c in chunks.iter().filter(|c| &c.tag == b"entc") {
+                        let e = mungefs::entity::EntityClass::parse(c).unwrap();
+                        if !is_leafpatch(&e.base) {
+                            continue;
+                        }
+                        let props = e
+                            .props
+                            .iter()
+                            .map(|p| (p.key_hash, p.value.clone()))
+                            .collect::<Vec<_>>();
+                        let class = leaf_class(&e.name, &props);
+                        if class.falling_count != 0 {
+                            assert_eq!(class.falling_count, 6, "{} {}", path.display(), e.name);
+                            assert_eq!(class.bird_count, 3, "{} {}", path.display(), e.name);
+                            emits = true;
+                        }
+                    }
+                    if emits {
+                        found.push(path.file_stem().unwrap().to_str().unwrap().to_owned());
+                    }
+                }
+            }
+            found.sort();
+            assert_eq!(found, expected, "{game}");
         }
     }
 
