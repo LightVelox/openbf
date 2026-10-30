@@ -23,14 +23,14 @@ use core::vehicle::{VehicleHandle, VehicleKind};
 use core::weapon::{blast_falloff, HealthType, EXPLOSION_OFFSET};
 use glam::Vec3;
 
-struct World {
-    sim: Sim,
-    classes: Vec<String>,
+pub(super) struct World {
+    pub(super) sim: Sim,
+    pub(super) classes: Vec<String>,
     db: game::classdb::ClassDb,
     names: Vec<(String, usize)>,
 }
 
-fn world(map: &str, factions: [&str; 2]) -> Option<World> {
+pub(super) fn world(map: &str, factions: [&str; 2]) -> Option<World> {
     let root = game::assets::baked_root();
     let dir = root.join(map);
     if !dir.join("manifest.ron").exists() {
@@ -65,7 +65,7 @@ fn world(map: &str, factions: [&str; 2]) -> Option<World> {
     })
 }
 
-fn turrets(w: &World, class: &str) -> Vec<VehicleHandle> {
+pub(super) fn turrets(w: &World, class: &str) -> Vec<VehicleHandle> {
     w.sim
         .alive_vehicles()
         .filter(|(_, v)| {
@@ -75,7 +75,13 @@ fn turrets(w: &World, class: &str) -> Vec<VehicleHandle> {
         .collect()
 }
 
-fn spawn(w: &mut World, class: &str, team: u8, pos: Vec3, controller: Controller) -> UnitHandle {
+pub(super) fn spawn(
+    w: &mut World,
+    class: &str,
+    team: u8,
+    pos: Vec3,
+    controller: Controller,
+) -> UnitHandle {
     let roster = game::roster::ClassRoster::build(&w.db, class, 0, None).unwrap();
     let c = roster.register(&mut w.sim, &mut w.names);
     w.sim
@@ -530,4 +536,130 @@ fn a_gunners_own_rounds_spare_his_turret() {
     }
     assert!(shots > 0, "the gun fired");
     assert_eq!(w.sim.vehicle(vh).unwrap().health.cur, 800.0);
+}
+
+/// Playtest 2026-10-29, BF2 Geonosis (snapshot tick 5583, build 995be40c):
+/// "my rockets went straight through the turret". The jet trooper stood at
+/// (144.0, -61.3, -32.7) with his EMP launcher on the manned Geonosian
+/// Turret (`tur_bldg_geoturret`) 32 m ahead; two of his rounds flew on
+/// through the cannon and struck the empty hailfire 15 m behind it. The
+/// cannon's three gun prims hang on `aimer_x` (bound 1.60 m up); the port
+/// put them at the identity, sunk inside the base, so nothing stood from
+/// 1.6 to 3.2 m (`analysis/re-turret-collision.md` 0.1-0.2: the PS2's prims
+/// on the aimer node turn with the gun). From his spot, a round at the gun's
+/// middle (2.2 m up, its own gunner turning it on him) strikes the turret.
+#[test]
+fn geonosis_cannon_stops_a_round_at_its_gun() {
+    let Some(mut w) = world("bf2_geo1", ["rep", "cis"]) else {
+        return;
+    };
+    let near = Vec3::new(142.28, -63.11, -0.63);
+    let vh = turrets(&w, "tur_bldg_geoturret")
+        .into_iter()
+        .find(|&h| w.sim.vehicle(h).unwrap().pos.distance(near) < 1.0)
+        .expect("the playtest's cannon");
+    let v = w.sim.vehicle(vh).unwrap().clone();
+    let gunner = spawn(&mut w, "cis_inf_rifleman", 1, v.pos, Controller::Ai);
+    assert!(w.sim.seat_unit(gunner, vh, 0));
+    for k in 0..4 {
+        spawn(
+            &mut w,
+            "cis_inf_rifleman",
+            1,
+            v.pos + Vec3::new(400.0 + 3.0 * k as f32, 300.0, 0.0),
+            Controller::Ai,
+        );
+    }
+    // His feet in the snapshot (the ground there is under a roof, which
+    // `spawn_ground` would pick).
+    let spot = Vec3::new(144.0, -61.3, -32.7);
+    let me = spawn(
+        &mut w,
+        "rep_inf_ep2_jettrooper",
+        0,
+        spot,
+        Controller::Player { slot: 0 },
+    );
+    w.sim.cheats.invincible = true;
+    w.sim.cheats.infinite_ammo = true;
+    w.sim.cheats.no_reload = true;
+    select(&mut w, me, "rep_weap_inf_emp_launcher");
+    let gun = v.pos + Vec3::Y * 2.2;
+    let before = w.sim.vehicle(vh).unwrap().health.cur;
+    let s = fire(&mut w, me, vh, gun);
+    let look = w.sim.vehicle(vh).unwrap().guns[0].as_ref().map(|g| g.look);
+    eprintln!(
+        "geo1 cannon <- EMP from the playtest spot: hit {} drop {} (expected {}), gun look {look:?}",
+        s.hit_turret, s.drop, s.expected
+    );
+    assert!(s.hit_turret, "the round passed through the cannon's gun");
+    assert!(s.drop > 0.0 && (s.drop - s.expected).abs() < 1e-3);
+    assert!(w.sim.vehicle(vh).unwrap().health.cur < before);
+}
+
+/// The same cannon with its gun turned broadside to him (a gunner holding
+/// it 90 deg off his line): a round at its barrel 2.5 m out from the aimer
+/// (`p_maingun3` on `aimer_x`, 2.18 m up, 2.4 m to the side of the turret's
+/// axis, clear of where the gun rests) strikes the gun where it is now.
+#[test]
+fn geonosis_cannon_stops_a_round_at_its_turned_gun() {
+    let Some(mut w) = world("bf2_geo1", ["rep", "cis"]) else {
+        return;
+    };
+    let near = Vec3::new(142.28, -63.11, -0.63);
+    let vh = turrets(&w, "tur_bldg_geoturret")
+        .into_iter()
+        .find(|&h| w.sim.vehicle(h).unwrap().pos.distance(near) < 1.0)
+        .expect("the playtest's cannon");
+    let v = w.sim.vehicle(vh).unwrap().clone();
+    let spot = Vec3::new(144.0, -61.3, -32.7);
+    let me = spawn(
+        &mut w,
+        "rep_inf_ep2_jettrooper",
+        0,
+        spot,
+        Controller::Player { slot: 0 },
+    );
+    // A gunner who holds his stick still keeps the gun where it is.
+    let gunner = spawn(
+        &mut w,
+        "cis_inf_rifleman",
+        1,
+        v.pos,
+        Controller::Player { slot: 1 },
+    );
+    assert!(w.sim.seat_unit(gunner, vh, 0));
+    w.sim.cheats.invincible = true;
+    w.sim.cheats.infinite_ammo = true;
+    w.sim.cheats.no_reload = true;
+    select(&mut w, me, "rep_weap_inf_emp_launcher");
+    let b = v.rot.inverse() * (spot - v.pos);
+    let yaw = b.x.atan2(b.z) + std::f32::consts::FRAC_PI_2;
+    // The seat's gun state is made on its first tick.
+    w.sim.step(&[PadState::default()]);
+    {
+        let g = w.sim.vehicle_mut(vh).unwrap().guns[0]
+            .as_mut()
+            .expect("armed");
+        g.look = (yaw, 0.0);
+        g.rate = (0.0, 0.0);
+        g.rel = (0.0, 0.0);
+        g.aim = (yaw, 0.0);
+    }
+    let turn = glam::Quat::from_rotation_y(yaw);
+    let barrel = Vec3::new(0.0, 1.6 + 0.58, 0.0) + turn * Vec3::new(0.0, 0.0, -0.576 + 2.5);
+    let at = v.pos + v.rot * barrel;
+    let s = fire(&mut w, me, vh, at);
+    let g = w.sim.vehicle(vh).unwrap().guns[0].clone().unwrap();
+    eprintln!(
+        "geo1 cannon turned {:.0} deg <- EMP: hit {} drop {}, look {:?} aim {:?}",
+        yaw.to_degrees(),
+        s.hit_turret,
+        s.drop,
+        g.look,
+        g.aim
+    );
+    assert!((g.aim.0 - yaw).abs() < 0.05, "the gun held its turn");
+    assert!(s.hit_turret, "the round passed through the turned gun");
+    assert!(s.drop > 0.0);
 }

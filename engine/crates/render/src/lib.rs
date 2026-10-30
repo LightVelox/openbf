@@ -203,7 +203,8 @@ struct Globals {
     light2_static: f32,
     /// [`WaterShading`], field for field, each vec3 padded to a row.
     water_eye_shift: [f32; 3],
-    _pad7: f32,
+    /// [`Lighting::glow_gain`].
+    glow_gain: f32,
     water_specular: [f32; 4],
     speckle_ambient: [f32; 4],
     speckle_specular: [f32; 4],

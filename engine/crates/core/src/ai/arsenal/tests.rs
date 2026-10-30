@@ -1578,7 +1578,10 @@ fn a_bot_does_not_stand_for_a_throw_at_a_vehicle_it_cannot_make() {
 /// them, a 3 m step aside every 1.5 s, as a position's lean step would.)
 #[test]
 fn a_bot_stands_for_a_throw_at_soldiers_from_the_tick_it_is_picked() {
-    for d in [12.0, 20.0] {
+    // 13 m, not 12: since the aim error turns every tick the 12 m
+    // run's picks all come up standing (10-12 m alike); 13-20 m each have one
+    // in a step, the case this test needs.
+    for d in [13.0, 20.0] {
         let (mut sim, bot) = thrower_scene();
         // On its way to a post, as the bot of the vehicle scene above.
         sim.nav = Some(super::super::tests::l_graph());

@@ -122,9 +122,31 @@ pub(super) fn aim(
         unlimited: w.infinite || wc.infinite_ammo(),
     };
     fire_discipline(sim, me, u, st, wc, meter, &skill);
+    // A building turret's aimer was handed last tick's point (`ManState::aim`)
+    // and turns about its pivot to this tick's before the shot leaves.
+    let last = st.ride.and_then(|r| r.man).and_then(|m| m.aim);
+    let pivot = u
+        .mount
+        .and_then(|m| sim.vehicle(m.vehicle))
+        .map(|v| v.pos + s.rot * s.gun.pivot);
+    let reach = s.gun.aimer.yaw_rate.min(s.gun.aimer.pitch_rate) * crate::TICK_DT;
     let shot = centre.zip(point).is_some_and(|(c, p)| {
-        let on =
-            (p - s.muzzle).normalize_or_zero().dot(s.barrel) >= fmath::sin_cos(AIM_TOLERANCE).1;
+        let cos_tol = fmath::sin_cos(AIM_TOLERANCE).1;
+        let to = |q: glam::Vec3| (q - s.muzzle).normalize_or_zero();
+        // [ours] Or the barrel is on last tick's point and the aimer, at its
+        // rate, reaches this tick's: the barrel read here trails the point
+        // by a tick. At the Geonosis cannon (muzzle 2.5 m before the pivot)
+        // a man walking round it 5 m out moves 3.4 deg a tick seen from the
+        // muzzle, past the cone on every tick once the aim point moved
+        // smoothly (`gunner_foot::error_dir`); before, only a think's jump
+        // against his walk let a shot go.
+        let turned = |q: glam::Vec3, o: glam::Vec3| {
+            (q - o).normalize_or_zero().dot((p - o).normalize_or_zero()) >= fmath::sin_cos(reach).1
+        };
+        let on = to(p).dot(s.barrel) >= cos_tol
+            || last
+                .zip(pivot)
+                .is_some_and(|(q, o)| to(q).dot(s.barrel) >= cos_tol && turned(q, o));
         let range = (c - s.muzzle).length();
         let ready = held.is_some_and(|c| perception::fireable(&c, sim.tick, tier.reaction_ticks));
         ready && on && range <= wc.ordnance.max_range()

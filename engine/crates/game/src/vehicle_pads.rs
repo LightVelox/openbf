@@ -391,6 +391,82 @@ pub fn add_turrets(
     }
 }
 
+/// Card TCOL: the bodies of building turret `t`'s instance that hang on a
+/// node its gunner seat moves (`core::sim::PosedParts`): each of its class's
+/// prims whose `PRNT` is the seat's turret, aimer or barrel node, found
+/// among the instance's bodies by where `Scene::collision_world` put it
+/// (through the node's bind). `None` when it has none.
+pub fn posed_parts(
+    sim: &core::sim::Sim,
+    m: &Manifest,
+    common: &crate::stations::Common,
+    db: &ClassDb,
+    t: &TurretDef,
+    class: &str,
+) -> Option<core::sim::PosedParts> {
+    use crate::viewer::turret_pose as tp;
+    let inst = m.instances.get(t.instance as usize)?;
+    let row = m
+        .classes
+        .iter()
+        .chain(common.1.iter().flat_map(|c| &c.classes))
+        .find(|k| k.name.eq_ignore_ascii_case(&inst.class) || k.name.eq_ignore_ascii_case(class))?;
+    let rig = row.turret_rig.as_ref()?;
+    let geom = row.geometry.as_deref()?;
+    let entry = m
+        .collision
+        .iter()
+        .chain(common.1.iter().flat_map(|c| &c.collision))
+        .find(|e| e.geometry.eq_ignore_ascii_case(geom))?;
+    let (seat, spec) = vehicle_class::seats(db, class)
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, tp::PoseSpec::of(rig, s)))
+        .find(|(_, p)| p.turret.is_some() || p.aimer.is_some())?;
+    let core_rig = tp::core_rig(rig, &spec);
+    let im = crate::viewer::instance_matrix(inst.rotation, inst.translation);
+    let to_instance = glam::Mat4::from_rotation_translation(t.rot, t.spec.pos).inverse();
+    let mut taken = Vec::new();
+    let mut bodies = Vec::new();
+    for p in &entry.prims {
+        let Some((_, n)) = crate::assets::armed_node(row, &p.parent) else {
+            continue;
+        };
+        if !core_rig.moves(n) {
+            continue;
+        }
+        let Some(shape) = crate::assets::prim_shape(p) else {
+            continue;
+        };
+        let local = crate::viewer::instance_matrix(p.rotation, p.translation);
+        let want = core::collision::Body::new(im * tp::bind_of(rig, n) * local, shape).to_world;
+        let found = sim
+            .collision
+            .bodies()
+            .iter()
+            .enumerate()
+            .position(|(i, b)| {
+                b.instance == Some(t.instance)
+                    && !taken.contains(&i)
+                    && b.to_world.abs_diff_eq(want, 1e-3)
+            });
+        if let Some(i) = found {
+            taken.push(i);
+            bodies.push(core::sim::PosedBody {
+                body: i,
+                node: n,
+                rest: to_instance * sim.collision.bodies()[i].to_world,
+            });
+        }
+    }
+    (!bodies.is_empty()).then_some(core::sim::PosedParts {
+        rig: core_rig,
+        seat,
+        bodies,
+        at: None,
+    })
+}
+
 /// Load the vehicle classes a battle of `factions` can spawn (the map's own
 /// classes first, then the side files, then [`mission_side_files`],
 /// `ClassDb::load` order), build `m`'s
@@ -462,6 +538,9 @@ pub fn install(
             None => Vec::new(),
         };
         sim.add_building_turret(t.spec.clone(), t.rot, sphere, t.instance, (t.fall.0, parts));
+        if let Some(posed) = posed_parts(sim, m, &common, &db, t, class) {
+            sim.set_turret_posed(t.instance, posed);
+        }
     }
     // The hover numbers per class (card HOVR): `Sim::tick_hovers` moves
     // every pad vehicle whose class is a hover.

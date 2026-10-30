@@ -144,7 +144,8 @@ impl Sim {
                 is_player: b.shooter_is_player,
             };
             let hulls = b.hulls;
-            let mut probe = Bolt::spawn(
+            // `Bolt::fire`'s rays: a rider's shell passes his own building.
+            let probe = Bolt::fire(
                 pos,
                 dir,
                 speed,
@@ -153,11 +154,8 @@ impl Sim {
                 self.heightfield.as_ref(),
                 self.water_plane(),
                 &self.collision,
-                HullFilter::Static,
-                std::iter::empty(),
+                hulls,
             );
-            probe.hulls = hulls;
-            probe.pass_own_building();
             if probe.hit != crate::projectile::Hit::None {
                 let b = &mut self.bolts[k];
                 (b.hit, b.end, b.remaining) = (probe.hit, probe.end, probe.remaining);

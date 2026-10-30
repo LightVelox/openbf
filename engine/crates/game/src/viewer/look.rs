@@ -673,23 +673,59 @@ pub fn far_fade_from(
 /// [`upload_scene`]; kept separate from the upload so a caller can re-apply a
 /// map's look without re-uploading it; today `upload_scene` is its only caller.
 pub fn apply_lighting(r: &mut Renderer, scene: &Scene) {
-    r.lighting = render_lighting_from(
-        &scene.manifest.source_game,
-        &scene.manifest.lighting,
-        scene.manifest.water.as_ref(),
-    );
-    r.set_frame_filter(frame_filter_from(&scene.manifest.lighting));
+    let m = &scene.manifest;
+    let tune = look_tune(&m.source_game, &m.map);
+    r.lighting = render_lighting_from(&m.source_game, &m.lighting, m.water.as_ref());
+    r.lighting.glow_gain = tune.map_or(1.0, |t| t.glow_gain);
+    r.set_frame_filter(frame_filter_from(&m.lighting));
     r.set_bloom(
-        scene
-            .manifest
-            .hdr
+        m.hdr
             .filter(|_| std::env::var_os("OPENBF_NO_BLOOM").is_none())
-            .map(|h| render::Bloom {
-                passes: h.num_bloom_passes,
-                weight: h.max_total_weight,
-                threshold: h.glow_threshold,
-            }),
+            .map(|h| bloom_from(h, tune)),
     );
+}
+
+/// [ours] A map whose authored look the maintainer asked to soften: factors
+/// on the disc's own values, never replacements. One row per map in
+/// [`LOOK_TUNES`]; every other map draws exactly as authored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LookTune {
+    pub game: &'static str,
+    pub map: &'static str,
+    /// Times the HDR block's `MaxTotalWeight` (the bloom's strength).
+    pub bloom_weight: f32,
+    /// Times the self-lit surfaces' display gain ([`render::Lighting::glow_gain`]).
+    pub glow_gain: f32,
+}
+
+/// The per-map tunes (FEEL_NOTES 2026-10-29):
+/// - BF2 Mustafar: "the bloom and coloring is too high ... lower the lava
+///   brightness a little". The lava is self-lit (BF2 material 0x10, drawn
+///   at up to x2.98 and the bloom's source). Gain x0.9 and weight 1.2 ->
+///   1.116 (tap 30 -> 28 of 128; the ten blur sub-passes compound it): the
+///   lava reads 18-26 % darker in three offscreen views, still the brightest
+///   thing on the map.
+pub const LOOK_TUNES: &[LookTune] = &[LookTune {
+    game: "bf2",
+    map: "mus1",
+    bloom_weight: 0.93,
+    glow_gain: 0.9,
+}];
+
+/// The [`LOOK_TUNES`] row for a map, by the manifest's `source_game` and `map`.
+pub fn look_tune(game: &str, map: &str) -> Option<&'static LookTune> {
+    LOOK_TUNES
+        .iter()
+        .find(|t| t.game.eq_ignore_ascii_case(game) && t.map.eq_ignore_ascii_case(map))
+}
+
+/// The map's authored HDR block as the renderer's bloom, under its tune.
+pub fn bloom_from(h: manifest::ManifestHdr, tune: Option<&LookTune>) -> render::Bloom {
+    render::Bloom {
+        passes: h.num_bloom_passes,
+        weight: h.max_total_weight * tune.map_or(1.0, |t| t.bloom_weight),
+        threshold: h.glow_threshold,
+    }
 }
 
 /// The map's DomeInfo frame filter as the renderer takes it (card BFLT,
@@ -756,12 +792,57 @@ pub fn render_lighting_from(
         water_lit: water_look.as_ref().map_or(0.0, |w| w.sun),
         water_dim: water_look.as_ref().and_then(|w| w.dim),
         water: water_shading(l, water),
+        glow_gain: 1.0,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HDR: manifest::ManifestHdr = manifest::ManifestHdr {
+        num_bloom_passes: 5,
+        max_total_weight: 1.2,
+        glow_threshold: 0.5,
+    };
+
+    /// Mustafar's tune softens its bloom and self-lit gain; the HDR block's
+    /// other numbers are the disc's.
+    #[test]
+    fn mustafar_takes_its_softer_look() {
+        let t = look_tune("bf2", "mus1").expect("mus1 is tuned");
+        assert_eq!((t.bloom_weight, t.glow_gain), (0.93, 0.9));
+        let b = bloom_from(HDR, Some(t));
+        assert_eq!((b.passes, b.threshold), (5, 0.5));
+        assert!((b.weight - 1.116).abs() < 1e-5, "{}", b.weight);
+    }
+
+    /// Every other map, HDR ones with Mustafar's very block included, draws
+    /// exactly as authored.
+    #[test]
+    fn no_other_map_is_tuned() {
+        assert_eq!(LOOK_TUNES.len(), 1);
+        for (game, map) in [
+            ("bf2", "kas2"),
+            ("bf2", "nab2"),
+            ("bf2", "fel1"),
+            ("bf1", "mus1"),
+        ] {
+            assert_eq!(look_tune(game, map), None, "{game} {map}");
+            let b = bloom_from(HDR, look_tune(game, map));
+            assert_eq!(
+                b,
+                render::Bloom {
+                    passes: 5,
+                    weight: 1.2,
+                    threshold: 0.5
+                },
+                "{game} {map}"
+            );
+        }
+        let l = render_lighting_from("bf2", &ranges(None, None), None);
+        assert_eq!(l.glow_gain, 1.0);
+    }
 
     /// The sheet's range, on the numbers the discs author
     /// (`analysis/re-lowr.md` §4's table). The rule is pure — the env gate is

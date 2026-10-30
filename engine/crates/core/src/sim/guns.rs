@@ -319,7 +319,17 @@ impl Sim {
             // `lead_tmp/turr/aim/ps2/barrel_line.py`). The port fires from
             // one fire point, so it aims that one's line (half the barrel
             // spacing, 0.36 m there, off the PS2's centre line).
-            let from = pos + rot * g.muzzle(st.aim);
+            //
+            // The line is measured from its point nearest the pivot, not
+            // from the muzzle (playtest 2026-10-29, BF2 Geonosis: "jumpy and
+            // jittery" while walking round a manned cannon). Both name the
+            // same line, so the settled aim is the same; but the muzzle
+            // swings with the aim, and a muzzle far ahead of the pivot
+            // (the cannon's 2.5 m) moved the asked direction against the
+            // turn: from 5 m the aimer flipped about 4 deg every tick.
+            let off = g.muzzle(st.aim) - g.pivot;
+            let d = gun::dir(st.aim.0, st.aim.1);
+            let from = pos + rot * (g.pivot + off - d * off.dot(d));
             let w = (rot.inverse() * (target - from)).normalize_or_zero();
             let w = if g.framed {
                 let [x, y, z] = gun::frame(st.look);

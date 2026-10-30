@@ -118,7 +118,7 @@ fn a_bf1_bot_keeps_its_own_tracked_error() {
         let wc = WeaponClass::default();
         seen_aim(s, a, &st, eye, e, 1e6, &wc) - e.capsule().center()
     };
-    let dir = unit_dir(a.index, s.tick / THINK_PERIOD, a.gen, SALT_ERR_DIR);
+    let dir = bf1_error_dir(&s, a);
     assert!((off(&s, 0.7) - dir * 0.7).length() < 1e-4);
     assert!(
         (off(&s, 9.0) - dir * skill.err_cap).length() < 1e-4,
@@ -1349,4 +1349,68 @@ fn rkmar_bf1_blast_clearance_at_aim_and_release() {
 #[test]
 fn rkmar_bf2_blast_clearance_at_aim_and_release() {
     rkmar_blast_clearance(crate::soldier::GroundRules::Bf2);
+}
+
+/// [ours] A bot's error direction turns a little every tick instead of
+/// jumping once a think (playtest 2026-10-29, the Geonosis cannon's
+/// vibration): BF2's block direction reaches each think's `dir` on the tick
+/// before the next think, and BF1's drawn direction the tick before the
+/// next draw; no tick turns it more than a think's turn over the think's
+/// ticks, plus rounding.
+#[test]
+fn the_error_direction_turns_every_tick_not_once_a_think() {
+    use crate::unit::AimBlock;
+    for rules in [
+        crate::soldier::GroundRules::Bf2,
+        crate::soldier::GroundRules::Bf1,
+    ] {
+        let (mut s, a, _) = aim_pair(rules);
+        let ai = a.index as usize;
+        s.units[ai].aim = AimBlock::default();
+        let mut prev: Option<Vec3> = None;
+        let mut worst = 0.0f32;
+        let mut moved = 0;
+        for tick in 0..60u64 {
+            s.tick = tick;
+            let p = AimBlock::PERIOD;
+            if rules == crate::soldier::GroundRules::Bf2
+                && (tick + a.index as u64).is_multiple_of(p)
+            {
+                let k = tick as f32;
+                let jolt = Vec3::new((k * 0.7).sin(), (k * 1.3).cos(), (k * 0.4).sin());
+                s.units[ai]
+                    .aim
+                    .think(p as f32 * crate::TICK_DT, Vec3::ZERO, 5.0, 1.0, 0.4, jolt);
+            }
+            let d = match rules {
+                crate::soldier::GroundRules::Bf2 => error_dir(&s, a, &s.units[ai]),
+                _ => bf1_error_dir(&s, a),
+            };
+            assert!((d.length() - 1.0).abs() < 1e-4, "{rules:?}: a unit vector");
+            if let (Some(q), true) = (prev, tick >= 10) {
+                let turn = q.angle_between(d);
+                worst = worst.max(turn);
+                moved += usize::from(turn > 1e-4);
+            }
+            if rules == crate::soldier::GroundRules::Bf2
+                && (tick + 1 + a.index as u64).is_multiple_of(p)
+                && tick >= 10
+            {
+                let b = &s.units[ai].aim;
+                assert!(
+                    d.distance(b.dir) < 1e-4,
+                    "BF2: at this think's dir before the next"
+                );
+            }
+            prev = Some(d);
+        }
+        let limit = match rules {
+            // A think turns the block 2 x 5/30 rad: a fifth of it a tick.
+            crate::soldier::GroundRules::Bf2 => 2.0 * 5.0 / 30.0 / 5.0 + 1e-3,
+            // Two random directions at most half a turn apart, over 10 ticks.
+            _ => std::f32::consts::PI / THINK_PERIOD as f32 + 1e-3,
+        };
+        assert!(worst <= limit, "{rules:?}: a tick turned {worst} rad");
+        assert_eq!(moved, 50, "{rules:?}: it turns on every tick");
+    }
 }

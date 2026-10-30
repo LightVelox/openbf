@@ -219,7 +219,7 @@ impl Renderer {
                 .light2
                 .map_or(0.0, |l| f32::from(u8::from(l.is_static))),
             water_eye_shift: self.lighting.water.eye_shift.to_array(),
-            _pad7: 0.0,
+            glow_gain: self.lighting.glow_gain,
             water_specular: self.lighting.water.specular,
             speckle_ambient: self.lighting.water.speckle_ambient,
             speckle_specular: self.lighting.water.speckle_specular,

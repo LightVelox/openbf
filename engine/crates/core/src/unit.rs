@@ -1011,6 +1011,10 @@ pub struct AimBlock {
     /// `quat` applied to +Y: where this unit's error vector points. Zero
     /// until the first think.
     pub dir: Vec3,
+    /// `dir` before the last think (zero until the second): a bot's aim
+    /// turns from it to `dir` over the think's ticks
+    /// (`ai::gunner_foot::error_dir`, ours).
+    pub from: Vec3,
 }
 
 impl Default for AimBlock {
@@ -1024,6 +1028,7 @@ impl Default for AimBlock {
             axis: Vec3::ZERO,
             quat: glam::Quat::IDENTITY,
             dir: Vec3::ZERO,
+            from: Vec3::ZERO,
         }
     }
 }
@@ -1050,6 +1055,7 @@ impl AimBlock {
         let turn = glam::Quat::from_xyzw(self.axis.x * s, self.axis.y * s, self.axis.z * s, c);
         // OURS: normalised, so 60,000 ticks of products do not drift.
         self.quat = (self.quat * turn).normalize();
+        self.from = self.dir;
         self.dir = self.quat * Vec3::Y;
     }
 
@@ -1437,7 +1443,7 @@ mod tests {
     }
 
     /// Every one of the twelve floats `hash_into` eats moves the hash (`dir`
-    /// is not one: every think writes it from `quat`).
+    /// and `from` are not: every think writes them from `quat`).
     #[test]
     fn the_aim_block_is_hashed_field_by_field() {
         let hash = |b: &AimBlock| {

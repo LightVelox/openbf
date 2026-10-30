@@ -1377,6 +1377,7 @@ mod tests {
             fallen_parts: Vec::new(),
             standing_parts: Vec::new(),
             down: Some(200.0),
+            posed: None,
         });
         let t = s.feed.target(&s.sim, 0).expect("the fallen turret");
         assert_eq!(

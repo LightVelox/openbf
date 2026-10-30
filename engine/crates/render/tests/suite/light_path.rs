@@ -192,13 +192,13 @@ fn glow_and_unscaled_gain_in_display_units() {
             indices: &[0, 1, 2, 0, 2, 3],
         })
         .expect("quad");
-    let mut shot = |light: LightPath| {
+    let shot = |r: &mut render::Renderer, light: LightPath| {
         // A red instance tint: `Glow` drops it, `Unscaled` keeps it.
         let mut d = DrawCmd::textured(quad, tex, Mat4::IDENTITY).with_light(light);
         d.color = [1.0, 0.5, 0.5, 1.0];
         r.render(&Camera::default(), &[d], [0.0, 0.0, 0.0, 1.0])
             .expect("frame");
-        capture_pixel(&mut r, N / 2, N / 2)
+        capture_pixel(r, N / 2, N / 2)
     };
     let v = f32::from(V) / 255.0;
     let disp = f32::from(srgb(v)) / 255.0;
@@ -211,11 +211,21 @@ fn glow_and_unscaled_gain_in_display_units() {
         }
     };
     let g = lin(disp * (1.0 + 63.0 / 128.0));
-    close(shot(LightPath::Glow), [g; 3], "glow");
+    close(shot(&mut r, LightPath::Glow), [g; 3], "glow");
     let u = |t: f32| lin(f32::from(srgb(v * t)) / 255.0 * 2.0);
     close(
-        shot(LightPath::Unscaled),
+        shot(&mut r, LightPath::Unscaled),
         [u(1.0), u(0.5), u(0.5)],
         "unscaled",
+    );
+    // A map's tune (`Lighting::glow_gain`) scales both gains in display units.
+    r.lighting.glow_gain = 0.8;
+    let g = lin(disp * (1.0 + 63.0 / 128.0) * 0.8);
+    close(shot(&mut r, LightPath::Glow), [g; 3], "glow x0.8");
+    let u = |t: f32| lin(f32::from(srgb(v * t)) / 255.0 * 2.0 * 0.8);
+    close(
+        shot(&mut r, LightPath::Unscaled),
+        [u(1.0), u(0.5), u(0.5)],
+        "unscaled x0.8",
     );
 }

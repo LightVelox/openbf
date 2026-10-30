@@ -355,6 +355,91 @@ pub fn turret_node(bind: &glam::Mat4, yaw: f32, pitch_down: f32) -> glam::Mat4 {
     )
 }
 
+/// X = norm(up × dir), Z = norm(dir), Y = Z × X, at `origin`.
+fn look_along(dir: Vec3, up: Vec3, origin: Vec3) -> glam::Mat4 {
+    let z = dir.normalize();
+    let x = up.cross(dir).normalize();
+    let y = z.cross(x);
+    glam::Mat4::from_cols(
+        x.extend(0.0),
+        y.extend(0.0),
+        z.extend(0.0),
+        origin.extend(1.0),
+    )
+}
+
+/// The `AimerNodeName` node (`analysis/re-turret-draw.md` 2.3): `local` is
+/// its bind matrix relative to its parent, `parent` the parent's matrix now,
+/// `dir` the aimer's direction in the building's model space.
+pub fn aimer_node(parent: &glam::Mat4, local: &glam::Mat4, dir: Vec3) -> glam::Mat4 {
+    let carried = *parent * *local;
+    look_along(dir, carried.y_axis.truncate(), carried.w_axis.truncate())
+}
+
+/// A barrel node: `parent` its parent's matrix now, `offset` its bind
+/// origin relative to that parent, `slide` = `state × BarrelRecoil` (the
+/// caller passes 0 while the state is not above 0).
+pub fn barrel_node(parent: &glam::Mat4, offset: Vec3, slide: f32) -> glam::Mat4 {
+    let mut m = *parent;
+    m.w_axis = parent
+        .transform_point3(offset - Vec3::new(0.0, 0.0, slide))
+        .extend(1.0);
+    m
+}
+
+/// A building turret's node rig and the nodes its gunner seat moves
+/// (card VTURD, `analysis/re-turret-draw.md` 2): what the draw poses its
+/// parts by and the sim poses its collision prims by (card TCOL,
+/// `re-turret-collision.md` 1.6). Matrices are glam's, model space.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Rig {
+    /// Each node's model-space bind matrix.
+    pub binds: Vec<glam::Mat4>,
+    pub parents: Vec<Option<usize>>,
+    /// The `TurretNodeName` node and its `PitchTurnFactor`.
+    pub turret: Option<usize>,
+    pub pitch_factor: f32,
+    pub aimer: Option<usize>,
+    /// (node, `BarrelRecoil`).
+    pub barrels: Vec<(usize, f32)>,
+}
+
+impl Rig {
+    /// Every node's model-space matrix with the seat's camera at `look` and
+    /// its aimer at `aim` (the port's angles: yaw turns +z toward +x,
+    /// positive pitch is up) and each barrel's recoil state in `recoil` (missing = at
+    /// rest). A node nobody writes stays at its bind; nothing composes
+    /// parents but the aimer's and the barrels' own carry (re-turret-draw 2.4).
+    pub fn pose(&self, look: (f32, f32), aim: (f32, f32), recoil: &[f32]) -> Vec<glam::Mat4> {
+        let bind = &self.binds;
+        let mut now = bind.clone();
+        let parent = |n: usize| self.parents.get(n).copied().flatten();
+        let local = |n: usize| match parent(n) {
+            Some(p) => bind[p].inverse() * bind[n],
+            None => bind[n],
+        };
+        if let Some(t) = self.turret {
+            now[t] = turret_node(&bind[t], look.0, -look.1 * self.pitch_factor);
+        }
+        if let Some(a) = self.aimer {
+            let p = parent(a).map_or(glam::Mat4::IDENTITY, |p| now[p]);
+            now[a] = aimer_node(&p, &local(a), dir(aim.0, aim.1));
+        }
+        for (i, &(b, r)) in self.barrels.iter().enumerate() {
+            let p = parent(b).map_or(glam::Mat4::IDENTITY, |p| now[p]);
+            let state = recoil.get(i).copied().unwrap_or(0.0);
+            let slide = if state > 0.0 { state * r } else { 0.0 };
+            now[b] = barrel_node(&p, local(b).w_axis.truncate(), slide);
+        }
+        now
+    }
+
+    /// Does the seat move node `n` (the turret, aimer or a barrel node)?
+    pub fn moves(&self, n: usize) -> bool {
+        self.turret == Some(n) || self.aimer == Some(n) || self.barrels.iter().any(|b| b.0 == n)
+    }
+}
+
 impl GunSetup {
     /// The yaw the barrel has in the bind pose — the fire point's heading
     /// from the pivot (BF1's skiff: 0 for the nose gun, about +90° for
