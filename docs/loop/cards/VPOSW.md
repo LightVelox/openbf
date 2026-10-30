@@ -11,7 +11,7 @@ declares:
 needs:
 effort:
 branch: codex/67-walker-aim
-resume: 2026-10-29 issue 67 assigned by maintainer; local implementation on codex/67-walker-aim at E:/Projects/openbf-walker-aim (analysis/walker-aim-67.md). Parent-first visual aim, shared rider/muzzle nodes and demonstrated static AT-TE cannon offset repair exist. Original-game RAM fixture and matched PCSX2 acceptance remain unavailable; do not duplicate implementation. No push/PR authorized.
+resume: 2026-10-29 issue 67 assigned by maintainer; implemented on codex/67-walker-aim (baa84e9) and merged into local main as d8881a8 on top of droideka #65 (analysis/walker-aim-67.md). Parent-first visual aim, seat camera, tracers, armed-seat HUD and gun sounds exist. Original-game RAM fixture and matched PCSX2 acceptance remain unavailable; do not duplicate implementation. No push/PR authorized.
 created: 2026-10-22
 alpha: yes
 ---
@@ -99,3 +99,5 @@ See `analysis/walker-aim-67.md` for the demonstrated AT-TE double-applied mount 
 Close-range playtest follow-up: actual hull/surface overlap replaces the aggregate box's full-hide test, and a foot cannot hide an entire walker. Walker animation clocks/leg pose and gun aim now interpolate with vehicle motion; rider/muzzle attachments use the same drawn pose. Snapshot builds, reproduction and checks: `analysis/walker-aim-67.md`, close-range follow-up section.
 
 Riding-control follow-up authorized by the maintainer: pilot mouse look passes the yaw window and the existing BF2 body follows at the authored rate; humans can take AI-held gun seats while the displaced bot stays aboard. Walker gunners now retain their original rate/limit law and rear-facing bind frame, including the AT-TE rear 120-240 degree yaw arc. The main gunner camera uses its mount translation. Research, capture limitations and regression/distribution results are in analysis/walker-aim-67.md. This expands the earlier visual-only scope for these demonstrated controls.
+
+Presentation follow-up: the gun-seat camera now rides the posed animated mount (authored ThirdPersonFOV, TiltValue, TrackCenter/TrackOffset) with the HUD reticle on the aim ray; walker shots draw their authored tracers from the posed fire points at their SecondaryOrdnancePeriod interval and play positioned fire loops; an armed seat shows its own weapon rows and reticle. WarmUpSound stays unread because the sim has no spin-up phase. The branch is merged into local main as d8881a8 on top of droideka #65; walker and droideka tests and Clippy pass together. Evidence in analysis/walker-aim-67.md, presentation follow-up section.

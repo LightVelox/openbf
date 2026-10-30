@@ -118,7 +118,7 @@ Installed successfully as `E:/Projects/openbf/dist/openbf.exe`. No staged execut
 
 
 
-Source remains uncommitted on the dedicated feature branch/worktree; the maintainer checkout's source stays clean. No push or PR was performed. Original-game row replay and matched PCSX2 pictures remain open acceptance, so VPOSW is not marked complete.
+Source remains uncommitted on the dedicated feature branch/worktree; the maintainer checkout's source stays clean. No push or PR was performed. Original-game row replay and matched PCSX2 pictures remain open acceptance, so VPOSW is not marked complete. (Superseded by the 2026-10-29 merge section at the end of this note.)
 
 
 
@@ -254,3 +254,9 @@ The unit test `walk::walker_view::tests::camera_matches_paused_geonosis_main_gun
 `codex/67-walker-aim` (`baa84e9`, based on `79275f6`) is merged into local `main` on top of the droideka commit `8bea4fd` (#65) by the commit that adds this section. Only two conflicts appeared, both additive: `main/windowed.rs` keeps both `play_shield_loops` and `walker_fire_loops`, and `sounds.rs` keeps both the `Shield` and `WalkerFire` loop sources. `battle.rs`, `lib.rs` and `vehicle_pads.rs` merged automatically; the combined tree passes the counts above, so walkers and droidekas now share one executable.
 
 Final pack receipt follows below.
+
+### Distribution
+
+Release was rebuilt from the merged tree (`d8881a86c058`, not dirty) and its existing `--write-pack` command packed the current `engine/assets_baked` and `engine/missions` into a staged executable. The archive holds 24,003 paths over 14,216 stored bodies (1,470 bodies are shared by identical content), 2,758,181,061 bytes. Every path and size matches the source trees, every entry's bytes were compared against its source file (3,626,550,572 entry bytes because shared bodies are read once per path), and the executable prefix is byte-identical to the release build: SHA256 `f5a5c4e5b24767d2550ec97d0c2890716352619f45a025b57ab5f173f11b1f0c`. The staged file was then installed as `E:/Projects/openbf/dist/openbf.exe`; the installed file's whole-file SHA256 is `5ad6fc5d0fa6917b9780d4f725fa79baaf1889118eef27f57538658350a5c930`, identical to the staged copy, and `dist/openbf_data` profile/playtest file lengths and modification times are unchanged. The staged executable was removed. Receipt: `engine/artifacts/walker67/merged-pack/pack-receipt.json`.
+
+The installed executable was then run headless from `dist` against its own archive (`--sim-trace engine/artifacts/walker67/merged-pack/smoke.trace 60 --map assets_baked/bf2_geo1 --seed 158`): it loaded the map and class data, fielded both factions (the droideka class included), 7 posts and 10 vehicle pads, and stepped 60 ticks. That proves the packed data mounts and the merged walker and droideka code run together from the single file.
