@@ -176,11 +176,31 @@ impl WalkerRig {
             turret
                 .and_then(|name| self.skeleton.index_of(name))
                 .map_or(Mat4::IDENTITY, |n| {
-                    let parent = self.skeleton.parents[n]
-                        .map_or(Mat4::IDENTITY, |p| self.nodes(v, root_scale)[p]);
-                    parent * self.skeleton.local_bind[n]
+                    let parent = self.skeleton.parents[n].map_or(Mat4::IDENTITY, |p| {
+                        if root_scale == 1.0 {
+                            self.skeleton.global_bind[p]
+                        } else {
+                            self.rest_nodes(root_scale)[p]
+                        }
+                    });
+                    let mut carried = parent * self.skeleton.local_bind[n];
+                    carried.w_axis = self.nodes(v, root_scale)[n].w_axis;
+                    carried
                 });
         super::turret_pose::turret_node(&carried, look.0, -look.1)
+    }
+
+    fn rest_nodes(&self, root_scale: f32) -> Vec<Mat4> {
+        let mut locals = Pose::bind(&self.skeleton).locals();
+        if let Some(r) = self.bone_root.filter(|_| root_scale != 1.0) {
+            locals[r] *= Mat4::from_scale(Vec3::splat(root_scale));
+        }
+        self.skeleton
+            .palette(&locals)
+            .iter()
+            .zip(&self.skeleton.global_bind)
+            .map(|(p, b)| *p * *b)
+            .collect()
     }
 
     pub fn node_now(

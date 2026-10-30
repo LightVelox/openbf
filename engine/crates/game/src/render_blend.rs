@@ -29,6 +29,8 @@ use glam::{Quat, Vec3};
 pub const UNIT_SNAP_M: f32 = 5.0;
 /// The same for a vehicle (300 m/s). PROVISIONAL.
 pub const VEHICLE_SNAP_M: f32 = 10.0;
+const WALKER_HEADING_BLEND: f32 = 0.1;
+const WALKER_HEADING_SNAP_RAD: f32 = 0.2;
 
 /// One unit's drawn pose.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -250,8 +252,7 @@ pub fn blend(prev: &Pose, cur: &Pose, t: f32) -> Pose {
         o.pitch = mix(p.pitch, c.pitch, t);
     }
     for (o, p) in out.vehicles.iter_mut().zip(&prev.vehicles) {
-        let same = p.gen == o.gen && p.alive == o.alive && p.looks.len() == o.looks.len();
-        if !same || p.pos.distance_squared(o.pos) > VEHICLE_SNAP_M * VEHICLE_SNAP_M {
+        if !vehicle_blendable(p, o) {
             continue;
         }
         o.pos = mix3(p.pos, o.pos, t);
@@ -306,6 +307,7 @@ pub struct Blend {
     fire_down: bool,
     /// The fire lag of a press no tick has taken yet.
     lag: u8,
+    walker_heading: Option<(core::vehicle::VehicleHandle, Quat)>,
 }
 
 impl Blend {
@@ -324,6 +326,16 @@ impl Blend {
             return;
         }
         self.spare.capture_into(walk);
+        let rider = stabilized_walker(walk);
+        self.walker_heading = rider.and_then(|h| {
+            let v = walk.sim.vehicle(h)?;
+            let filtered = self
+                .walker_heading
+                .filter(|(old, _)| *old == h)
+                .map_or(v.rot, |(_, q)| filtered_walker_heading(q, v.rot));
+            self.spare.vehicles.get_mut(h.index as usize)?.rot = filtered;
+            Some((h, filtered))
+        });
         match self.prev.as_mut() {
             Some(p) => std::mem::swap(p, &mut self.spare),
             None => self.prev = Some(std::mem::take(&mut self.spare)),
@@ -334,6 +346,7 @@ impl Blend {
     pub fn reset(&mut self) {
         debug_assert!(self.saved.is_none());
         self.prev = None;
+        self.walker_heading = None;
         (self.drawn, self.fire_down, self.lag) = (None, false, 0);
     }
 
@@ -370,7 +383,24 @@ impl Blend {
             return false;
         };
         let cur = Pose::capture(walk);
-        blend(prev, &cur, t.clamp(0.0, 1.0)).write(walk);
+        let t = t.clamp(0.0, 1.0);
+        let mut shown = blend(prev, &cur, t);
+        if let Some((h, rot)) = self
+            .walker_heading
+            .filter(|(h, _)| stabilized_walker(walk) == Some(*h))
+        {
+            let i = h.index as usize;
+            if let (Some(p), Some(c), Some(out)) = (
+                prev.vehicles.get(i),
+                cur.vehicles.get(i),
+                shown.vehicles.get_mut(i),
+            ) {
+                if vehicle_blendable(p, c) {
+                    out.rot = p.rot.slerp(filtered_walker_heading(rot, c.rot), t);
+                }
+            }
+        }
+        shown.write(walk);
         self.saved = Some(cur);
         true
     }
@@ -426,6 +456,35 @@ impl Blend {
     }
 }
 
+fn vehicle_blendable(previous: &VehiclePose, current: &VehiclePose) -> bool {
+    previous.gen == current.gen
+        && previous.alive == current.alive
+        && previous.looks.len() == current.looks.len()
+        && previous.pos.distance_squared(current.pos) <= VEHICLE_SNAP_M * VEHICLE_SNAP_M
+}
+
+fn filtered_walker_heading(previous: Quat, current: Quat) -> Quat {
+    if previous.angle_between(current) >= WALKER_HEADING_SNAP_RAD {
+        current
+    } else {
+        previous.slerp(current, WALKER_HEADING_BLEND).normalize()
+    }
+}
+
+fn stabilized_walker(walk: &WalkSim) -> Option<core::vehicle::VehicleHandle> {
+    let mount = walk.sim.unit(walk.player)?.mount?;
+    let vehicle = walk.sim.vehicle(mount.vehicle)?;
+    if vehicle.kind != core::vehicle::VehicleKind::Walker || mount.seat == 0 {
+        return None;
+    }
+    let driver = vehicle
+        .seats
+        .first()?
+        .occupant
+        .and_then(|h| walk.sim.unit(h))?;
+    (driver.controller == core::unit::Controller::Ai).then_some(mount.vehicle)
+}
+
 /// The frame's blend with the player's look preview drawn in. The mouse's
 /// preview is drawn whole. A controller's on foot is drawn the frame's share
 /// of the way into the next tick's turn (all of it with the blend off), so
@@ -460,6 +519,16 @@ pub fn fraction(walk: &WalkSim) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn walker_heading_eases_small_changes_and_snaps_large_ones() {
+        let start = Quat::IDENTITY;
+        let small = Quat::from_rotation_y(0.1);
+        let eased = filtered_walker_heading(start, small);
+        assert!((start.angle_between(eased) - 0.01).abs() < 0.0001);
+        let teleport = Quat::from_rotation_y(0.3);
+        assert_eq!(filtered_walker_heading(start, teleport), teleport);
+    }
 
     fn walk() -> WalkSim {
         let mut w = WalkSim::new(1, Vec3::ZERO, None);

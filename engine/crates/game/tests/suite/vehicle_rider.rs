@@ -506,8 +506,46 @@ fn a_seated_rider_is_drawn_on_his_vehicle() {
         }
         let player = walk.player;
         assert!(walk.sim.seat_unit(player, h, seat), "{map}: seat {seat}");
-        if let Some(v) = walk.sim.vehicle_mut(h) {
-            if v.kind == core::vehicle::VehicleKind::Walker {
+        if walk
+            .sim
+            .vehicle(h)
+            .is_some_and(|v| v.kind == core::vehicle::VehicleKind::Walker)
+        {
+            let n = walk.sim.vehicle(h).unwrap().seats.len();
+            let setup = walk
+                .sim
+                .seat_setup
+                .get(ci)
+                .and_then(Option::as_ref)
+                .cloned();
+            let guns = (0..n)
+                .map(|s| {
+                    let g = setup.as_ref().and_then(|st| st.guns.get(s))?.as_ref()?;
+                    let (look, rel, aim) = g.rest();
+                    Some(core::vehicle::gun::GunState {
+                        look,
+                        aim,
+                        rate: (0.0, 0.0),
+                        rel,
+                        weapons: g
+                            .weapons
+                            .iter()
+                            .map(|w| {
+                                core::weapon::WeaponState::new(
+                                    &walk.sim.weapon_classes[w.class],
+                                    true,
+                                    w.reserve_clips,
+                                )
+                            })
+                            .collect(),
+                        zoom: None,
+                    })
+                })
+                .collect();
+            if let Some(v) = walk.sim.vehicle_mut(h) {
+                if v.guns.is_empty() {
+                    v.guns = guns;
+                }
                 for g in v.guns.iter_mut().flatten() {
                     g.look = (1.0, 0.1);
                     g.aim = g.look;
@@ -516,6 +554,7 @@ fn a_seated_rider_is_drawn_on_his_vehicle() {
         }
         let mut vis = game::soldier_vis::SoldierVisuals::load_cpu(&root, game_of, &walk.teams);
         let rigs = game::viewer::walker_rigs(&scene.manifest, &root, &walk.vehicle_geometry);
+        walk.walker_rigs = rigs.clone();
         vis.set_walker_rigs(rigs.clone());
         for _ in 0..3 {
             walk.sim.tick += 1;
@@ -568,16 +607,18 @@ fn a_seated_rider_is_drawn_on_his_vehicle() {
                     n
                 }
             };
-        if let Some(rig) = rigs[ci].as_deref() {
-            if let Some(name) = build.seats[ci][usize::from(seat)].fire_point.as_deref() {
-                let scale = walk.sim.walker_params[ci]
-                    .as_ref()
-                    .map_or(1.0, |p| p.root_scale);
-                let local = rig.node_now(v, scale, name).expect("walker muzzle");
-                let want = v.pos + v.rot * local.w_axis.truncate();
-                assert!(vis.fire_points(&walk)[player.index as usize]
-                    .unwrap()
-                    .abs_diff_eq(want, 1e-4));
+        if v.kind == core::vehicle::VehicleKind::Walker {
+            if let Some(rig) = rigs[ci].as_deref() {
+                if let Some(name) = build.seats[ci][usize::from(seat)].fire_point.as_deref() {
+                    let scale = walk.sim.walker_params[ci]
+                        .as_ref()
+                        .map_or(1.0, |p| p.root_scale);
+                    let local = rig.node_now(v, scale, name).expect("walker muzzle");
+                    let want = v.pos + v.rot * local.w_axis.truncate();
+                    assert!(vis.fire_points(&walk)[player.index as usize]
+                        .unwrap()
+                        .abs_diff_eq(want, 1e-4));
+                }
             }
         }
         let got = vis

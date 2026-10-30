@@ -175,3 +175,86 @@ fn atte_cycles_both_ai_held_guns_and_each_seat_fires_its_authored_weapon() {
     let after = w.sim.seat_look(w.player).unwrap().look;
     assert!((after.0 - 240.0f32.to_radians()).abs() < 1e-5);
 }
+
+#[test]
+#[ignore = "requires local BF2 Geonosis assets"]
+fn main_gunner_camera_tracks_the_mount_without_inheriting_its_roll() {
+    let (mut w, h) = fixture();
+    w.sim.unseat_unit(w.player);
+    assert!(w.sim.seat_unit(w.player, h, 1));
+    let class = w.sim.vehicle(h).unwrap().class as usize;
+    let rig = w.walker_rigs[class].as_ref().unwrap().clone();
+    let scale = w.sim.walker_params[class].as_ref().unwrap().root_scale;
+    let first = w.camera();
+    let mut relative = None;
+    let mut moved = false;
+    let base = rig
+        .node_now(w.sim.vehicle(h).unwrap(), scale, "aimer_maincannon_y")
+        .unwrap();
+    for i in 0..30 {
+        let v = w.sim.vehicle_mut(h).unwrap();
+        v.walker.pitch = (i as f32 * 0.13).sin() * 0.12;
+        v.walker.roll = ((i as f32 * 0.17).cos(), (i as f32 * 0.17).sin());
+        v.walker.clip_time = i as f32 / 30.0;
+        let node = rig.node_now(v, scale, "aimer_maincannon_y").unwrap();
+        moved |= !node.abs_diff_eq(base, 0.001);
+        let mount_world = v.pos + v.rot * node.w_axis.truncate();
+        let cam = w.camera();
+        let offset = cam.position - mount_world;
+        if let Some(previous) = relative {
+            assert!(offset.abs_diff_eq(previous, 0.0001));
+        }
+        relative = Some(offset);
+        assert!(cam.forward().abs_diff_eq(first.forward(), 0.0001));
+        assert!((cam.roll - first.roll).abs() < 0.0001);
+    }
+    assert!(moved);
+    w.step_tick(&[mouse(0.4)]);
+    assert!(w.camera().forward().distance(first.forward()) > 0.1);
+}
+
+#[test]
+#[ignore = "requires local BF2 Geonosis assets"]
+fn ai_driven_atte_gunner_view_suppresses_tick_to_tick_yaw_oscillation() {
+    let (mut w, h) = fixture();
+    w.sim.unseat_unit(w.player);
+    let pos = w.sim.vehicle(h).unwrap().pos;
+    let bot = w
+        .sim
+        .spawn(&core::unit::UnitSpec {
+            controller: core::unit::Controller::Ai,
+            ..core::unit::UnitSpec::trooper(0, pos)
+        })
+        .unwrap();
+    assert!(w.sim.seat_unit(bot, h, 0));
+    assert!(w.sim.seat_unit(w.player, h, 2));
+    w.blend.on = true;
+    let (mut raw_sum, mut drawn_sum, mut prev_raw, mut prev_drawn) = (0.0f32, 0.0f32, None, None);
+    for i in 0..600 {
+        let mut blend = std::mem::take(&mut w.blend);
+        blend.before_tick(&w);
+        w.blend = blend;
+        w.step_tick(&[PadState::default()]);
+        let hash = w.sim.hash();
+        let raw = w.sim.vehicle(h).unwrap().rot;
+        let mut blend = std::mem::take(&mut w.blend);
+        assert!(blend.apply(&mut w, 1.0));
+        let drawn = w.sim.vehicle(h).unwrap().rot;
+        if i >= 450 {
+            if let (Some(a), Some(b)) = (prev_raw, prev_drawn) {
+                raw_sum += raw.angle_between(a);
+                drawn_sum += drawn.angle_between(b);
+            }
+        }
+        prev_raw = Some(raw);
+        prev_drawn = Some(drawn);
+        blend.restore(&mut w);
+        w.blend = blend;
+        assert_eq!(w.sim.hash(), hash);
+    }
+    assert!(raw_sum > 0.5, "raw oscillation {raw_sum}");
+    assert!(
+        drawn_sum < raw_sum * 0.15,
+        "drawn {drawn_sum}, raw {raw_sum}"
+    );
+}
