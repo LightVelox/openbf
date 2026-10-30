@@ -17,6 +17,8 @@
 
 mod mines;
 mod remotes;
+#[cfg(test)]
+mod secondary_tests;
 mod turrets;
 pub use remotes::{BLASTER_HUD, DESTRUCT_HUD};
 
@@ -30,7 +32,7 @@ use core::sim::{DropTable, ItemClass, StationClass};
 use core::soldier::SoldierConstants;
 use core::unit::{SlotSpec, UnitClass};
 use core::weapon::{
-    ExplosionClass, HealthType, OrdKind, OrdnanceClass, PropSource, Thrown, WeaponClass,
+    ExplosionClass, HealthType, OrdKind, OrdnanceClass, PropSource, Secondary, Thrown, WeaponClass,
 };
 use std::path::Path;
 
@@ -46,6 +48,9 @@ impl PropSource for ClassSrc<'_> {
     }
     fn prop_hash(&self, hash: u32) -> Option<&str> {
         self.db.prop_hash(self.class, hash)
+    }
+    fn prop_hash_all(&self, hash: u32) -> Vec<&str> {
+        self.db.props_all_hash(self.class, hash)
     }
 }
 
@@ -104,6 +109,7 @@ pub struct ClassRoster {
     pub max: Option<u32>,
     /// The ODF's `PointsToUnlock` (0 = none; `UnitClass::unlock_points`).
     pub unlock_points: u32,
+    pub droideka: Option<std::sync::Arc<core::droideka::DroidekaClass>>,
 }
 
 /// One slot of a class's drop table: the item (`None` when the slot names a
@@ -239,11 +245,13 @@ pub fn load_classdb(classes_dir: &Path, game: &str, factions: &[&str]) -> Result
         ));
     }
     // A BF1 side whose class takes a BF2 class's weapons loads BF2's side too.
-    let donors: Vec<&str> = WEAPON_DONORS
+    let mut donors: Vec<&str> = WEAPON_DONORS
         .iter()
         .filter_map(|d| d.class.split('_').next())
         .filter(|side| factions.contains(side))
         .collect();
+    donors.sort_unstable();
+    donors.dedup();
     if game == "bf1" && !donors.is_empty() {
         db.donor_weapons = Some(Box::new(load_classdb(classes_dir, "bf2", &donors)?));
     }
@@ -260,9 +268,8 @@ pub fn load_classdb(classes_dir: &Path, game: &str, factions: &[&str]) -> Result
 /// shipped mission RONs (`engine/missions/*.ron`, `TeamDef::classes`): the
 /// plain trooper FIRST (it is the fill class `ai_class` hands every spawn
 /// past the minimums), then the heavy, the pilot/engineer, the sniper and the
-/// specialist. `cis_inf_droideka` is in the modal mix of both CIS pairs and
-/// is left OUT of both: its BASE chain ends at `walkerdroid`, so
-/// `ClassRoster::build` rejects it as not-infantry (its own RE is backlog).
+/// specialist. `cis_inf_droideka` is in the modal mix of both CIS pairs; its
+/// BASE chain ends at `walkerdroid`, so it builds as a droideka.
 pub const DEFAULT_CLASSES: &[(&str, &str, &[&str])] = &[
     (
         "bf1",
@@ -305,6 +312,7 @@ pub const DEFAULT_CLASSES: &[(&str, &str, &[&str])] = &[
             "cis_inf_assault",
             "cis_inf_pilotdroid",
             "cis_inf_assassindroid",
+            "cis_inf_droideka",
         ],
     ),
     (
@@ -352,6 +360,7 @@ pub const DEFAULT_CLASSES: &[(&str, &str, &[&str])] = &[
             "cis_inf_engineer",
             "cis_inf_sniper",
             "cis_inf_officer",
+            "cis_inf_droideka",
         ],
     ),
 ];
@@ -365,11 +374,16 @@ pub fn default_classes(game: &str, faction: &str) -> Option<&'static [&'static s
 }
 
 /// Does `class`'s BASE chain end at the engine's `soldier` base? The mission
-/// lists name things that are not soldiers — BF2's `cis_inf_droideka` is a
-/// `walkerdroid` (its own RE is the maintainer's backlog item), BF1's heroes are
-/// soldiers but never appear in a conquest `AddUnitClass` list.
+/// lists name things that are not soldiers — `cis_inf_droideka` is a
+/// `walkerdroid` ([`is_droideka_chain`]), BF1's heroes are soldiers but never
+/// appear in a conquest `AddUnitClass` list.
 pub fn is_soldier_chain(db: &ClassDb, class: &str) -> bool {
     db.engine_base(class) == Some("soldier")
+}
+
+pub fn is_droideka_chain(db: &ClassDb, class: &str) -> bool {
+    db.engine_base(class)
+        .is_some_and(|b| b.eq_ignore_ascii_case("walkerdroid"))
 }
 
 /// Primary weapon: the class's first channel-0 slot — the PS2's cur[0]
@@ -486,6 +500,10 @@ pub fn jet_look(db: &ClassDb, class: &str) -> JetLook {
     if !c.has_jet() && !c.jet_hover {
         return JetLook::default();
     }
+    engine_block(db, class)
+}
+
+pub fn engine_block(db: &ClassDb, class: &str) -> JetLook {
     JetLook {
         effect: sound_key(db, class, "JetEffect"),
         engine: sound_key(db, class, "EngineSound"),
@@ -765,6 +783,43 @@ fn fired_ordnance(db: &ClassDb, ord_name: &str) -> OrdnanceClass {
         .engine_base(ord_name)
         .map_or(OrdKind::Other, OrdKind::from_base);
     charge_points(db, ord_name, &mut ord);
+    if ord.kind == OrdKind::Missile {
+        // Its steering keys (card UORD §4.1): TurnRate, the waver pair, the
+        // ramp period, and BF2's MinSpeed / Acceleration.
+        let mut m = core::missile::MissileClass::from_props(&ClassSrc {
+            db,
+            class: ord_name,
+        });
+        m.ramps = db.is_bf2();
+        ord.missile = Some(m);
+    }
+    if db
+        .engine_base(ord_name)
+        .is_some_and(|b| b.eq_ignore_ascii_case("fatray"))
+    {
+        ord.fat_ray = Some(core::weapon::FatRayClass::from_props(&ClassSrc {
+            db,
+            class: ord_name,
+        }));
+    }
+    if ord.kind == OrdKind::Beam {
+        let beam = core::weapon::BeamClass::from_props(&ClassSrc {
+            db,
+            class: ord_name,
+        });
+        let look = ord.impact.get_or_insert_with(ImpactLook::default);
+        look.terrain = None;
+        look.water = None;
+        for slot in [
+            &mut look.soft,
+            &mut look.rigid,
+            &mut look.building,
+            &mut look.shield,
+        ] {
+            slot.clone_from(&beam.impact);
+        }
+        ord.beam = Some(beam);
+    }
     if ord.kind == OrdKind::Shell {
         // Its fall, and its burst when its life runs out in the air
         // (re-ordnance-kinds §6).
@@ -774,6 +829,33 @@ fn fired_ordnance(db: &ClassDb, ord_name: &str) -> OrdnanceClass {
             .and_then(|e| explosion_class(db, e));
     }
     ord
+}
+
+/// A weapon's secondary ordnance (card UORD, `analysis/re-ordnance-kinds.md`
+/// §7): `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod` (B2:324171-324181),
+/// the TRACER spawned beside the primary every `period`-th round. Read from
+/// the stage's replayed keys `src`, as the other weapon keys are. `None` when
+/// the class names no ordnance, names one the db does not hold, or authors a
+/// period under 1 (never); a missing period is the PS2 class default, 1.
+fn secondary_ordnance(db: &ClassDb, src: &ListSrc<'_>) -> Option<Secondary> {
+    let name = src.prop("SecondaryOrdnanceName")?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let period = src
+        .prop("SecondaryOrdnancePeriod")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .unwrap_or(1.0);
+    if period < 1.0 {
+        return None;
+    }
+    let name = db.resolve(name)?;
+    Some(Secondary {
+        name: name.to_owned(),
+        ordnance: fired_ordnance(db, name),
+        period: period as u32,
+        index: usize::MAX,
+    })
 }
 
 /// One charge stage of a weapon (the root: every key before the first
@@ -842,11 +924,32 @@ fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<Wea
     }
     let ord = fired_ordnance(db, &ord_name);
     let mut w = WeaponClass::from_props(weapon, &wsrc, ord);
+    // An emitter's cone-and-chain law (card UORDE): the ordnance class
+    // authors its own keys, so it is read separately from `fired_ordnance`.
+    if db.engine_base(&ord_name) == Some("emitterordnance") {
+        w.emitter = Some(core::weapon::EmitterOrdnance::from_props(
+            &ClassSrc {
+                db,
+                class: &ord_name,
+            },
+            db.is_bf2(),
+        ));
+    }
     if db.is_bf2() && db.engine_base(&ord_name) == Some("emitterordnance") {
         w.ability = core::weapon::Ability::from_props(&ClassSrc {
             db,
             class: &ord_name,
         });
+    }
+    // The dwell lock (card UORD §5): the PS2 parses `LockTime` in the
+    // launcher setter alone, so a cannon that authors it (the wrist rockets)
+    // never holds a lock. `weapon_stage` holds the replayed stage keys, so a
+    // stage does not inherit its root's.
+    if db.engine_base(weapon) == Some("launcher") {
+        w.lock_time = wsrc
+            .prop("LockTime")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0.0);
     }
     // The offsets: the count key starts a stage's table and its pairs follow
     // (the bowcaster authors one per stage, re-blaster-damage.md §3.3); a
@@ -885,6 +988,9 @@ fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<Wea
             w.ability.is_none() && !NO_FLASH_BASES.iter().any(|n| b.eq_ignore_ascii_case(n))
         })
         .then(|| flash_look(db, weapon));
+    // The tracer that rides this weapon's rounds (BF2's shotgun, chaingun and
+    // award weapons; `analysis/re-ordnance-kinds.md` §7).
+    w.secondary = secondary_ordnance(db, &wsrc);
     Ok(w)
 }
 
@@ -961,11 +1067,18 @@ pub struct WeaponDonor {
     pub twins: &'static [(&'static str, &'static str)],
 }
 
-pub const WEAPON_DONORS: &[WeaponDonor] = &[WeaponDonor {
-    class: "cis_inf_battledroid",
-    donor: "cis_inf_rifleman",
-    twins: &[("cis_weap_inf_wrist_trishot", "cis_weap_inf_wrist_shrapnel")],
-}];
+pub const WEAPON_DONORS: &[WeaponDonor] = &[
+    WeaponDonor {
+        class: "cis_inf_battledroid",
+        donor: "cis_inf_rifleman",
+        twins: &[("cis_weap_inf_wrist_trishot", "cis_weap_inf_wrist_shrapnel")],
+    },
+    WeaponDonor {
+        class: "cis_inf_droideka",
+        donor: "cis_inf_droideka",
+        twins: &[],
+    },
+];
 
 /// How a weapon slot's item works in the port, read from its class data
 /// (issue #42): the weapon's engine base and its ordnance's.
@@ -1113,7 +1226,10 @@ pub fn flash_look(db: &ClassDb, weapon: &str) -> MuzzleFlashLook {
 /// or `laser` label.
 pub fn laser_look(db: &ClassDb, ordnance: &str) -> Option<LaserLook> {
     let base = db.engine_base(ordnance)?;
-    if !(base.eq_ignore_ascii_case("bolt") || base.eq_ignore_ascii_case("laser")) {
+    if !["bolt", "laser", "beam"]
+        .iter()
+        .any(|b| base.eq_ignore_ascii_case(b))
+    {
         return None;
     }
     Some(LaserLook::replay(chain_props(db, ordnance)))
@@ -1134,7 +1250,7 @@ const BULLET_BASES: [&str; 8] = [
 ];
 
 /// A class chain's PROPs, parent first, each class's in file order.
-fn chain_props<'a>(db: &'a ClassDb, class: &str) -> Vec<(u32, &'a str)> {
+pub(crate) fn chain_props<'a>(db: &'a ClassDb, class: &str) -> Vec<(u32, &'a str)> {
     db.chain(class)
         .iter()
         .rev()
@@ -1207,7 +1323,7 @@ pub fn chunk_death(db: &ClassDb, class: &str) -> Option<core::unit::ChunkDeath> 
     })
 }
 
-fn explosion_class(db: &ClassDb, name: &str) -> Option<ExplosionClass> {
+pub(crate) fn explosion_class(db: &ClassDb, name: &str) -> Option<ExplosionClass> {
     let e = db.resolve(name.trim())?;
     let mut x = ExplosionClass::from_props(&ClassSrc { db, class: e });
     x.spares_living = db.chain(e).iter().any(|d| {
@@ -1578,7 +1694,8 @@ impl ClassRoster {
     pub fn build(db: &ClassDb, class: &str, min: u32, max: Option<u32>) -> Result<ClassRoster> {
         db.get(class)
             .with_context(|| format!("class {class} not in the baked class db"))?;
-        if !is_soldier_chain(db, class) {
+        let walker_droid = is_droideka_chain(db, class);
+        if !is_soldier_chain(db, class) && !walker_droid {
             return Err(anyhow!(
                 "{class}: base chain ends at {:?}, not \"soldier\" — not an \
                  infantry class",
@@ -1588,9 +1705,9 @@ impl ClassRoster {
         let donor = WEAPON_DONORS
             .iter()
             .find(|d| d.class.eq_ignore_ascii_case(class));
-        let (weapon_db, weapon_owner) = match (donor, db.donor_weapons.as_deref()) {
-            (Some(d), Some(bf2)) => (bf2, d.donor),
-            _ => (db, class),
+        let (weapon_db, weapon_owner, donated) = match (donor, db.donor_weapons.as_deref()) {
+            (Some(d), Some(bf2)) if bf2.get(d.donor).is_some() => (bf2, d.donor, true),
+            _ => (db, class, false),
         };
         let twins = donor.map_or(&[][..], |d| d.twins);
         let slots = weapon_db.weapon_slots(weapon_owner);
@@ -1602,7 +1719,7 @@ impl ClassRoster {
         );
         let mut weapon = weapon_from_db(weapon_db, &weapon_name)?;
         let mut held = held_slots(weapon_db, weapon_owner, weapon_slot);
-        if weapon_owner != class {
+        if donated {
             for selected in
                 std::iter::once(&mut weapon).chain(held.iter_mut().map(|s| &mut s.weapon))
             {
@@ -1635,7 +1752,7 @@ impl ClassRoster {
             }
         }
         let mut anim = class_anim(db, class, &db.weapon_slots(class));
-        if weapon_owner != class {
+        if donated {
             for (weapon, _) in &mut anim.banks {
                 if let Some((bf2, _)) = twins.iter().find(|(_, bf1)| weapon == bf1) {
                     *weapon = (*bf2).into();
@@ -1669,7 +1786,9 @@ impl ClassRoster {
             label,
             unit_type,
             consts,
-            max_health: db.prop_f32(class, "MaxHealth").unwrap_or(300.0),
+            max_health: if walker_droid { weapon_db } else { db }
+                .prop_f32(class, "MaxHealth")
+                .unwrap_or(300.0),
             health_type: db
                 .prop(class, "HealthType")
                 .and_then(HealthType::parse)
@@ -1681,7 +1800,10 @@ impl ClassRoster {
             skins: class_skins(db, class),
             slots,
             weapon_slot,
-            geometry: db.prop(class, "GeometryName").map(|g| g.trim().to_owned()),
+            geometry: db
+                .prop(class, "GeometryName")
+                .map(|g| g.trim().to_owned())
+                .filter(|_| !walker_droid),
             weapon_geometry: weapon_geometry(db, class),
             weapon_hud: weapon_hud(weapon_db, &weapon_name),
             foley_class: db
@@ -1689,9 +1811,17 @@ impl ClassRoster {
                 .map_or(0, |v| crate::classdb::fnv1a_lowercase(v.trim())),
             cries: cries(db, class),
             jet: db.prop_f32(class, "JetJump").is_some_and(|j| j > 0.0),
-            jet_look: jet_look(db, class),
+            jet_look: if walker_droid {
+                engine_block(db, class)
+            } else {
+                jet_look(db, class)
+            },
             drops: drop_entries(db, class),
-            chunk: chunk_death(db, class),
+            chunk: if walker_droid {
+                None
+            } else {
+                chunk_death(db, class)
+            },
             min,
             max,
             // `[ours]` (card UNLK1): BF1's specials take their BF2
@@ -1705,6 +1835,9 @@ impl ClassRoster {
                         .flatten()
                 })
                 .unwrap_or(0),
+            droideka: walker_droid.then(|| {
+                std::sync::Arc::new(crate::droideka::droideka_class(db, weapon_db, class))
+            }),
         })
     }
 
@@ -1734,6 +1867,7 @@ impl ClassRoster {
             min: self.min,
             max: self.max,
             unlock_points: self.unlock_points,
+            droideka: self.droideka.clone(),
         }
     }
 
@@ -1922,5 +2056,104 @@ impl FactionRoster {
         let b = out.pop().unwrap();
         let a = out.pop().unwrap();
         Ok(([a, b], warnings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The secondary ordnance keys (`SecondaryOrdnanceName` /
+    //! `SecondaryOrdnancePeriod`), without the discs: the data-gated suite
+    //! checks the baked classes' own values.
+
+    use super::*;
+    use crate::classdb::{fnv1a_lowercase, ClassDef};
+
+    /// One in-memory class row: name, base, props (the suite's `gcl16_db`
+    /// shape, without a file).
+    type Row<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    /// A class db from in-memory rows, through the real loader.
+    fn db(rows: &[Row<'_>]) -> ClassDb {
+        let defs: Vec<ClassDef> = rows
+            .iter()
+            .map(|(name, base, props)| ClassDef {
+                name: (*name).into(),
+                kind: String::new(),
+                base: (*base).into(),
+                props: props
+                    .iter()
+                    .map(|(k, v)| (fnv1a_lowercase(k), (*v).into()))
+                    .collect(),
+            })
+            .collect();
+        let path = std::env::temp_dir().join(format!(
+            "openbf-secondary-{}-{:?}.ron",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, ron::to_string(&defs).unwrap()).unwrap();
+        let mut db = ClassDb::default();
+        assert_eq!(db.load(&path).unwrap(), rows.len());
+        std::fs::remove_file(&path).unwrap();
+        db
+    }
+
+    const ROUND: Row<'static> = ("test_ord", "bolt", &[("MaxDamage", "65")]);
+    const TRACER: Row<'static> = (
+        "test_tracer",
+        "bolt",
+        &[
+            ("MaxDamage", "0"),
+            ("Velocity", "160"),
+            ("LifeSpan", "0.15"),
+        ],
+    );
+
+    fn gun(props: &[(&str, &str)]) -> WeaponClass {
+        let d = db(&[ROUND, TRACER, ("test_gun", "cannon", props)]);
+        weapon_from_db(&d, "test_gun").unwrap()
+    }
+
+    #[test]
+    fn roster_reads_a_weapons_secondary_tracer_and_its_period() {
+        let w = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "test_tracer"),
+            ("SecondaryOrdnancePeriod", "5"),
+        ]);
+        let s = w.secondary.as_ref().expect("the tracer's keys");
+        assert_eq!(s.name, "test_tracer");
+        assert_eq!(s.period, 5);
+        assert_eq!(s.ordnance.velocity, 160.0);
+        assert_eq!(s.ordnance.life_span, 0.15);
+        assert!(s.ordnance.is_tracer());
+        // The sim registration fills this in; the parse leaves it unset.
+        assert_eq!(s.index, usize::MAX);
+    }
+
+    #[test]
+    fn roster_secondary_needs_a_known_class_and_a_period_of_one() {
+        // No key at all: no secondary.
+        assert!(gun(&[("OrdnanceName", "test_ord")]).secondary.is_none());
+        // No period: the PS2 class default, 1 (every round).
+        let every = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "test_tracer"),
+        ]);
+        assert_eq!(every.secondary.as_ref().map(|s| s.period), Some(1));
+        // A period under 1 never spawns (`tur_weap_spa_cannon` authors 0).
+        let never = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "test_tracer"),
+            ("SecondaryOrdnancePeriod", "0"),
+        ]);
+        assert!(never.secondary.is_none());
+        // A name the db does not hold is dropped, not defaulted.
+        let missing = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "not_a_class"),
+            ("SecondaryOrdnancePeriod", "1"),
+        ]);
+        assert!(missing.secondary.is_none());
     }
 }

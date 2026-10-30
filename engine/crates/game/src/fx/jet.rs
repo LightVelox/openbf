@@ -91,10 +91,12 @@ impl Fx {
             // The body is drawn blended between ticks (card RINT) and posed
             // at this frame's clock: the repair pulses and the jets ride that
             // body, not the tick's.
-            let (muzzles, jets) =
-                vis.as_drawn(walk, look, |v, w| (v.fire_points(w), v.jet_frames(w)));
+            let (muzzles, jets, burns) = vis.as_drawn(walk, look, |v, w| {
+                (v.fire_points(w), v.jet_frames(w), v.burn_frames(w))
+            });
             self.set_repair_origins(&muzzles);
             self.set_jet_frames(jets);
+            self.set_burn_frames(burns);
         }
         self.update(dt);
     }

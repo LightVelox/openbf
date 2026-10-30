@@ -193,35 +193,24 @@ fn the_mouse_steers_a_hover_as_a_turn_stick_and_aims_a_walker() {
 }
 
 #[test]
-fn a_walkers_mouse_aim_stops_at_its_limits_beside_the_legs() {
+fn a_walkers_mouse_aim_passes_its_turn_window_and_keeps_pitch_limited() {
     let p = crate::vehicle::walker::tests::atst();
     let (mut s, _, v) = world(Vec3::new(0.0, 2.0, -6.0), None, true);
     let veh = &mut s.vehicles[v.index as usize];
     veh.kind = VehicleKind::Walker;
-    let legs = veh.walker.leg_angle();
-    let (lo, hi) = (p.yaw_limits[0] + legs, p.yaw_limits[1] + legs);
     let pad = |yaw: f64, pitch: f64| PadState {
         mx: PadState::quantize_look(yaw),
         my: PadState::quantize_look(pitch),
         ..PadState::default()
     };
-    crate::sim::look::mouse_drive(veh, &pad(-10.0, 10.0), false, Some(&p));
-    assert_eq!(veh.walker.aim_yaw, hi);
+    crate::sim::look::mouse_drive(veh, &pad(-2.0, 10.0), false, Some(&p));
+    assert_eq!(veh.walker.aim_yaw, 2.0);
+    assert!(veh.walker.aim_yaw > p.yaw_limits[1]);
     assert_eq!(veh.walker.aim_pitch, p.pitch_limits[1]);
-    crate::sim::look::mouse_drive(veh, &pad(-10.0, 0.0), false, Some(&p));
-    assert_eq!(veh.walker.aim_yaw, hi, "held at the limit");
-    crate::sim::look::mouse_drive(veh, &pad(0.25, 0.0), false, Some(&p));
-    assert!((veh.walker.aim_yaw - (hi - pad(0.25, 0.0).look().0)).abs() < 1e-6);
-    crate::sim::look::mouse_drive(veh, &pad(20.0, -10.0), false, Some(&p));
-    assert_eq!(veh.walker.aim_yaw, lo);
+    crate::sim::look::mouse_drive(veh, &pad(4.0, -10.0), false, Some(&p));
+    assert_eq!(veh.walker.aim_yaw, -2.0);
+    assert!(veh.walker.aim_yaw < p.yaw_limits[0]);
     assert_eq!(veh.walker.aim_pitch, p.pitch_limits[0]);
-    veh.walker.aim_yaw = hi + 0.1;
-    crate::sim::look::mouse_drive(veh, &pad(-0.05, 0.0), false, Some(&p));
-    assert_eq!(
-        veh.walker.aim_yaw,
-        hi + 0.1,
-        "past the limit it is not pulled back"
-    );
 }
 
 #[test]

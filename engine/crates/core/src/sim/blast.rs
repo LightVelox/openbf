@@ -284,7 +284,14 @@ impl Sim {
     ///   nothing). A droid class rolls its `ChunkFrequency` first
     ///   ([`Sim::chunk_push_roll`], card DROIDDEATH): won, it is marked and
     ///   not pushed.
-    fn kick_and_push(&mut self, h: UnitHandle, e: &ExplosionClass, pos: Vec3, c: Vec3, w: f32) {
+    pub(super) fn kick_and_push(
+        &mut self,
+        h: UnitHandle,
+        e: &ExplosionClass,
+        pos: Vec3,
+        c: Vec3,
+        w: f32,
+    ) {
         let Some(u) = self
             .units
             .get(h.index as usize)
@@ -292,6 +299,9 @@ impl Sim {
         else {
             return;
         };
+        if u.droideka.is_some() {
+            return;
+        }
         let mounted = u.mount.is_some();
         let i = h.index as usize;
         if !u.alive {
@@ -381,8 +391,10 @@ impl Sim {
         // No tier multiplies a bot's blast into a human (card DRETIRE).
         let mult = self.buff_scale(attacker, h);
         let ff = self.friendly_fire_scale;
-        let u = self.unit_mut(h).unwrap();
-        let damage = u.health.take_damage(desc, f * mult, friendly, ff);
+        let damage = self
+            .unit_mut(h)
+            .unwrap()
+            .lend_droideka_shield(|health| health.take_damage(desc, f * mult, friendly, ff));
         self.finish_unit_damage(h, attacker, damage, super::state::BLAST_AGE, dir);
     }
 }

@@ -322,7 +322,11 @@ BF1 KAS2 Clone Wars as the ARC trooper (`ps2/out/b1_kas2_arc_spawned.p2s`), BF2 
 - BF2 shotguns (`com_weap_inf_shotgun` 8 pellets, award 7): label `cannon`, all pellets in ONE update, each with its
   own triangular spread (±3° x ±4.5°), one round each; pellet `bullet` 2000 m/s, 0.1 s, 65 -> 15 by the age falloff.
   A 0-damage tracer bolt rides with every pellet: `SecondaryOrdnanceName` 0xdddb253a, `SecondaryOrdnancePeriod`
-  0x82e86218 = 1 (B2:324171-324181). Chaingun: automatic 20 / s, 20000 m/s, tracer every 5th shot.
+  0x82e86218 = 1 (B2:324171-324181). Chaingun: automatic 20 / s, 20000 m/s, a tracer on rounds 1, 6, 11, ...
+- The secondary rule [V] (2026-10-30, `FUN_0032f208` B2:311910-311965): the weapon class keeps the secondary class at
+  +0x2ec and the period at +0x2f0; `carries = counter++ % period == 0`, so the FIRST round carries it, and the round is
+  made through the secondary class's own create slot (vt+0x10), so any ordnance kind rides (the sonic blaster's
+  `fatray`, the geonosian turret's hidden bolt), not only 0-damage tracers.
 - BF2's falloff age grows once per update, and a pellet struck in its first update is still age 0 [M]: PCSX2 on Dagobah
   (2026-10-28, Rebel engineer vs a stormtrooper held 3 m ahead, health reset before each shot) read every shot as a
   multiple of 65: 520 = 8 body, 455 = 7 body, 975 = 3 body + 4 head, 1430 = 1 body + 7 head, 1560 = 8 head. So a
@@ -352,6 +356,15 @@ B2:305952-307007) runs one query per weapon shot and returns 0 (B1:199272).
   JumpDeduction 75, DamageThreshold 75, MaxJumpDistance 20): 1 target below charge 1/3, 2 below 5/6, 3 above; 4 is
   unreachable. BF2 dark trooper arc caster (1 + ⌊5f⌋ targets, 300 + 25f, Push 3), the Jawa arc caster, the officer's
   incinerator (30 per shot, 15-shot burst, hit-all) and the hero flamethrowers (5 per shot + burn 50/s for 5 s).
+- Burn keys [V] (2026-10-30, card UORDE): the setter `FUN_003156e0` (B2:293400-293680) stores `0x6824f471` (time,
+  class+0x130), `0x1076dfd6` (rate, +0x160), `0x6cf895fb` / `0x592fb160` (bone / effect, 5 slots at +0x138 / +0x14c),
+  `0xc0e20834` (the shot effect started on the shooter, +0x12c) and `0x348506dc` (a bool, +0x134 bit 0, no reader
+  found); `FUN_00236e28` sets the soldier's timer +0x105c = max, overwrites the rate +0x1064 and the desc +0x1068;
+  `FUN_00236f50` runs it from the soldier update. The incinerator authors no rate (ctor 0): a mark, no damage.
+
+- Miss lightning [V] (2026-10-30): BF1 draws ONE bolt when the query struck nothing and a lightning class exists
+  (B1:199011-199012), from the muzzle to the aim ray's end within ConeLength (mask 0x4c); BF2 draws NumBolts
+  (0x63384b21, ctor 1) less the hits. BF2's bolt spread (0xdd09f94e, hero classes only, global RNG) is not modelled.
 
 ## 9. The disc: fielded primaries that are not bolts
 
@@ -362,6 +375,29 @@ Geonosian blunderbuss (a missile with TurnRate 0, LifeSpan 0.85); shell = the IM
 = 9 rocket / torpedo launchers, the EMP launcher (x3), the bulldog (x2); bullet = shotguns, award shotguns and
 pistols, the chaingun, Jango's pistol; emitter = the incinerator, the Imperial and Jawa arc casters, two hero
 flamethrowers.
+
+## 9b. The fat ray and the beam [V] (2026-10-30)
+
+- `fatray` (the sonic blaster's secondary, the geonosian turret): class ctor `FUN_003183f0` (B2:295295, the bullet class
+  plus seven floats), setter `FUN_00318520` (B2:295351): MaxDamage 0x47d0e794 (+0x11c, ctor 20), 0xfe544f96 (min, +0x120,
+  10), 0xaf922a6b (deduction, +0x124, 5), 0xaee05d99 / 0x3ed11ac3 / 0x58a7da24 (push max / min / deduction, 15 / 5 / 3),
+  RayRadius 0xa4c53efd (+0x134, 3). Instance `FUN_00317e10` (B2:295036): damage = lerp(min, max, charge), push alike.
+  Sweep `FUN_00317f20` (B2:295077) replaces the bullet sweep: bodies of mask 0x1022 (no vehicles) on the tick's
+  segment, owner skipped, at the soldier's target point with 0 < t < L and distance d < radius; f = 1 − d/radius;
+  damage x f with every scale 1.0, then damage = max(damage − deduction x f, min); it returns 1 (the round flies on).
+- `beam` (the BF2 award sniper rifles, the vehicle beams): class `FUN_003126c0` (B2:291369, 0xe0 bytes), setter
+  `FUN_00312838` (B2:291429): Range 0xfadc0cd2 (+0xbc, ctor 150), LaserWidth / LaserTexture / LaserGlowColor, the pierce
+  bit 0x604e2441 (+0xd8), ImpactEffect 0x11727a92 (+0xdc); the bullet ImpactEffect* keys are dead on it. Instance
+  `FUN_00311b50` (B2:290798) holds the owner's nearest fire point. Update `FUN_00311d00` (B2:290892-291107), every frame
+  of its LifeSpan: origin and direction again from the fire point, a ray of Range; an entity struck takes the class's
+  damage desc x dt / LifeSpan and spawns the +0xdc effect; without the pierce bit the first hit stops it, with it a
+  soldier-type hit (0x80 / 0x10 / 4) still does; the drawn ribbon is the reached length + 1 about its middle.
+- The port: `Sim::sweep_fat_rays` (`sim/fatray.rs`); `Sim::beams` (`sim/beam.rs`) casts one full-range round a tick
+  through the bolt sweep, with damage x TICK_DT / LifeSpan. Deviations: a pierce beam stops at the first vehicle too;
+  a seat's beam keeps its spawn ray; the per-hit impact effect has a network-looking gate (DAT_00600548 / 0x549 /
+  0x560 / 0x6d85ad) that is taken as open.
+- B1's bullet render `FUN_00277130` (B1:197885) draws the class model (GeometryName, the bullet setter's +0x84) along the
+  velocity for any bullet-family round: the jet trooper's rocket is drawn as `com_weap_missile`.
 
 ## 10. The port today, and the build
 
@@ -413,6 +449,7 @@ supported.
 - Why the BF1 player missile's +0x104 reads 0 every other update.
 - The emitter's open keys (13 BF2 hashes unnamed), which weapons answer the deflect query, BF2 gather layer 0x1000.
 - The name of 0x73e5a988 (unauthored; FNV "ScaleTime" only).
+- The beam's reach for the AI's range gate: the port keeps Velocity x LifeSpan; no beam range getter was found.
 - BF2's waver live (sign, phase order): the capture's BF2 classes all have WaverTurn 0; the EMP launcher's ordnance
   (WaverRate 0.2, WaverTurn 0.015 on the disc) would exercise it (AUDIT).
 - The BF1 crouch / prone target heights (0.6 / 0.2) and another BF2 class offset: the homing rows hold standing

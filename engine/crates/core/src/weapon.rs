@@ -65,6 +65,9 @@ pub const FIRE_EPS: f32 = 3.051_757_8e-5;
 pub trait PropSource {
     fn prop(&self, key: &str) -> Option<&str>;
     fn prop_hash(&self, hash: u32) -> Option<&str>;
+    fn prop_hash_all(&self, hash: u32) -> Vec<&str> {
+        self.prop_hash(hash).into_iter().collect()
+    }
 }
 
 pub(crate) fn pf(src: &dyn PropSource, key: &str) -> Option<f32> {
@@ -83,12 +86,29 @@ pub(crate) fn pair(src: &dyn PropSource, key: &str) -> Option<[f32; 2]> {
     Some([a, b])
 }
 
+pub fn floats<const N: usize>(v: &str) -> Option<[f32; N]> {
+    let mut out = [0.0; N];
+    let mut it = v.split_whitespace();
+    for slot in &mut out {
+        *slot = it.next()?.parse().ok()?;
+    }
+    Some(out)
+}
+
 mod ability;
+mod beam;
 mod dispenser;
+mod emitter;
+mod fatray;
 mod ordnance;
 mod repair;
+#[cfg(test)]
+mod test_props;
 pub use ability::Ability;
+pub use beam::BeamClass;
 pub use dispenser::Dispenser;
+pub use emitter::{BurnClass, EmitterOrdnance, BURN_SLOTS};
+pub use fatray::FatRayClass;
 pub use ordnance::{
     blast_falloff, DamageDesc, ExplosionClass, Falloff, Health, HealthType, OrdBlend, OrdKind,
     OrdKnot, OrdnanceClass, EXPLOSION_OFFSET, HASH_FALLOFF_DURATION, HASH_FALLOFF_END_DAMAGE,
@@ -126,6 +146,37 @@ pub struct ChargeStage {
     pub threshold: f32,
     pub class: Box<WeaponClass>,
     pub index: usize,
+}
+
+/// A weapon's secondary ordnance (card UORD, `analysis/re-ordnance-kinds.md`
+/// §7): BF2's `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod` (key hashes
+/// 0xdddb253a / 0x82e86218, B2:324171-324181), a round spawned BESIDE the
+/// primary shot. On the discs the class it names is the TRACER (a 0-damage
+/// bolt: `com_weap_inf_shotgun_tracer`, `com_weap_inf_chaingun_tracer`,
+/// `com_weap_award_shotgun_tracer`, `com_weap_award_pistol_tracer`), and the
+/// port spawns it as [`crate::projectile::Bolt`] of its own class every
+/// `period`-th round. Every other class a `SecondaryOrdnanceName` names is a
+/// real round (the probe droid's sonic blaster) and spawns nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Secondary {
+    /// The ordnance class's name as the db spells it, for reports and tests.
+    pub name: String,
+    /// Its ordnance data: velocity, LifeSpan, MaxDamage 0 and the laser look.
+    pub ordnance: OrdnanceClass,
+    /// `SecondaryOrdnancePeriod`: rounds per tracer; 1 = every round.
+    pub period: u32,
+    /// Its entry in `Sim::weapon_classes` (`usize::MAX` until
+    /// [`crate::sim::Sim::add_weapon_class`] registers it) - the class index
+    /// its bolts carry for their damage and their look.
+    pub index: usize,
+}
+
+impl Secondary {
+    /// Does round `n` (1-based: the weapon's rounds fired since it was made)
+    /// carry the secondary?
+    pub fn on_round(&self, n: u32) -> bool {
+        self.period > 0 && n >= 1 && (n - 1).is_multiple_of(self.period)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -167,6 +218,13 @@ pub struct WeaponClass {
     pub ai_bubble_clamp: f32,
     /// > 0 = charge weapon (fires on release).
     pub max_pressed_time: f32,
+    /// `LockTime` (card UORD §5; B1 launcher `FUN_00290758` B1:217008 writes
+    /// W.class+0x250, B2 `FUN_0033acc8` B2:332061): seconds a launcher must
+    /// dwell on a target before a missile it fires homes. 0 = never. Read
+    /// only on a `launcher` class - the PS2 parses the key in the launcher
+    /// setter alone, so a cannon's `LockTime` (the wrist rockets') does
+    /// nothing.
+    pub lock_time: f32,
     pub lock_on_range: f32,
     /// The acquisition cone's slope, radians (C+0xd8: `LockOnAngle` × DEG, or
     /// `AutoAimSize` × 0.072; `analysis/re-aim-assist.md` §3.2). 0 = a cone
@@ -236,6 +294,10 @@ pub struct WeaponClass {
     pub spread_threshold: f32,
     pub spread_limit: f32,
     pub ordnance: OrdnanceClass,
+    /// BF2's `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod`: the TRACER
+    /// round fired beside the primary ([`Secondary`]). `None` on every class
+    /// that authors neither key (every BF1 weapon).
+    pub secondary: Option<Secondary>,
     /// Sound property names (FireSound / ReloadSound / FireEmptySound /
     /// WeaponChangeSound).
     pub fire_sound: Option<String>,
@@ -261,6 +323,10 @@ pub struct WeaponClass {
     pub dispenser: Option<Dispenser>,
     pub mine: Option<Dispenser<crate::mine::MineClass>>,
     pub ability: Option<Ability>,
+    /// An `emitterordnance` class's data (the arc casters, the incinerator,
+    /// the flamethrowers; `analysis/re-ordnance-kinds.md` §8). `None` = the
+    /// class is not an emitter.
+    pub emitter: Option<EmitterOrdnance>,
     pub cloak: Option<crate::cloak::CloakClass>,
     pub guided: Option<Box<crate::guided::GuidedWeapon>>,
     pub remote: Option<Box<crate::remote::RemoteWeapon>>,
@@ -371,6 +437,7 @@ impl Default for WeaponClass {
             ai_bubble_dist: 20.0,
             ai_bubble_clamp: 10.0,
             max_pressed_time: 0.0,
+            lock_time: 0.0,
             lock_on_range: 0.0,
             lock_on_angle: 0.0,
             extreme_range: 0.0,
@@ -398,6 +465,7 @@ impl Default for WeaponClass {
             spread_threshold: 0.0,
             spread_limit: 0.0,
             ordnance: OrdnanceClass::default(),
+            secondary: None,
             fire_sound: None,
             fire_loop_sound: None,
             muzzle_effect: None,
@@ -412,6 +480,7 @@ impl Default for WeaponClass {
             dispenser: None,
             mine: None,
             ability: None,
+            emitter: None,
             cloak: None,
             guided: None,
             remote: None,
@@ -503,6 +572,7 @@ impl WeaponClass {
             ai_bubble_dist: 20.0,
             ai_bubble_clamp: 10.0,
             max_pressed_time: 0.0,
+            lock_time: 0.0,
             lock_on_range: 64.0,
             // LockOnAngle 1.0; the bolt's reach 80 × 1.5 (OrdnanceName after
             // LockOnRange); TargetEnemy 1, TargetPerson/Animal/Droid 1,
@@ -560,6 +630,9 @@ impl WeaponClass {
                 expire: None,
                 knots: Vec::new(),
                 min_damage: None,
+                missile: None,
+                fat_ray: None,
+                beam: None,
                 impact: Some(crate::impact::ImpactLook {
                     soft: Some("ord_explosion".into()),
                     rigid: Some("ord_explosion".into()),
@@ -570,6 +643,7 @@ impl WeaponClass {
                     ..Default::default()
                 }),
             },
+            secondary: None,
             fire_sound: Some("all_weap_inf_rifle_fire".into()),
             fire_loop_sound: None,
             muzzle_effect: None,
@@ -584,6 +658,7 @@ impl WeaponClass {
             dispenser: None,
             mine: None,
             ability: None,
+            emitter: None,
             cloak: None,
             guided: None,
             remote: None,
@@ -603,6 +678,7 @@ impl WeaponClass {
     pub fn bf2_rifle() -> Self {
         Self {
             name: "com_weap_inf_rifle".into(),
+            lock_time: 0.0,
             lock_on_range: 40.0,
             // The bolt's reach 160 × 0.8 (the BF1 rule, PROVISIONAL for BF2:
             // B2 FUN_00328fb0's OrdnanceName default is unread). The Target*
@@ -650,6 +726,9 @@ impl WeaponClass {
                 expire: None,
                 knots: Vec::new(),
                 min_damage: None,
+                missile: None,
+                fat_ray: None,
+                beam: None,
                 impact: Some(crate::impact::ImpactLook {
                     soft: Some("com_sfx_ord_exp".into()),
                     rigid: Some("com_sfx_ord_exp".into()),
@@ -1149,6 +1228,12 @@ pub struct WeaponState {
     /// blocks triggering; held channel slots draw and holster their weapons.
     pub active: bool,
     pub shots_fired: u64,
+    /// Rounds fired since the weapon was made, 1-based (the first round is 1),
+    /// counted only on a class that carries a [`Secondary`]. Its multiple of
+    /// `Secondary::period` is the round that spawns the tracer
+    /// ([`Secondary::on_round`]). Hashed only when non-zero, so every weapon
+    /// without a secondary keeps the old feed.
+    pub secondary_rounds: u32,
     pub tilt_index: u32,
     /// The charge stage this trigger fires ([`WeaponClass::stage_for`]).
     pub stage: u8,
@@ -1158,9 +1243,19 @@ pub struct WeaponState {
     /// "plenty of ammunition" asks (`re-grenades.md` 7.5). NOT hashed: a
     /// constant of the unit's class and slot.
     pub issued: u32,
+    /// The dwell lock's candidate (card UORD §5, the PS2's W+0x128 / +0x170)
+    /// and the seconds it has been held. A launcher's missile homes only when
+    /// [`WeaponState::locked`] says so at the press.
+    pub lock_target: Option<crate::missile::MissileTarget>,
+    pub lock_held: f32,
 }
 
 impl WeaponState {
+    pub fn count_secondary_round(&mut self) -> u32 {
+        self.secondary_rounds = self.secondary_rounds.wrapping_add(1);
+        self.secondary_rounds
+    }
+
     /// One loaded clip plus `reserve_clips` spare clips. Zero means no reserve;
     /// use [`Self::with_clips`] for authored totals and an unlimited reserve.
     pub fn new(class: &WeaponClass, human: bool, reserve_clips: u32) -> Self {
@@ -1187,11 +1282,21 @@ impl WeaponState {
             ai_dispersion: None,
             active: true,
             shots_fired: 0,
+            secondary_rounds: 0,
             tilt_index: 0,
             issued: class
                 .rounds_per_clip
                 .saturating_add(reserve_clips.saturating_mul(class.rounds_per_clip)),
+            lock_target: None,
+            lock_held: 0.0,
         }
+    }
+
+    /// Is the launcher's dwell lock up (card UORD §5)? The class must be a
+    /// launcher (`LockTime > 0`), the candidate alive, and the clock at the
+    /// limit.
+    pub fn locked(&self, c: &WeaponClass) -> bool {
+        c.lock_time > 0.0 && self.lock_target.is_some() && self.lock_held >= c.lock_time
     }
 
     /// The PS2's ammo rule for a class slot (`re-grenades.md` §2.5, B1
@@ -1596,6 +1701,26 @@ impl WeaponState {
         if self.tilt_index != 0 {
             eat(b"tilt");
             eat(&self.tilt_index.to_le_bytes());
+        }
+        if self.secondary_rounds != 0 {
+            eat(b"SEC");
+            eat(&self.secondary_rounds.to_le_bytes());
+        }
+        if let Some(t) = self.lock_target {
+            eat(b"LOCK");
+            match t {
+                crate::missile::MissileTarget::Unit(h) => {
+                    eat(&[0]);
+                    eat(&h.index.to_le_bytes());
+                    eat(&h.gen.to_le_bytes());
+                }
+                crate::missile::MissileTarget::Vehicle(h) => {
+                    eat(&[1]);
+                    eat(&h.index.to_le_bytes());
+                    eat(&h.gen.to_le_bytes());
+                }
+            }
+            eat(&self.lock_held.to_bits().to_le_bytes());
         }
     }
 }

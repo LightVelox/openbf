@@ -220,6 +220,19 @@ pub fn los_terrain(sim: &Sim, from: Vec3, to: Vec3) -> bool {
     }
 }
 
+pub fn reach(sim: &Sim, from: Vec3, dir: Vec3, len: f32) -> f32 {
+    let t = sim.terrain_ray(from, dir, len, 1.0).unwrap_or(len);
+    sim.collision
+        .ray_with(
+            from,
+            dir,
+            t,
+            crate::collision::Layers::ORDNANCE,
+            HullFilter::All,
+        )
+        .map_or(t, |h| h.t)
+}
+
 /// The model half of [`los`] — `true` when no `coll`/`prim` body blocks.
 pub fn los_world(sim: &Sim, from: Vec3, to: Vec3) -> bool {
     los_world_past(sim, from, to, HullFilter::All)

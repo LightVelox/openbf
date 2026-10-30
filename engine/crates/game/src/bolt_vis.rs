@@ -18,19 +18,6 @@
 //!   flight, × the fade. BF2's `BonusColor` core tint (the
 //!   `team_bonus_advanced_blasters` bonus) is not modelled: every live bolt
 //!   in the RAM was white.
-//! - **Where it starts**: the PS2's streak grows from the barrel. The sim
-//!   spawns a bot's bolt at the chest (`Unit::muzzle()`) and a human's at
-//!   the PS2's fire-point table (`Unit::fire_point()`, card AIMA), so the DRAWN
-//!   line runs from the weapon's fire point — where the muzzle flash sits,
-//!   `hp_weapons` × the weapon's `FirePointName` node
-//!   (`crate::soldier_vis::SoldierVisuals::fire_points`, handed over by
-//!   [`BoltVis::set_fire_points`]; a soldier drawn without a model keeps
-//!   the PROVISIONAL offset [`MUZZLE_FORWARD`] / [`MUZZLE_RIGHT`]) — to the
-//!   sim's own impact point, the head at the same fraction of the way as
-//!   the sim's. A rider's bolt, and a droid's or auto-turret's
-//!   (`Sim::is_item_gun`), already leaves from its gun and is drawn as
-//!   flown, and so is a scoped soldier's: it leaves the scope point on his
-//!   camera's axis ([`drawn_from_the_gun`]).
 //! - **Where it ends**: at the sim's impact - the press's foreseen end for
 //!   the map and the ground, else the `Impact` the tick's sweep made on a
 //!   soldier, a hull or a mine (the bolt vanishes from `sim.bolts` on that
@@ -52,6 +39,13 @@
 //!   `purplelaser_D`, which no disc holds (the PS2 binds a fallback and
 //!   draws VRAM garbage): the port draws `violetlaser_D` — PROVISIONAL, the
 //!   intended art.
+//! - **Missiles** (card UORD) are their own draw: a `missile` class has no
+//!   `LaserLook` (`roster::laser_look` only replays `bolt` / `laser`), so a
+//!   round of one is drawn as its `ordnance.geometry` model by
+//!   `SoldierVisuals::weapon_draws` — [`missiles_in_flight`] is that path's
+//!   read of `sim.bolts`. This module keeps no ribbon and no light for one,
+//!   but its [`key`] is stable under steering all the same: the trail
+//!   (`crate::fx::trail`) and the hit remnants identify rounds by it.
 
 use crate::bolt_light::OmniLight;
 use crate::walk::WalkSim;
@@ -78,15 +72,64 @@ pub const MUZZLE_RIGHT: f32 = 0.3;
 /// A bolt is known across frames by what never changes in flight.
 pub(crate) type Key = (u32, u32, usize, [u32; 3], [u32; 3]);
 
+/// The round's identity across frames (see [`Key`]). A straight bolt keeps
+/// its end point and its velocity for its whole flight; a missile steers, so
+/// both are new every tick and it is known instead by what its launch fixed:
+/// the line it left on and the two waver phases the class ctor drew for it
+/// (`Missile::launch`, card UORD — an index-free id no other round shares,
+/// and the same fields its replay state carries). Two rounds of one class
+/// from one launcher therefore stay two rounds, however they curve.
 pub(crate) fn key(b: &core::projectile::Bolt) -> Key {
     let bits = |v: Vec3| v.to_array().map(f32::to_bits);
-    (
-        b.owner.index,
-        b.owner.gen,
-        b.weapon_class,
-        bits(b.end),
-        bits(b.vel),
-    )
+    let (end, vel) = match &b.missile {
+        Some(m) => (
+            bits(m.launch),
+            [
+                m.phases[0].to_bits(),
+                m.phases[1].to_bits(),
+                m.top.to_bits(),
+            ],
+        ),
+        None => (bits(b.end), bits(b.vel)),
+    };
+    (b.owner.index, b.owner.gen, b.weapon_class, end, vel)
+}
+
+/// Whether the round draws as its `ordnance.geometry` model instead of a
+/// ribbon: a missile (card UORD; the model path is
+/// `SoldierVisuals::weapon_draws`, fed by [`missiles_in_flight`]). A missile
+/// never has a `LaserLook` off the discs — `roster::laser_look` replays
+/// `bolt` / `laser` alone — but the model is the preferred draw all the same
+/// (the task's order: geometry, then tracer, then nothing).
+fn modelled(walk: &WalkSim, b: &core::projectile::Bolt) -> bool {
+    walk.sim
+        .weapon_classes
+        .get(b.weapon_class)
+        .is_some_and(|w| w.ordnance.geometry.is_some())
+}
+
+/// The missiles in flight this frame as (their weapon class, the model's
+/// transform): each at its sim place, the model's +Z (`Quat::from_rotation_arc`,
+/// the engine's forward) along the way it flies. `SoldierVisuals::weapon_draws`
+/// draws them with the other ordnance models — the `ordnance.geometry` its
+/// table loads for every missile class. A round with no velocity (a stopped
+/// or degenerate one) is not drawn rather than drawn at a random angle.
+pub fn missiles_in_flight(walk: &WalkSim) -> Vec<(usize, glam::Mat4)> {
+    walk.sim
+        .bolts
+        .iter()
+        .filter(|b| modelled(walk, b))
+        .filter_map(|b| {
+            let dir = b.vel.try_normalize()?;
+            Some((
+                b.weapon_class,
+                glam::Mat4::from_rotation_translation(
+                    glam::Quat::from_rotation_arc(Vec3::Z, dir),
+                    b.pos,
+                ),
+            ))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -153,15 +196,6 @@ pub fn drawn_start(spawn: Vec3, dir: Vec3, end: Vec3, on_foot: bool, fire: Optio
     }
 }
 
-/// Is `u`'s bolt drawn from his weapon's fire point ([`drawn_start`])? On
-/// foot, yes - but not in the scope view: there the shot leaves the scope
-/// point on the camera's own axis (`re-aim-assist.md` §10.2 step 7,
-/// `core::unit::Unit::scope_point`, the eye 0.3 / 0.6 m behind it) and the
-/// PS2 draws a bolt from where it spawned (`re-bolt.md` §4: the spawn point
-/// is the tail it grows from), so the scoped player sees his bolt leave the
-/// middle of the scope and go straight to what it strikes. The gun model's
-/// muzzle sits beside and below that axis — at 8x zoom far off the picture
-/// — and a line from it came in from the side.
 pub fn drawn_from_the_gun(u: &core::unit::Unit) -> bool {
     u.mount.is_none() && !u.scoped()
 }
@@ -245,6 +279,21 @@ pub fn bolt_draw(
     }
 }
 
+pub fn beam_draw(
+    look: &LaserLook,
+    beam: &core::sim::Beam,
+    textures: [Option<TextureHandle>; 2],
+) -> BoltDraw {
+    let len = beam.len + 1.0;
+    let look = LaserLook {
+        length: len,
+        glow_length: len,
+        ..look.clone()
+    };
+    let head = beam.origin + beam.dir * (beam.len + 0.5);
+    bolt_draw(&look, head, beam.dir, len, 0.0, 1.0, textures)
+}
+
 /// The texture a `LaserTexture` name draws with (lower-cased, as baked).
 pub fn texture_name(authored: &str) -> String {
     authored
@@ -266,6 +315,12 @@ pub struct BoltVis {
     /// The drawn soldiers' weapon fire points, by unit index
     /// ([`BoltVis::set_fire_points`]).
     fire_points: Vec<Option<Vec3>>,
+}
+
+fn visual_look(walk: &WalkSim, class: usize) -> Option<&LaserLook> {
+    crate::walker_shots::style(walk, class)
+        .and_then(|s| s.tracer.as_ref())
+        .or_else(|| walk.sim.weapon_classes.get(class)?.ordnance.laser.as_ref())
 }
 
 impl BoltVis {
@@ -333,12 +388,7 @@ impl BoltVis {
 
     /// `dt` seconds pass for the hit bolts still drawn.
     pub fn age(&mut self, walk: &WalkSim, dt: f32) {
-        let sim = &walk.sim;
-        let look = |c: usize| {
-            sim.weapon_classes
-                .get(c)
-                .and_then(|w| w.ordnance.laser.as_ref())
-        };
+        let look = |c: usize| visual_look(walk, c);
         for r in &mut self.remnants {
             r.timer += dt;
             if let Some(l) = look(r.class) {
@@ -360,16 +410,18 @@ impl BoltVis {
     /// would keep each same-tick hit twice.
     pub fn track(&mut self, walk: &WalkSim) {
         let sim = &walk.sim;
-        let look = |c: usize| {
-            sim.weapon_classes
-                .get(c)
-                .and_then(|w| w.ordnance.laser.as_ref())
-        };
+        let look = |c: usize| visual_look(walk, c);
         let old: HashMap<Key, Tracked> = self.tracked.drain(..).map(|t| (t.key, t)).collect();
         let mut seen = std::collections::HashSet::new();
         let mut struck = Struck::of(sim);
         for b in &sim.bolts {
-            if look(b.weapon_class).is_none() {
+            // A missile with a model is `SoldierVisuals`' (card UORD), and a
+            // look-less round has no ribbon: neither is this module's.
+            if look(b.weapon_class).is_none()
+                || modelled(walk, b)
+                || crate::walker_shots::style(walk, b.weapon_class)
+                    .is_some_and(|s| s.tracer.is_some())
+            {
                 continue;
             }
             let k = key(b);
@@ -379,9 +431,33 @@ impl BoltVis {
                 Some(t) => t.start,
                 None => {
                     let dir = b.vel.normalize_or_zero();
-                    let foot = sim.unit(b.owner).is_some_and(drawn_from_the_gun)
-                        && !sim.is_item_gun(b.weapon_class);
-                    drawn_start(spawn, dir, b.end, foot, self.fire_point(b.owner.index))
+                    let foot = sim.unit(b.owner).is_some_and(|u| {
+                        drawn_from_the_gun(u)
+                            || (u.mount.is_some() && self.fire_point(b.owner.index).is_some())
+                    }) && !sim.is_item_gun(b.weapon_class);
+                    let point = sim
+                        .events
+                        .iter()
+                        .enumerate()
+                        .find_map(|(i, e)| match e {
+                            core::sim::Event::Shot {
+                                unit,
+                                weapon_class,
+                                dir: d,
+                                ..
+                            } if *unit == b.owner
+                                && *weapon_class as usize == b.weapon_class
+                                && d.dot(dir) > 0.9999 =>
+                            {
+                                let shot =
+                                    crate::walker_shots::ordinal(walk, *unit, b.weapon_class, i);
+                                crate::walker_shots::frame(walk, *unit, b.weapon_class, shot)
+                                    .map(|m| m.w_axis.truncate())
+                            }
+                            _ => None,
+                        })
+                        .or(self.fire_point(b.owner.index));
+                    drawn_start(spawn, dir, b.end, foot, point)
                 }
             };
             let full = (b.end - spawn).length();
@@ -441,6 +517,7 @@ impl BoltVis {
             });
         }
         self.same_tick_hits(walk, &mut struck);
+        self.walker_tracers(walk);
     }
 
     /// The tick's bolts that the sim spawned and resolved inside the one
@@ -450,6 +527,73 @@ impl BoltVis {
     /// its impact like any other (re-bolt §4) and, on BF2, lights the ground
     /// there (§5.2): each `Shot` of the tick with a struck `Impact` on its
     /// ray within one step becomes a remnant.
+    fn walker_tracers(&mut self, walk: &WalkSim) {
+        for (i, e) in walk.sim.events.iter().enumerate() {
+            let core::sim::Event::Shot {
+                unit,
+                weapon_class,
+                origin,
+                dir,
+                ..
+            } = e
+            else {
+                continue;
+            };
+            let class = *weapon_class as usize;
+            let Some(style) =
+                crate::walker_shots::style(walk, class).filter(|s| s.tracer.is_some())
+            else {
+                continue;
+            };
+            let shot = crate::walker_shots::ordinal(walk, *unit, class, i);
+            if !crate::walker_shots::visible(walk, class, shot) {
+                continue;
+            }
+            let start = crate::walker_shots::frame(walk, *unit, class, shot)
+                .map_or(*origin, |m| m.w_axis.truncate());
+            let end = walk
+                .sim
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    core::sim::Event::Impact {
+                        pos, weapon_class, ..
+                    } if *weapon_class as usize == class
+                        && (*pos - *origin).normalize_or_zero().dot(*dir) > 0.999 =>
+                    {
+                        Some(*pos)
+                    }
+                    _ => None,
+                })
+                .min_by(|a, b| {
+                    a.distance_squared(*origin)
+                        .total_cmp(&b.distance_squared(*origin))
+                })
+                .or_else(|| {
+                    walk.sim
+                        .bolts
+                        .iter()
+                        .find(|b| b.owner == *unit && b.weapon_class == class)
+                        .map(|b| b.end)
+                })
+                .unwrap_or(*origin + *dir * style.tracer.as_ref().unwrap().length);
+            let delta = end - start;
+            let direction = delta.try_normalize().unwrap_or(*dir);
+            let len = delta.length().min(style.tracer.as_ref().unwrap().length);
+            self.remnants.push(Remnant {
+                class,
+                head: start + direction * len,
+                dir: direction,
+                len,
+                age: 0.0,
+                fade: 1.0,
+                timer: 0.0,
+                terrain: false,
+                prev: start,
+            });
+        }
+    }
+
     fn same_tick_hits(&mut self, walk: &WalkSim, struck: &mut Struck) {
         use core::sim::Event;
         let sim = &walk.sim;
@@ -469,7 +613,10 @@ impl BoltVis {
             let Some(w) = sim.weapon_classes.get(class) else {
                 continue;
             };
-            if w.ordnance.laser.is_none() || w.ordnance.velocity <= 0.0 {
+            if w.ordnance.laser.is_none()
+                || w.ordnance.velocity <= 0.0
+                || crate::walker_shots::style(walk, class).is_some_and(|s| s.tracer.is_some())
+            {
                 continue;
             }
             let step = w.ordnance.velocity * core::TICK_DT;
@@ -483,7 +630,9 @@ impl BoltVis {
                 *origin,
                 *dir,
                 p,
-                drawn_from_the_gun(u) && !sim.is_item_gun(class),
+                (drawn_from_the_gun(u)
+                    || (u.mount.is_some() && self.fire_point(unit.index).is_some()))
+                    && !sim.is_item_gun(class),
                 self.fire_point(unit.index),
             );
             self.remnants.push(Remnant {
@@ -565,12 +714,7 @@ impl BoltVis {
             )
             .collect();
         for (class, head, dir, len, age, fade) in items {
-            let Some(look) = walk
-                .sim
-                .weapon_classes
-                .get(class)
-                .and_then(|w| w.ordnance.laser.as_ref())
-            else {
+            let Some(look) = visual_look(walk, class) else {
                 continue;
             };
             let core = look
@@ -578,6 +722,16 @@ impl BoltVis {
                 .as_deref()
                 .and_then(|n| self.texture(r, &texture_name(n)));
             out.push(bolt_draw(look, head, dir, len, age, fade, [core, glow]));
+        }
+        for beam in &walk.sim.beams {
+            let Some(look) = visual_look(walk, beam.shooter.weapon_class) else {
+                continue;
+            };
+            let core = look
+                .texture
+                .as_deref()
+                .and_then(|n| self.texture(r, &texture_name(n)));
+            out.push(beam_draw(look, beam, [core, glow]));
         }
         out
     }
@@ -588,11 +742,7 @@ impl BoltVis {
             return Vec::new();
         }
         let sim = &walk.sim;
-        let look = |c: usize| {
-            sim.weapon_classes
-                .get(c)
-                .and_then(|w| w.ordnance.laser.as_ref())
-        };
+        let look = |c: usize| visual_look(walk, c);
         let mut out = Vec::new();
         for t in &self.tracked {
             let Some((rgb, radius)) = look(t.class).and_then(|l| l.light(t.age)) else {
@@ -764,6 +914,7 @@ mod tests {
                 pilot: false,
                 turn: None,
                 framed: false,
+                aimer_bind: glam::Quat::IDENTITY,
                 gunner: None,
             })],
         })];
@@ -1509,5 +1660,181 @@ mod tests {
         let centre = walk.sim.turrets[0].centre();
         assert!(start.distance(centre) < 0.5, "{start} vs turret {centre}");
         assert!(start.distance(hand) > 10.0, "{start} at the owner's hand");
+    }
+
+    /// A missile round of a fixture class (the REP torpedo's numbers, card
+    /// UORD): the ctor's two waver phases come from `seed`, as the class's
+    /// `Missile::launch` draws them.
+    fn missile_round(seed: u32) -> (WeaponClass, core::projectile::Bolt) {
+        let mut w = WeaponClass::bf1_rifle();
+        let o = &mut w.ordnance;
+        o.kind = core::weapon::OrdKind::Missile;
+        o.velocity = 40.0;
+        o.life_span = 4.0;
+        o.missile = Some(core::missile::MissileClass {
+            turn_rate: 2.0,
+            ..core::missile::MissileClass::default()
+        });
+        let mut lcg = core::lcg::GameLcg::new(seed);
+        let mut b = core::projectile::Bolt {
+            pos: Vec3::new(1.0, 1.6, -2.0),
+            vel: Vec3::NEG_Z * 40.0,
+            remaining: 4.0,
+            age: 0.0,
+            owner: core::unit::UnitHandle { index: 3, gen: 2 },
+            team: 0,
+            weapon_class: 9,
+            hit: core::projectile::Hit::None,
+            end: Vec3::new(1.0, 1.6, -162.0),
+            shooter_is_player: false,
+            hulls: core::collision::HullFilter::All,
+            hit_mult: 1.0,
+            gravity: 0.0,
+            charge: 1.0,
+            missile: None,
+            fat: None,
+        };
+        let mc = *o.missile.as_ref().unwrap();
+        b.as_missile(o, &mc, None, &mut lcg);
+        (w, b)
+    }
+
+    /// §4.3: the law turns a missile BEFORE it moves, so its `vel` and `end`
+    /// are new values every tick. One missile must stay one round for the
+    /// whole flight — one trail emitter, not one per tick of its curve — and
+    /// two rounds of one class from one launcher must stay two.
+    #[test]
+    fn one_missile_stays_one_round_while_it_steers() {
+        let (w, mut b) = missile_round(3);
+        let mc = *w.ordnance.missile.as_ref().unwrap();
+        let first = key(&b);
+        let mut lcg = core::lcg::GameLcg::new(11);
+        for tick in 0..20 {
+            b.guide(
+                &mc,
+                Some(Vec3::new(30.0, 0.0, 0.0)),
+                core::TICK_DT,
+                &mut lcg,
+            );
+            b.advance(core::TICK_DT);
+            assert_eq!(key(&b), first, "tick {tick} is the same round");
+        }
+        assert!(
+            b.vel.normalize().angle_between(Vec3::NEG_Z) > 0.2,
+            "the fixture did turn: {}",
+            b.vel
+        );
+        // The end point is the probe's on a hit; the key does not move with
+        // it either.
+        b.end = Vec3::ZERO;
+        assert_eq!(key(&b), first);
+        // A second round of the same class, from the same launcher and the
+        // same launch line, is its own round.
+        let (_, other) = missile_round(4);
+        assert_ne!(key(&other), first);
+        // A straight bolt keeps the old identity: its line is its key.
+        let mut plain = other;
+        plain.missile = None;
+        let k = key(&plain);
+        plain.end += Vec3::X;
+        assert_ne!(key(&plain), k, "a bolt's line is its identity");
+    }
+
+    /// The missile draw (card UORD): a round whose class has an
+    /// `ordnance.geometry` model belongs to `SoldierVisuals` — this module
+    /// keeps no ribbon and no remnant for it — and the model sits at the
+    /// sim's place, its +Z the way the round flies. A round with no model
+    /// still tracks on a class that authored a `LaserLook`, and a stopped
+    /// one is not drawn at all.
+    #[test]
+    fn a_bullet_with_a_model_draws_as_its_model() {
+        let mut walk = WalkSim::new(42, Vec3::ZERO, None);
+        let (mut w, mut b) = missile_round(5);
+        w.ordnance.missile = None;
+        w.ordnance.geometry = Some("com_weap_missile".into());
+        let class = walk.sim.add_weapon_class(w);
+        b.missile = None;
+        b.weapon_class = class;
+        walk.sim.bolts.push(b);
+        let listed = missiles_in_flight(&walk);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, class);
+        let mut vis = BoltVis::default();
+        vis.update(&walk, core::TICK_DT);
+        assert!(vis.tracked.is_empty());
+    }
+
+    #[test]
+    fn a_missile_draws_as_its_model_not_as_a_ribbon() {
+        let mut walk = WalkSim::new(42, Vec3::ZERO, None);
+        let (mut w, b) = missile_round(5);
+        w.ordnance.laser = Some(core::laser::LaserLook::default());
+        w.ordnance.geometry = Some("com_weap_missile".into());
+        let class = walk.sim.add_weapon_class(w);
+        let mut b = b;
+        b.weapon_class = class;
+        walk.sim.bolts.push(b);
+
+        let mut vis = BoltVis::default();
+        vis.update(&walk, core::TICK_DT);
+        assert!(vis.tracked.is_empty(), "the model path draws it");
+        assert!(vis.remnant_count() == 0 && vis.omni_lights(&walk).is_empty());
+        let listed = missiles_in_flight(&walk);
+        assert_eq!(listed.len(), 1);
+        let (c, m) = listed[0];
+        assert_eq!(c, class);
+        assert!(m
+            .transform_point3(Vec3::ZERO)
+            .abs_diff_eq(Vec3::new(1.0, 1.6, -2.0), 1e-4));
+        assert!(
+            m.z_axis.truncate().abs_diff_eq(Vec3::NEG_Z, 1e-4),
+            "{:?}",
+            m.z_axis
+        );
+
+        // A stopped round is no draw and no panic (no direction to point).
+        walk.sim.bolts[0].vel = Vec3::ZERO;
+        assert!(missiles_in_flight(&walk).is_empty());
+
+        // The same round with no model: the look this fixture authored gets
+        // the ribbon path (nothing is silently dropped).
+        walk.sim.bolts[0].vel = Vec3::NEG_Z * 40.0;
+        walk.sim.weapon_classes[class].ordnance.geometry = None;
+        let mut vis = BoltVis::default();
+        vis.update(&walk, core::TICK_DT);
+        assert_eq!(
+            vis.tracked.len(),
+            1,
+            "an authored look is the fallback ribbon"
+        );
+        assert_eq!(vis.tracked[0].class, class);
+    }
+
+    #[test]
+    fn a_beam_draws_from_its_origin_to_what_it_struck() {
+        let look = core::laser::LaserLook {
+            width: 0.1,
+            ..Default::default()
+        };
+        let beam = core::sim::Beam {
+            shooter: core::projectile::Shooter {
+                owner: core::unit::UnitHandle { index: 0, gen: 0 },
+                team: 0,
+                weapon_class: 0,
+                is_player: true,
+            },
+            hulls: core::collision::HullFilter::All,
+            charge: 1.0,
+            origin: Vec3::new(0.0, 1.0, 0.0),
+            dir: Vec3::X,
+            life: 0.1,
+            len: 40.0,
+            follow: true,
+        };
+        let d = beam_draw(&look, &beam, [None, None]);
+        assert_eq!(d.head, Vec3::new(40.5, 1.0, 0.0));
+        assert_eq!(d.dir, Vec3::X);
+        assert_eq!((d.core_len, d.glow_len), (41.0, 41.0));
+        assert!((d.width - 0.1).abs() < 1e-7);
     }
 }

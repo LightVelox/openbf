@@ -49,7 +49,11 @@ pub fn is_walker_base(base: &str) -> bool {
 /// The anim table of `bank`: each entry's clip by its bare name, else the
 /// bank-prefixed one.
 pub fn clips(bank: &AnimBank<'_>) -> Vec<Option<ManifestWalkerClip>> {
-    ENTRIES
+    clips_of(bank, &ENTRIES)
+}
+
+pub fn clips_of(bank: &AnimBank<'_>, entries: &[(&str, bool)]) -> Vec<Option<ManifestWalkerClip>> {
+    entries
         .iter()
         .map(|&(name, looping)| {
             if name.is_empty() {
@@ -174,11 +178,27 @@ pub const LAYERS: [&str; 3] = ["", "_leftup", "_rightup"];
 /// the walker by (§4.9). A clip that names one bone twice keeps the LATER
 /// track (the AT-ST's bone_root: a still copy, then the one that moves;
 /// PROVISIONAL — which one the PS2's sampler takes is not read).
-pub fn skin_glb(skel: &Skeleton, bank: Option<&AnimBank<'_>>) -> anyhow::Result<Vec<u8>> {
+pub fn skin_glb(
+    skel: &Skeleton,
+    bank: Option<&AnimBank<'_>>,
+    class: &EntityClass,
+) -> anyhow::Result<Vec<u8>> {
+    skin_glb_of(skel, bank, &ENTRIES, &LAYERS, |tracks, d| {
+        restore_atte_cannon_offset(tracks, d, skel, class);
+    })
+}
+
+pub fn skin_glb_of(
+    skel: &Skeleton,
+    bank: Option<&AnimBank<'_>>,
+    entries: &[(&str, bool)],
+    layers: &[&str],
+    fix: impl Fn(&mut [crate::skin_glb::ClipTrack], &mungefs::anim::DecodedClip),
+) -> anyhow::Result<Vec<u8>> {
     let mut clips = Vec::new();
     if let Some(bank) = bank {
-        for (name, _) in ENTRIES.iter().filter(|(n, _)| !n.is_empty()) {
-            for layer in LAYERS {
+        for (name, _) in entries.iter().filter(|(n, _)| !n.is_empty()) {
+            for layer in layers {
                 let full = format!("{name}{layer}");
                 let Some(k) = bank
                     .clip_index(&full)
@@ -187,7 +207,8 @@ pub fn skin_glb(skel: &Skeleton, bank: Option<&AnimBank<'_>>) -> anyhow::Result<
                     continue;
                 };
                 let Ok(d) = bank.decode_clip(k) else { continue };
-                let (tracks, _) = crate::soldier::clip_to_tracks(&d, skel, None);
+                let (mut tracks, _) = crate::soldier::clip_to_tracks(&d, skel, None);
+                fix(&mut tracks, &d);
                 let mut kept: Vec<crate::skin_glb::ClipTrack> = Vec::new();
                 for t in tracks {
                     kept.retain(|k| k.bone != t.bone);
@@ -208,4 +229,85 @@ pub fn skin_glb(skel: &Skeleton, bank: Option<&AnimBank<'_>>) -> anyhow::Result<
         segments: Vec::new(),
     };
     crate::skin_glb::skinned_to_glb(&model, &clips)
+}
+
+fn restore_atte_cannon_offset(
+    tracks: &mut [crate::skin_glb::ClipTrack],
+    decoded: &mungefs::anim::DecodedClip,
+    skel: &Skeleton,
+    class: &EntityClass,
+) {
+    let keys = ["AimerNodeName", "BarrelNodeName"].map(mungefs::fnv1a_lowercase);
+    for t in tracks {
+        let b = &skel.bones[t.bone];
+        let authored = class
+            .props
+            .iter()
+            .any(|p| keys.contains(&p.key_hash) && p.value.trim().eq_ignore_ascii_case(&b.name));
+        let animated = decoded
+            .tracks
+            .iter()
+            .rev()
+            .find(|d| d.bone_crc == b.crc)
+            .is_some_and(|d| d.translated);
+        if authored && !animated && b.name.eq_ignore_ascii_case("aimer_maincannon_x") {
+            t.translations.fill(b.t);
+        }
+    }
+}
+
+#[cfg(test)]
+mod aimer_offset_tests {
+    use super::*;
+
+    #[test]
+    fn static_authored_cannon_uses_mount_offset_without_changing_walk_tracks() {
+        let names = ["aimer_maincannon_x", "bone_root", "animated_gun"];
+        let bones = names.map(|name| mungefs::skel::SkelBone {
+            name: name.into(),
+            crc: mungefs::anim::crc32_lower(name),
+            parent: None,
+            rows: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            t: [0.0, 1.307515, 0.725155],
+        });
+        let skel = Skeleton {
+            name: "rep_walk_atte".into(),
+            bones: bones.to_vec(),
+        };
+        let decoded = mungefs::anim::DecodedClip {
+            name_crc: 0,
+            frames: 2,
+            tracks: bones
+                .iter()
+                .enumerate()
+                .map(|(i, b)| mungefs::anim::DecodedTrack {
+                    bone_crc: b.crc,
+                    rotations: vec![[0.0, 0.0, 0.0, 1.0]; 2],
+                    translations: vec![[0.0, 2.663658, 4.3353]; 2],
+                    translated: i == 2,
+                })
+                .collect(),
+        };
+        let mut tracks: Vec<_> = (0..3)
+            .map(|bone| crate::skin_glb::ClipTrack {
+                bone,
+                rotations: vec![[0.0, 0.0, 0.0, 1.0]; 2],
+                translations: vec![[0.0, 2.663658, 4.3353]; 2],
+            })
+            .collect();
+        let class = EntityClass {
+            name: "rep_walk_atte".into(),
+            base: "commandwalker".into(),
+            props: [names[0], names[2]]
+                .map(|name| mungefs::world::Prop {
+                    key_hash: mungefs::fnv1a_lowercase("AimerNodeName"),
+                    value: name.into(),
+                })
+                .to_vec(),
+        };
+        restore_atte_cannon_offset(&mut tracks, &decoded, &skel, &class);
+        assert_eq!(tracks[0].translations, vec![[0.0, 1.307515, 0.725155]; 2]);
+        assert_eq!(tracks[1].translations, decoded.tracks[1].translations);
+        assert_eq!(tracks[2].translations, decoded.tracks[2].translations);
+    }
 }

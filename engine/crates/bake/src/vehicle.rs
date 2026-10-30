@@ -242,6 +242,88 @@ fn preferred_lod(lods: &[(String, String)]) -> &str {
         .1
 }
 
+fn animation_name(e: &mungefs::entity::EntityClass) -> String {
+    e.props
+        .iter()
+        .find(|p| p.key_hash == PROP_ANIMATION_NAME)
+        .map(|p| p.value.clone())
+        .unwrap_or_default()
+}
+
+fn bake_skin(
+    ix: &Index,
+    geometry: &str,
+    out: &Path,
+    skinned: &mut Vec<String>,
+    what: &str,
+    glb: impl FnOnce(&mungefs::skel::Skeleton) -> Result<Vec<u8>>,
+) -> Result<Option<String>> {
+    let top = top_lod(ix, geometry);
+    let Some((t, sk)) = top
+        .as_deref()
+        .and_then(|t| Some((t, ix.skel_of(t, geometry)?)))
+        .filter(|(t, _)| ix.models[&t.to_ascii_lowercase()].bone_space)
+    else {
+        return Ok(None);
+    };
+    let key = t.to_ascii_lowercase();
+    if !skinned.contains(&key) {
+        let glb = glb(sk).with_context(|| format!("{what} skin {t}"))?;
+        std::fs::write(out.join("walkers").join(format!("{t}.glb")), glb)?;
+        skinned.push(key);
+    }
+    Ok(Some(t.to_owned()))
+}
+
+fn bake_droidekas(
+    ix: &Index,
+    banks: &[mungefs::anim::AnimBank<'_>],
+    out: &Path,
+    geometries: &mut Vec<ManifestGeometry>,
+    skinned: &mut Vec<String>,
+) -> Result<Vec<manifest::ManifestDroideka>> {
+    let mut droidekas = Vec::new();
+    for e in ix
+        .classes
+        .iter()
+        .filter(|e| crate::droideka::is_droideka_base(&e.base))
+    {
+        let Some(geometry) = e.geometry_name() else {
+            eprintln!("droideka {}: no GeometryName — skipped", e.name);
+            continue;
+        };
+        let Some(lods) = ix.lods(geometry) else {
+            eprintln!(
+                "droideka {}: geometry {geometry} not in this LVL — skipped",
+                e.name
+            );
+            continue;
+        };
+        if !geometries
+            .iter()
+            .any(|k| k.name.eq_ignore_ascii_case(geometry))
+        {
+            geometries.push(ManifestGeometry {
+                name: geometry.to_owned(),
+                model: preferred_lod(&lods).to_owned(),
+                lods,
+                far: None,
+                hardpoints: Vec::new(),
+            });
+        }
+        let bank = animation_name(e);
+        let (prims, skel) = ix.walker_rig(geometry);
+        let b = banks.iter().find(|b| b.name.eq_ignore_ascii_case(&bank));
+        let skin = bake_skin(ix, geometry, out, skinned, "droideka", |sk| {
+            crate::droideka::skin_glb(sk, b)
+        })?;
+        droidekas.push(crate::droideka::bake(
+            e, geometry, &bank, banks, prims, skel, skin,
+        ));
+    }
+    Ok(droidekas)
+}
+
 /// Bake every vehicle class of one SIDE LVL into `outdir`. `pc_lvl` is the
 /// PC install's matching side LVL: its larger textures are written beside the
 /// PS2 ones as `<name>.tier2.ktx2` (`crate::tier`).
@@ -313,31 +395,12 @@ pub fn bake_vehicles(
         // Card WALK: a walker's anim table and prim origins; card WSKN: its
         // top LOD's skin (the skeleton and the bank's clips), once per model.
         let walker = if crate::walker::is_walker_base(&e.base) {
-            let bank = e
-                .props
-                .iter()
-                .find(|p| p.key_hash == PROP_ANIMATION_NAME)
-                .map(|p| p.value.clone())
-                .unwrap_or_default();
+            let bank = animation_name(e);
             let (prims, skel) = ix.walker_rig(geometry);
-            let top = top_lod(&ix, geometry);
-            let skin = match top
-                .as_deref()
-                .and_then(|t| Some((t, ix.skel_of(t, geometry)?)))
-            {
-                Some((t, sk)) if ix.models[&t.to_ascii_lowercase()].bone_space => {
-                    let key = t.to_ascii_lowercase();
-                    if !skinned.contains(&key) {
-                        let b = banks.iter().find(|b| b.name.eq_ignore_ascii_case(&bank));
-                        let glb = crate::walker::skin_glb(sk, b)
-                            .with_context(|| format!("walker skin {t}"))?;
-                        std::fs::write(out.join("walkers").join(format!("{t}.glb")), glb)?;
-                        skinned.push(key);
-                    }
-                    Some(t.to_owned())
-                }
-                _ => None,
-            };
+            let b = banks.iter().find(|b| b.name.eq_ignore_ascii_case(&bank));
+            let skin = bake_skin(&ix, geometry, out, &mut skinned, "walker", |sk| {
+                crate::walker::skin_glb(sk, b, e)
+            })?;
             Some(crate::walker::bake(e, &bank, &banks, prims, skel, skin))
         } else {
             None
@@ -351,6 +414,8 @@ pub fn bake_vehicles(
         });
     }
 
+    let droidekas = bake_droidekas(&ix, &banks, out, &mut geometries, &mut skinned)?;
+
     // Card VTUR: each class's skel nodes (the seats' fire points).
     crate::hardpoints::attach(&chunks, vehicles.iter_mut().map(|v| &mut v.class));
     let skels = crate::hardpoints::Skeletons::of(&chunks);
@@ -358,6 +423,9 @@ pub fn bake_vehicles(
         vehicles
             .iter()
             .any(|v| v.chunks.iter().any(|c| c.eq_ignore_ascii_case(&g.name)))
+            || droidekas
+                .iter()
+                .any(|d: &manifest::ManifestDroideka| d.geometry.eq_ignore_ascii_case(&g.name))
     }) {
         if let Some(s) = skels.find(&g.name) {
             g.hardpoints = crate::hardpoints::of(s);
@@ -478,6 +546,7 @@ pub fn bake_vehicles(
         models,
         textures,
         collision,
+        droidekas,
     };
     crate::write_ron(&out.join("vehicles.ron"), &manifest)?;
     Ok(manifest)

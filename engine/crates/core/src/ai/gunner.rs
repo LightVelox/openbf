@@ -189,6 +189,7 @@ fn seat_heat(sim: &Sim, u: &crate::unit::Unit) -> Option<f32> {
 /// `None`) and stop there.
 fn turn_stick(t: &gun::Turn, look: (f32, f32), want: Option<(f32, f32)>, pad: &mut PadState) {
     let want = want.unwrap_or(t.rest());
+    let want = t.target(want.0, want.1);
     let dt = crate::TICK_DT;
     let axis = |cur: f32, w: f32, l: [f32; 2], wraps: bool, speed: f32, filter: f32| {
         let gap = if wraps {
@@ -224,6 +225,33 @@ fn turn_stick(t: &gun::Turn, look: (f32, f32), want: Option<(f32, f32)>, pad: &m
 mod tests {
     use super::*;
     use crate::vehicle::gun::{wrap, Slew, Turn};
+
+    #[test]
+    fn a_rear_gunner_tracks_across_the_signed_yaw_seam_inside_its_arc() {
+        let t = Turn::from_class(
+            Some([120.0, 240.0]),
+            None,
+            (1.0, 1.0),
+            (3.75, 3.75),
+            Slew::Linear,
+        );
+        for degrees in [-170.0f32, 170.0] {
+            let want = (degrees.to_radians(), 0.0);
+            let (mut look, mut rate) = (t.rest(), (0.0, 0.0));
+            for _ in 0..120 {
+                let mut pad = PadState::default();
+                turn_stick(&t, look, Some(want), &mut pad);
+                (look, rate) = t.step(
+                    look,
+                    rate,
+                    (PadState::axis(pad.rx), PadState::axis(pad.ry)),
+                    crate::TICK_DT,
+                );
+                assert!((t.yaw[0]..=t.yaw[1]).contains(&look.0));
+            }
+            assert!(wrap(look.0 - want.0).abs() < 0.005, "{look:?} {want:?}");
+        }
+    }
 
     const DEG: f32 = std::f32::consts::PI / 180.0;
 

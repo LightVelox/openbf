@@ -779,6 +779,11 @@ pub(super) fn think_droid(sim: &Sim, tk: &Tick, st: &mut AiState, d: &Droid) {
 pub(super) enum Armed<'a> {
     /// The weapon in the hands: the gunner's own rules.
     Hand,
+    /// The weapon in the hands launches a SHELL on an arc (the mortar, a
+    /// `grenade` class firing `_ord1`): aim it on the PS2's low-arc solution
+    /// as a grenade is aimed ([`lob_aim`]), and fire it by the hand's own
+    /// gate (issue #29, `analysis/re-ordnance-kinds.md` §6).
+    Lobbed(&'a WeaponClass),
     /// The pick is not current yet: this switch button, on a fresh press,
     /// and no trigger (the PS2's switch is at once, by slot; the port's bot
     /// steps its channel as a human does).
@@ -787,6 +792,15 @@ pub(super) enum Armed<'a> {
     /// is the think's pick (`true`; `false` = only the throw under way), tap
     /// SECONDARY_FIRE.
     Thrown(&'a WeaponClass, bool),
+}
+
+/// The weapon in the hands: a shell-firing class is aimed on its arc.
+fn in_hand<'a>(sim: &'a Sim, u: &Unit) -> Armed<'a> {
+    let class = &sim.weapon_classes[u.weapon_class];
+    match class.ordnance.kind {
+        OrdKind::Shell => Armed::Lobbed(class),
+        _ => Armed::Hand,
+    }
 }
 
 pub(super) fn armed<'a>(sim: &'a Sim, u: &Unit, st: &AiState) -> Armed<'a> {
@@ -800,7 +814,7 @@ pub(super) fn armed<'a>(sim: &'a Sim, u: &Unit, st: &AiState) -> Armed<'a> {
         .filter(|s| *s != u.weapon_slot)
         .and_then(|s| u.held.iter().position(|w| w.slot == s))
     else {
-        return Armed::Hand;
+        return in_hand(sim, u);
     };
     let class = &sim.weapon_classes[u.held[k].class];
     match u.held[k].channel {
@@ -831,11 +845,13 @@ pub(super) fn lob(s: f32, g: f32, d: Vec3) -> (f32, f32, bool) {
     (-0.5 * g * t2, t2.sqrt(), ok)
 }
 
-/// The point a bot looks at to throw grenade `gc` at `target` (moving at
-/// `vel`), seen from its `eye`, and whether the throw reaches. The arc starts
-/// at the hand the grenade leaves ([`crate::weapon::Thrown::hand`], with the
-/// soldier turned at the target); a bot gets no `ShotElevate`, so the whole
-/// elevation is in this aim.
+/// The point a bot looks at to lob `gc` at `target` (moving at `vel`), seen
+/// from its `eye`, and whether the round reaches. The arc starts at the hand
+/// a grenade leaves ([`crate::weapon::Thrown::hand`], with the soldier turned
+/// at the target) or, for a SHELL (the mortar), at the muzzle `eye`; a bot
+/// gets no `ShotElevate`, so the whole elevation is in this aim. The fall is
+/// the thrown class's own `Gravity`, or a shell's `Gravity` x -9.8
+/// (`analysis/re-ordnance-kinds.md` §6).
 ///
 /// OURS: no throw into a wall — the arc's first nine tenths, as four chords,
 /// have to be clear of the world (a bot at a door frame threw at its own
@@ -849,15 +865,23 @@ pub(super) fn lob_aim(
     vel: Vec3,
     gc: &WeaponClass,
 ) -> (Vec3, bool) {
-    let origin = match gc.thrown.and_then(|t| t.hand) {
-        Some((up, fwd)) => {
-            let flat = Vec3::new(target.x - u.soldier.pos.x, 0.0, target.z - u.soldier.pos.z);
-            u.soldier.pos + Vec3::Y * up + flat.normalize_or_zero() * fwd
-        }
-        None => eye,
+    let origin = match gc.ordnance.kind {
+        // A shell leaves the weapon's muzzle: the bot's fire point (§3.3's
+        // "the aimer's fire point"; card FPNT), not a throw's hand.
+        OrdKind::Shell => eye,
+        _ => match gc.thrown.and_then(|t| t.hand) {
+            Some((up, fwd)) => {
+                let flat = Vec3::new(target.x - u.soldier.pos.x, 0.0, target.z - u.soldier.pos.z);
+                u.soldier.pos + Vec3::Y * up + flat.normalize_or_zero() * fwd
+            }
+            None => eye,
+        },
     };
     let d = target - origin;
-    let g = gc.ordnance.sticky.as_ref().map_or(0.0, |s| s.gravity);
+    let g = match gc.ordnance.kind {
+        OrdKind::Shell => -gc.ordnance.gravity * crate::weapon::SHELL_G,
+        _ => gc.ordnance.sticky.as_ref().map_or(0.0, |s| s.gravity),
+    };
     let (raise, t, ok) = lob(gc.ordnance.velocity, g, d);
     let lead = d + vel * t;
     let dir = (lead + Vec3::Y * raise).normalize_or_zero();

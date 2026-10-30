@@ -1518,7 +1518,7 @@ impl Deaths {
                     unit,
                     match cause {
                         DeathCause::Suicide => 9,
-                        DeathCause::DeathRegion => 1,
+                        DeathCause::DeathRegion | DeathCause::Water => 1,
                         DeathCause::Fall => 2,
                         DeathCause::VehicleDestroyed => 3,
                         DeathCause::Blast => 4,

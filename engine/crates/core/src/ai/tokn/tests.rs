@@ -189,6 +189,8 @@ fn shot(owner: UnitHandle, hit: crate::projectile::Hit) -> crate::projectile::Bo
         hit_mult: 1.0,
         gravity: 0.0,
         charge: 1.0,
+        missile: None,
+        fat: None,
     }
 }
 

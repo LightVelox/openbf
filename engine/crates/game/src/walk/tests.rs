@@ -845,3 +845,38 @@ fn the_reticle_is_on_a_flown_droids_aim_ray() {
         );
     }
 }
+
+#[test]
+fn a_modelled_shell_draws_no_placeholder_box() {
+    let mut r = WalkSim::new(1, Vec3::ZERO, None);
+    let mortar = r.sim.add_weapon_class(core::weapon::WeaponClass {
+        ordnance: core::weapon::OrdnanceClass {
+            kind: core::weapon::OrdKind::Shell,
+            geometry: Some("com_weap_inf_grenadethermal_ord".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let bare = r.sim.add_weapon_class(core::weapon::WeaponClass::default());
+    for class in [mortar, bare] {
+        let b = core::projectile::Bolt::fire(
+            Vec3::new(0.0, 5.0, 0.0),
+            Vec3::X,
+            40.0,
+            8.0,
+            core::projectile::Shooter {
+                owner: core::unit::UnitHandle { index: 0, gen: 0 },
+                team: 1,
+                weapon_class: class,
+                is_player: false,
+            },
+            None,
+            None,
+            &r.sim.collision,
+            core::collision::HullFilter::All,
+        );
+        r.sim.bolts.push(b);
+    }
+    assert_eq!(r.bolt_draws().len(), 1);
+    assert_eq!(crate::bolt_vis::missiles_in_flight(&r).len(), 1);
+}

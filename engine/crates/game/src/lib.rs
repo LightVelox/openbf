@@ -14,6 +14,7 @@ pub mod cheats;
 pub mod classdb;
 pub mod collision_layers;
 pub mod dev;
+pub mod droideka;
 pub mod engine_sound;
 pub mod event_feed;
 pub mod event_sounds;
@@ -59,3 +60,5 @@ pub mod vo;
 pub mod walk;
 pub mod water_anim;
 pub mod weather;
+
+pub mod walker_shots;

@@ -21,6 +21,7 @@
 //! through `walker_pose` (card WSKN).
 
 mod camera;
+pub mod droidekas;
 pub mod foliage;
 pub mod grass;
 pub mod leaf;
@@ -32,6 +33,7 @@ pub mod turret_fall;
 pub mod turret_pose;
 mod upload;
 mod vehicles;
+mod walker_aim;
 pub mod walker_pose;
 
 pub(crate) use camera::robust_bounds;
@@ -39,6 +41,7 @@ pub use camera::{
     camera_from, instance_matrix, look_at, orbit_eye, overview_bounds, overview_camera, Overview,
     GOLDEN_CAM,
 };
+pub use droidekas::DroidekaVisuals;
 pub use look::{
     apply_lighting, clear_color, far_cull, far_cull_enabled, far_cull_from, far_fade_from,
     lowres_enabled, lowres_range, render_lighting_from, water_look, FarCull, WaterLook, CLEAR,

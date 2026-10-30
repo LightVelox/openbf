@@ -11,6 +11,7 @@ pub mod classes;
 pub mod cloth;
 pub mod donor;
 pub mod door;
+pub mod droideka;
 pub mod effects;
 pub mod entity_light;
 pub mod far_lowd;

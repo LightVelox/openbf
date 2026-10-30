@@ -9,7 +9,7 @@ use crate::unit::{UnitHandle, UnitSpec};
 use crate::vehicle::gun::{Aimer, GunSetup, GunWeapon};
 use crate::vehicle::hover::tests::skiff;
 use crate::vehicle::{SeatKind, SeatSetup, VehicleHandle, VehicleKind, VehicleSpec};
-use crate::weapon::{HealthType, WeaponClass};
+use crate::weapon::{HealthType, OrdnanceClass, Secondary, WeaponClass};
 use glam::Vec3;
 
 const DEG: f32 = std::f32::consts::PI / 180.0;
@@ -33,6 +33,7 @@ fn gun(fire: [f32; 3], pivot: [f32; 3], yaw: [f32; 2], pilot: bool) -> GunSetup 
         pilot,
         turn: None,
         framed: false,
+        aimer_bind: glam::Quat::IDENTITY,
         gunner: None,
     }
 }
@@ -319,6 +320,52 @@ fn a_gunners_bolt_hits_the_soldier_it_aims_at() {
         s.unit(enemy).is_none_or(|u| u.health.cur < hp),
         "the enemy took the gunner's bolts"
     );
+}
+
+#[test]
+fn a_seat_gun_rides_its_tracer_on_every_period_th_round() {
+    let (mut s, p, v) = world(false);
+    let mut chaingun = WeaponClass::bf1_rifle();
+    chaingun.name = "test_chaingun".into();
+    chaingun.secondary = Some(Secondary {
+        name: "test_chaingun_tracer".into(),
+        ordnance: OrdnanceClass {
+            velocity: 200.0,
+            life_span: 2.0,
+            max_damage: 0.0,
+            ..OrdnanceClass::default()
+        },
+        period: 2,
+        index: usize::MAX,
+    });
+    let armed = s.add_weapon_class(chaingun);
+    let tracer = s.weapon_classes[armed].secondary.as_ref().unwrap().index;
+    s.weapon_classes[0] = s.weapon_classes[armed].clone();
+    tap(&mut s, buttons::ACTION);
+    tap(&mut s, buttons::SWITCH_WEAPON);
+    assert_eq!(seat(&s, p), SeatKind::Gunner(0));
+    let mut rounds = 0u32;
+    for _ in 0..30 {
+        s.step(&[pad(buttons::FIRE)]);
+        rounds += s
+            .events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Shot {
+                        weapon_class: 0,
+                        ..
+                    }
+                )
+            })
+            .count() as u32;
+    }
+    assert!(rounds >= 4, "the gunner fired {rounds} rounds");
+    let gun = s.vehicle(v).unwrap().guns[1].as_ref().unwrap();
+    assert_eq!(gun.weapons[0].secondary_rounds, rounds);
+    let tracers = s.bolts.iter().filter(|b| b.weapon_class == tracer).count() as u32;
+    assert_eq!(tracers, rounds.div_ceil(2));
 }
 
 /// Card VTAI: a bot in the nose gunner's seat (a human pilots) turns its
@@ -683,4 +730,82 @@ fn a_bound_building_takes_rounds_and_blasts_and_its_gunner_dies_with_it() {
             Event::Kill { shooter: k, victim } if *k == shooter && *victim == gunner)));
         assert_eq!(fire(&s, shooter, HullFilter::All).hit, Hit::World);
     }
+}
+
+#[test]
+fn a_player_cycles_ai_held_seats_and_keeps_every_displaced_bot_aboard() {
+    let (mut s, p, v) = world(true);
+    assert!(s.seat_unit(p, v, 0));
+    let mut bots = Vec::new();
+    for seat in 1..4 {
+        let h = s
+            .spawn(&UnitSpec {
+                controller: crate::unit::Controller::Ai,
+                ..UnitSpec::trooper(0, Vec3::ZERO)
+            })
+            .unwrap();
+        assert!(s.seat_unit(h, v, seat));
+        bots.push(h);
+    }
+    let entropy = s.rng.state();
+    let bail: Vec<_> = bots
+        .iter()
+        .map(|h| s.unit(*h).unwrap().ai.ride.unwrap().bail_draw)
+        .collect();
+    let mut pads = vec![PadState::default(); s.units.len()];
+    pads[p.index as usize] = pad(buttons::SWITCH_WEAPON);
+    for seat in [1, 2, 3, 0] {
+        s.switch_pass(&pads);
+        assert_eq!(s.unit(p).unwrap().mount.unwrap().seat, seat);
+        let seats = &s.vehicle(v).unwrap().seats;
+        assert!(seats.iter().all(|seat| seat.occupant.is_some()));
+        for (i, bot) in bots.iter().enumerate() {
+            let u = s.unit(*bot).unwrap();
+            let m = u.mount.unwrap();
+            assert_eq!(m.vehicle, v);
+            assert_eq!(seats[m.seat as usize].occupant, Some(*bot));
+            assert_eq!(u.ai.ride.unwrap().bail_draw, bail[i]);
+        }
+        assert_eq!(s.rng.state(), entropy);
+    }
+}
+
+#[test]
+fn seat_switch_skips_other_players_enemies_and_nonboardable_seats() {
+    let (mut s, p, v) = world(true);
+    assert!(s.seat_unit(p, v, 0));
+    let human = s.spawn(&UnitSpec::player(0, Vec3::ZERO)).unwrap();
+    assert!(s.seat_unit(human, v, 1));
+    let friend = s
+        .spawn(&UnitSpec {
+            controller: crate::unit::Controller::Ai,
+            ..UnitSpec::trooper(0, Vec3::ZERO)
+        })
+        .unwrap();
+    assert!(s.seat_unit(friend, v, 2));
+    let enemy = s
+        .spawn(&UnitSpec {
+            controller: crate::unit::Controller::Ai,
+            ..UnitSpec::trooper(1, Vec3::ZERO)
+        })
+        .unwrap();
+    assert!(s.seat_unit(enemy, v, 3));
+    assert_eq!(s.next_seat(p), Some(2));
+    s.seat_setup[0].as_mut().unwrap().boardable[2] = false;
+    assert_eq!(s.next_seat(p), None);
+    assert_eq!(s.unit(human).unwrap().mount.unwrap().seat, 1);
+    assert_eq!(s.unit(enemy).unwrap().mount.unwrap().seat, 3);
+}
+
+#[test]
+fn wheel_up_cycles_backward_and_passengers_do_not_cycle_to_other_passengers() {
+    let (mut s, p, v) = world(true);
+    assert!(s.seat_unit(p, v, 0));
+    let mut pads = vec![PadState::default(); s.units.len()];
+    pads[p.index as usize] = pad(buttons::SWITCH_WEAPON | buttons::SPAWN_CLASS_PREV);
+    s.switch_pass(&pads);
+    assert_eq!(s.unit(p).unwrap().mount.unwrap().seat, 3);
+    s.vehicle_mut(v).unwrap().seats[2].kind = SeatKind::Passenger(0);
+    s.vehicle_mut(v).unwrap().seats[3].kind = SeatKind::Passenger(1);
+    assert_eq!(s.next_seat(p), Some(0));
 }

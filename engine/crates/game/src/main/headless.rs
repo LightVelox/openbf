@@ -98,6 +98,7 @@ struct ReplayFrame {
     icons: (Option<render::TextureHandle>, Option<render::TextureHandle>),
     vis: game::soldier_vis::SoldierVisuals,
     vehicle_vis: game::viewer::VehicleVisuals,
+    deka_vis: game::viewer::DroidekaVisuals,
     fx: game::fx::Fx,
     bolts: game::bolt_vis::BoltVis,
     weather: Option<game::weather::Weather>,
@@ -140,12 +141,14 @@ impl ReplayFrame {
         let mut draws = gpu.view_draws(&walk.sim, walk.player);
         walk_draws(self.cube, walk, &mut draws, self.models);
         draws.extend(self.vehicle_vis.draws(r, &walk.sim, &see.vehicles));
+        draws.extend(self.deka_vis.draws(r, &walk.sim));
         let skinned = self.vis.draws(walk);
         draws.extend(self.vis.weapon_draws(walk));
         draws.extend(self.fx.draws(self.quad, self.sprite, &cam));
         self.holos.advance(walk);
         game::point_light::submit(r, gpu, walk, &mut self.bolts, cam.position, &self.holos);
         let mut particles = self.vis.flash_draws(walk);
+        particles.extend(self.deka_vis.bubbles(&walk.sim, cam.position));
         particles.extend(self.holos.draws(&gpu.holo, walk, &cam));
         if let Some(w) = self.weather.as_mut() {
             particles.extend(w.frame_draws(r, &cam, glam::Vec3::ZERO));
@@ -262,12 +265,16 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
                     core::projectile::Target::Turret(i) => format!("t{i}"),
                     core::projectile::Target::Guided(i) => format!("g{i}"),
                     core::projectile::Target::Building(i) => format!("b{i}"),
+                    core::projectile::Target::Shield(h) => format!("z{}g{}", h.index, h.gen),
                 };
                 format!("{tick},repair,{},{target},{amount}\n", unit.index)
             }
             Event::Shot {
                 unit, weapon_class, ..
             } => format!("{tick},shot,{},{weapon_class},\n", unit.index),
+            // An emitter's arc; `game::fx` draws it and the `hit` lines
+            // beside it carry the damage.
+            Event::Emitter { .. } => continue,
             Event::Hit {
                 shooter,
                 victim,
@@ -284,6 +291,7 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
             Event::BoltExpired { struck, .. } => format!("{tick},expire,,,{}\n", *struck as u8),
             // Render-only, and the expire / hit line already records it.
             Event::Impact { .. } => continue,
+            Event::Blast { .. } => continue,
             // HUD-only (the reticle mark); the hit line records the hit.
             Event::CriticalHit { .. } => continue,
             Event::Despawn { unit } => format!("{tick},despawn,{},,\n", unit.index),
@@ -323,6 +331,7 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
                     core::sim::DeathCause::UnderMap => "under",
                     core::sim::DeathCause::Lost => "lost",
                     core::sim::DeathCause::Stalled => "stalled",
+                    core::sim::DeathCause::Water => "water",
                 };
                 format!("{tick},envdeath,{},,{what}\n", unit.index)
             }
@@ -354,6 +363,9 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
             Event::DroidBurst {
                 unit, team, scale, ..
             } => format!("{tick},droid_burst,{},{team},{scale:.3}\n", unit.index),
+            Event::Droideka { unit, cue, .. } => {
+                format!("{tick},droideka,{},,{cue:?}\n", unit.index)
+            }
             Event::DoorOpened { door } => format!("{tick},door_opened,{door},,\n"),
             Event::DoorClosed { door } => format!("{tick},door_closed,{door},,\n"),
             // `a` is the item class; a taken item's `b` is the taker and its
@@ -439,6 +451,7 @@ pub(super) fn run_bench(v: &ViewerArgs) -> Result<()> {
     let models = [vis.has_model(0), vis.has_model(1)];
     let mut vehicle_vis =
         game::viewer::VehicleVisuals::load(&mut r, &scene, &assets_dir, &walk.vehicle_geometry);
+    let mut deka_vis = game::viewer::DroidekaVisuals::load(&mut r, &scene, &assets_dir, &walk);
     let cube = upload_unit_cube(&mut r)?;
     let mut tick = game::bench::Samples::default();
     let pad = [core::sim::PadState::default()];
@@ -469,6 +482,7 @@ pub(super) fn run_bench(v: &ViewerArgs) -> Result<()> {
         let mut draws = gpu.draws.clone();
         walk_draws(cube, &walk, &mut draws, models);
         draws.extend(vehicle_vis.draws(&mut r, &walk.sim, &[]));
+        draws.extend(deka_vis.draws(&mut r, &walk.sim));
         let skinned = vis.draws(&walk);
         battle_draws = draws.len();
         skinned_draws = skinned.len();
@@ -579,6 +593,7 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
         let models = [vis.has_model(0), vis.has_model(1)];
         let vehicle_vis =
             game::viewer::VehicleVisuals::load(&mut r, &scene, &assets_dir, &walk.vehicle_geometry);
+        let deka_vis = game::viewer::DroidekaVisuals::load(&mut r, &scene, &assets_dir, &walk);
         let quad = game::viewer::upload_billboard_quad(&mut r)?;
         let sprite = game::viewer::upload_fx_sprite(&mut r).ok();
         let icons = squad_icons(&mut r, &assets_dir);
@@ -631,6 +646,7 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
             icons,
             vis,
             vehicle_vis,
+            deka_vis,
             fx,
             bolts,
             weather,
@@ -654,6 +670,7 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
             frame.fx.set_repair_origins(&fire_points);
             frame.bolts.set_fire_points(fire_points);
             frame.fx.set_jet_frames(frame.vis.jet_frames(&walk));
+            frame.fx.set_burn_frames(frame.vis.burn_frames(&walk));
             frame.fx.update(core::TICK_DT);
             if let Some(w) = frame.weather.as_mut() {
                 w.update(core::TICK_DT);

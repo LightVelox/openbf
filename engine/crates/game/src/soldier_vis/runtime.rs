@@ -34,14 +34,6 @@ impl SoldierVisuals {
             .weapon_classes
             .iter()
             .map(|w| {
-                if w.ordnance.sticky.is_none()
-                    && w.mine.is_none()
-                    && w.remote.is_none()
-                    && w.turret.is_none()
-                    && w.guided.is_none()
-                {
-                    return None;
-                }
                 let name = w.ordnance.geometry.as_deref()?;
                 Some(*models.entry(name).or_insert_with(|| {
                     let index = vis.weapons.len();
@@ -57,11 +49,11 @@ impl SoldierVisuals {
             })
             .collect();
         vis.set_turrets(tp::rigged_turrets(scene));
-        vis.set_walker_rigs(crate::viewer::walker_rigs(
-            &scene.manifest,
-            assets_dir,
-            &walk.vehicle_geometry,
-        ));
+        vis.set_walker_rigs(if walk.walker_rigs.is_empty() {
+            crate::viewer::walker_rigs(&scene.manifest, assets_dir, &walk.vehicle_geometry)
+        } else {
+            walk.walker_rigs.clone()
+        });
         vis
     }
 
@@ -473,6 +465,7 @@ impl SoldierVisuals {
             };
             if v.gen == u.gen {
                 v.shot_tick = Some(walk.sim.tick);
+                v.shot_class = Some(*weapon_class as usize);
             }
         }
     }
@@ -530,6 +523,9 @@ impl SoldierVisuals {
             }
             if fired.contains(&(i as u32)) {
                 v.shot_tick = Some(walk.sim.tick);
+            }
+            if u.droideka.is_some() {
+                continue;
             }
             // Seated in a turret that shows him (card VTURG) or on a
             // vehicle that does (card VRIDE): hung at the seat's hardpoint,
@@ -703,6 +699,9 @@ impl SoldierVisuals {
     pub(super) fn posed(&self, walk: &WalkSim) -> Vec<(usize, &SoldierAsset, Mat4, Vec<Mat4>)> {
         let mut out = Vec::new();
         for (i, u) in walk.sim.units.iter().enumerate() {
+            if u.droideka.is_some() {
+                continue;
+            }
             let Some(sa) = self.asset_for(u.team, u.spec.class) else {
                 continue;
             };
@@ -721,7 +720,14 @@ impl SoldierVisuals {
             // A rider is hidden but in a seat that shows him (cards VTURG,
             // VRIDE), who is drawn in every view, his own too.
             let model = match (u.mount, v.seat_model) {
-                (Some(_), Some(m)) => m,
+                (Some(mount), Some(m)) => walk
+                    .sim
+                    .vehicle(mount.vehicle)
+                    .filter(|v| v.kind == core::vehicle::VehicleKind::Walker)
+                    .and_then(|_| {
+                        rider_now(&self.walker_rigs, &self.hover_nine, walk, mount, self.bf2)
+                    })
+                    .map_or(m, |r| r.model),
                 (Some(_), None) => continue,
                 // In the scope view the player's own body is not drawn.
                 (None, _) if i == walk.player.index as usize && walk.player_body_hidden() => {
@@ -842,6 +848,10 @@ impl SoldierVisuals {
                 let m = Mat4::from_rotation_translation(r.drawn_rotation(), r.pos);
                 (r.weapon_class, m)
             }))
+            // Missiles in flight (card UORD) draw as their class's
+            // `ordnance.geometry`, the way a thrown grenade does; the bolt's
+            // own module says where they are and which way they point.
+            .chain(crate::bolt_vis::missiles_in_flight(walk))
             .chain(sim.mines.iter().map(|m| {
                 let at = Mat4::from_rotation_translation(m.rotation, m.flight.pos);
                 (m.flight.weapon_class, at)
@@ -872,6 +882,23 @@ impl SoldierVisuals {
         out
     }
 
+    pub fn burn_frames(&self, walk: &WalkSim) -> Vec<Vec<Option<Mat4>>> {
+        let mut out = vec![Vec::new(); walk.sim.units.len()];
+        for (i, sa, model, palette) in self.posed(walk) {
+            let Some((_, effects)) = walk.sim.burn_effects(&walk.sim.units[i]) else {
+                continue;
+            };
+            out[i] = effects
+                .iter()
+                .map(|(bone, _)| {
+                    let b = sa.asset.skeleton.index_of(bone)?;
+                    Some(model * palette[b] * sa.asset.skeleton.global_bind[b])
+                })
+                .collect();
+        }
+        out
+    }
+
     /// `read` (e.g. [`Self::jet_frames`], [`Self::fire_points`]) as this
     /// frame draws: under the pose blended between the last two ticks with
     /// the player's look preview (`render_blend::blend_in_looking`, card
@@ -898,7 +925,12 @@ impl SoldierVisuals {
     /// unit drawn without a model or a hand node. Where the muzzle flash
     /// sits and the drawn bolt starts (`crate::bolt_vis`).
     pub fn fire_points(&self, walk: &WalkSim) -> Vec<Option<Vec3>> {
-        let mut out = vec![None; walk.sim.units.len()];
+        let mut out: Vec<Option<Vec3>> = walk
+            .sim
+            .units
+            .iter()
+            .map(|u| u.droideka_gun(1).filter(|_| u.alive && !u.burst))
+            .collect();
         for (i, sa, model, palette) in self.posed(walk) {
             if let (Some(hp), None) = (sa.hp_weapons, walk.sim.units[i].mount) {
                 let u = &walk.sim.units[i];
@@ -916,12 +948,43 @@ impl SoldierVisuals {
                 });
             }
         }
+        for (i, u) in walk.sim.units.iter().enumerate() {
+            if let Some(frame) = u
+                .mount
+                .filter(|_| u.alive)
+                .and_then(|m| self.walker_fire_frame(walk, m))
+            {
+                out[i] = Some(frame.w_axis.truncate());
+            }
+        }
         out
     }
 
-    /// The muzzle flashes to draw this frame (see the module doc): one per
-    /// drawn unit whose weapon flashes and whose last shot's t is still > 0
-    /// on the sim clock.
+    fn walker_fire_frame(&self, walk: &WalkSim, mount: core::vehicle::Mount) -> Option<Mat4> {
+        let v = walk.sim.vehicle(mount.vehicle)?;
+        let unit = v.seats.get(mount.seat as usize)?.occupant?;
+        let state = v.guns.get(mount.seat as usize)?.as_ref()?;
+        let setup = walk
+            .sim
+            .seat_setup
+            .get(v.class as usize)?
+            .as_ref()?
+            .guns
+            .get(mount.seat as usize)?
+            .as_ref()?;
+        let (weapon, state) = setup
+            .weapons
+            .iter()
+            .zip(&state.weapons)
+            .max_by_key(|(_, s)| s.shots_fired)?;
+        crate::walker_shots::frame(
+            walk,
+            unit,
+            weapon.class,
+            state.shots_fired.saturating_sub(1),
+        )
+    }
+
     pub fn flash_draws(&self, walk: &WalkSim) -> Vec<ParticleDraw> {
         let Some(model) = &self.flash else {
             return Vec::new();
@@ -937,7 +1000,11 @@ impl SoldierVisuals {
             let Some(look) = walk
                 .sim
                 .weapon_classes
-                .get(self.hand_of(u, &walk.sim.weapon_classes).class)
+                .get(if u.mount.is_some() {
+                    v.shot_class.unwrap_or(usize::MAX)
+                } else {
+                    self.hand_of(u, &walk.sim.weapon_classes).class
+                })
                 .and_then(|w| w.flash.as_ref())
                 .filter(|f| f.draws() && f.model.as_deref() == Some(model.name.as_str()))
             else {
@@ -947,7 +1014,14 @@ impl SoldierVisuals {
             let Some(color) = look.color_at(t) else {
                 continue;
             };
-            let m = core::flash::matrix(u.aim_frame().0, look.radius, *p);
+            let dir = u
+                .mount
+                .and_then(|m| self.walker_fire_frame(walk, m))
+                .map_or_else(
+                    || u.aim_frame().0,
+                    |m| m.z_axis.truncate().normalize_or_zero(),
+                );
+            let m = core::flash::matrix(dir, look.radius, *p);
             out.extend(model.draws(m, color, *p));
         }
         out

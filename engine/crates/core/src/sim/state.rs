@@ -185,6 +185,18 @@ pub enum Event {
         origin: Vec3,
         dir: Vec3,
     },
+    /// An emitter shot's lightning link (card UORDE,
+    /// `analysis/re-ordnance-kinds.md` §8): the instant query drew an arc
+    /// from `from` to `to`. Render-only; the damage is already in
+    /// [`Event::Hit`] / [`Event::VehicleHit`]. `weapon_class` indexes
+    /// [`Sim::weapon_classes`] (its emitter's `LightningEffect` names the
+    /// arc).
+    Emitter {
+        unit: UnitHandle,
+        weapon_class: u32,
+        from: Vec3,
+        to: Vec3,
+    },
     Hit {
         shooter: UnitHandle,
         victim: UnitHandle,
@@ -241,6 +253,11 @@ pub enum Event {
         class: u8,
         scale: f32,
     },
+    Droideka {
+        unit: UnitHandle,
+        pos: Vec3,
+        cue: crate::droideka::Cue,
+    },
     BoltExpired {
         pos: Vec3,
         /// The bolt STRUCK something at `pos` — the terrain sheet, a world
@@ -260,6 +277,10 @@ pub enum Event {
         weapon_class: u32,
         surface: crate::impact::Surface,
         vehicle: Option<crate::vehicle::VehicleHandle>,
+    },
+    Blast {
+        pos: Vec3,
+        weapon_class: u32,
     },
     /// AI shed by the no-overspawn rule when a player took the last slots
     /// (or bleed dropped the pool below the live count).
@@ -538,6 +559,7 @@ pub enum DeathCause {
     Stalled,
     /// Confirmed pause-menu Respawn (analysis/re-spawn-flow §7).
     Suicide,
+    Water,
 }
 
 impl DeathCause {
@@ -547,7 +569,10 @@ impl DeathCause {
     /// destroyed vehicle's (re-vehicle-death 10.1 item 4); its landing damage
     /// and blasts are ordinary damage, which the cheat stops.
     pub fn cheat_spares(self) -> bool {
-        matches!(self, DeathCause::Fall | DeathCause::Blast)
+        matches!(
+            self,
+            DeathCause::Fall | DeathCause::Blast | DeathCause::Water
+        )
     }
 }
 
@@ -712,6 +737,7 @@ pub struct Sim {
     /// [`Sim::collision`] follows its hashed pose (`Sim::sync_hulls`).
     pub hull_parts: Vec<Option<std::sync::Arc<[crate::collision::HullPart]>>>,
     pub bolts: Vec<Bolt>,
+    pub beams: Vec<super::Beam>,
     /// The thrown grenades in flight or lying armed (card GREN,
     /// [`crate::sticky`]), in throw order. HASHED when there is one.
     pub stickies: Vec<crate::sticky::Sticky>,
@@ -1262,6 +1288,7 @@ impl Sim {
             slice_time: Vec::new(),
             hull_parts: Vec::new(),
             bolts: Vec::new(),
+            beams: Vec::new(),
             stickies: Vec::new(),
             mines: Vec::new(),
             next_mine_id: 0,
@@ -1365,6 +1392,20 @@ impl Sim {
         }
         if let Some(t) = wc.turret.as_mut() {
             t.item.gun_index = self.item_weapon_class(&t.item.gun);
+        }
+        // A secondary ordnance gets a class entry of its own, so
+        // its bolts carry its own damage, LaserTexture and LifeSpan
+        // (`analysis/re-ordnance-kinds.md` §7).
+        let tracer = wc.secondary.as_ref().map(|sec| WeaponClass {
+            name: sec.name.clone(),
+            ordnance: sec.ordnance.clone(),
+            ..WeaponClass::default()
+        });
+        if let Some(tracer) = tracer {
+            let index = self.add_weapon_class(tracer);
+            if let Some(sec) = wc.secondary.as_mut() {
+                sec.index = index;
+            }
         }
         self.weapon_classes.push(wc);
         self.weapon_classes.len() - 1
@@ -1693,6 +1734,13 @@ impl Sim {
             eat(b"BOLTS");
             eat(&(self.bolts.len() as u64).to_le_bytes());
             for b in &self.bolts {
+                b.hash_into(&mut eat);
+            }
+        }
+        if !self.beams.is_empty() {
+            eat(b"BEAMS");
+            eat(&(self.beams.len() as u64).to_le_bytes());
+            for b in &self.beams {
                 b.hash_into(&mut eat);
             }
         }

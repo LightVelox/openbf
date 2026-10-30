@@ -735,6 +735,18 @@ pub struct VehicleManifest {
     pub textures: Vec<String>,
     /// The `coll` meshes and `prim` bodies of those geometries.
     pub collision: Vec<ManifestCollision>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub droidekas: Vec<ManifestDroideka>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestDroideka {
+    pub class: String,
+    pub geometry: String,
+    pub bank: String,
+    pub clips: Vec<Option<ManifestWalkerClip>>,
+    pub skin: Option<String>,
+    pub prims: Vec<ManifestPrimPoint>,
 }
 
 /// One vehicle class of a [`VehicleManifest`].

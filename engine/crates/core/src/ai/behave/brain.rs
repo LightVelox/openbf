@@ -38,6 +38,7 @@ pub fn think(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick)
     if let Some(p) = crate::ai::fix::serve(sim, me, st) {
         pad = p;
     }
+    crate::ai::droideka::steer(sim, me, st, &mut pad);
     // Card UNSN: a bot on the level given up for going nowhere is moved on
     // where no human sees it, else recycled.
     if nt.stalled != 0 && nt.recycle == 0 {
@@ -668,7 +669,9 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     // cannot hurt kept it for good (BF1 Rhen Var, seed 4: twelve bots round
     // one gunner seat, no outcome in 60,000 ticks) — it walks on.
     let fight = enemy.zip(gun.range).filter(|(e, r)| {
-        (e.mount.is_none() || st.arm.vehicle) && *r <= wc.ai_range[2] + FIGHT_BEYOND
+        (e.mount.is_none() || st.arm.vehicle)
+            && *r <= wc.ai_range[2] + FIGHT_BEYOND
+            && crate::ai::droideka::takes_fight(sim, u, st, e, *r)
     });
     let objective = sim.commander[usize::from(u.team).min(1)].of(me.index);
     let defending = matches!(objective, Some(crate::commander::Objective::Defend(_)));

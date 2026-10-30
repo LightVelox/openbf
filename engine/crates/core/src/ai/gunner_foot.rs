@@ -175,10 +175,12 @@ pub(super) fn run(
     let hand = u.proxy_human.and_then(|p| p.hand);
     let mut reaches = false;
     let look_at = match (*aim, &armed) {
-        // A grenade: the low-arc solution to the target's feet, where it is
-        // to land. The tracked error moves that point over the ground only
-        // (OURS: on so flat an arc a metre of height is five of range).
-        (AimRequest::Enemy(e, _), Armed::Thrown(gc, _)) => {
+        // A grenade or a shell: the low-arc solution to the target's feet,
+        // where it is to land. The tracked error moves that point over the
+        // ground only (OURS: on so flat an arc a metre of height is five of
+        // range). A shell (the mortar, `OrdKind::Shell` in the hands) is the
+        // same solution from the muzzle (issue #29).
+        (AimRequest::Enemy(e, _), Armed::Thrown(gc, _) | Armed::Lobbed(gc)) => {
             let c = e.capsule().center();
             let err = seen_aim(sim, me, st, eye, e, 1e6, wc) - c;
             let mut feet = e.soldier.pos + Vec3::new(err.x, 0.0, err.z);
@@ -206,7 +208,7 @@ pub(super) fn run(
             let off = barred.and_then(|h| super::tokn::miss_offset(sim, me, h, eye, p));
             p + off.unwrap_or(Vec3::ZERO)
         }
-        (AimRequest::Droid(d, _), Armed::Thrown(gc, _)) => {
+        (AimRequest::Droid(d, _), Armed::Thrown(gc, _) | Armed::Lobbed(gc)) => {
             let (p, ok) = arsenal::lob_aim(sim, u, eye, d.pos, d.vel, gc);
             reaches = ok;
             p
@@ -267,9 +269,9 @@ pub(super) fn run(
         st.aim_vel = av;
         // Card GRAI (OURS): a throw's elevation is the solution's itself,
         // not the tracker's — on the grenade's flat arc the tracker's lag of
-        // a few degrees is ten metres of range.
+        // a few degrees is ten metres of range. A shell's is the same.
         let pitch = match armed {
-            Armed::Thrown(..) => dir.y,
+            Armed::Thrown(..) | Armed::Lobbed(..) => dir.y,
             _ => ad.y,
         };
         (yaw_toward(ad), fmath::asin(pitch.clamp(-1.0, 1.0)))
@@ -357,8 +359,13 @@ pub(super) fn run(
                 // hurts (`re-soldier-ai.md` 22: it is not attacked at all),
                 // nor with a heavy weapon at a soldier it is not for.
                 // [ours] A proxy's hand fires out to the round's reach.
-                Armed::Hand if hand.is_some() => range <= wc.ordnance.max_range() && !st.arm.spare,
-                Armed::Hand => {
+                // A shell in the hands (the mortar) is fired by the hand's
+                // own gate: the aim on its arc is the whole change (issue
+                // #29); the gate is the hand weapon's, unchanged.
+                Armed::Hand | Armed::Lobbed(_) if hand.is_some() => {
+                    range <= wc.ordnance.max_range() && !st.arm.spare
+                }
+                Armed::Hand | Armed::Lobbed(_) => {
                     range <= wc.ordnance.max_range() && range < wc.ai_range[2] && !st.arm.spare
                 }
                 Armed::Draw(_) => false,

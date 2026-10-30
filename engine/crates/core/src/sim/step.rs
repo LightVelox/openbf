@@ -33,16 +33,22 @@ impl Sim {
                     continue;
                 }
                 let (pi, pj) = (self.units[i].soldier.pos, self.units[j].soldier.pos);
-                let min_d = self.units[i].capsule().radius + self.units[j].capsule().radius;
+                let min_d = self.units[i].separation_radius() + self.units[j].separation_radius();
                 let d = Vec3::new(pj.x - pi.x, 0.0, pj.z - pi.z);
                 let len = d.length();
                 if len >= min_d {
                     continue;
                 }
                 let axis = if len > 1e-4 { d / len } else { Vec3::X };
-                let push = axis * ((min_d - len) * 0.5);
-                let ni = pi - push;
-                let nj = pj + push;
+                let (bi, bj) = (self.units[i].unpushed(), self.units[j].unpushed());
+                let (si, sj) = match (bi, bj) {
+                    (true, false) => (0.0, 1.0),
+                    (false, true) => (1.0, 0.0),
+                    _ => (0.5, 0.5),
+                };
+                let gap = min_d - len;
+                let ni = pi - axis * (gap * si);
+                let nj = pj + axis * (gap * sj);
                 // A grounded unit follows the ground under its new footprint
                 // only within a STEP of where it stands; a push over a
                 // platform edge leaves its y alone so it FALLS next tick
@@ -490,6 +496,9 @@ impl Sim {
             let steer = super::input::Steer::of(&p);
             self.acquire_magnet_steering(slot, ph, p.pressed(buttons::FIRE), steer);
         }
+        // 2a. The launchers' dwell locks (card UORD §5): a human's magnet
+        //     target, a bot's combat target, counted against LockTime.
+        self.tick_locks(dt);
 
         // 2b. DOORS (DR2): open or close by who stands in their triggers
         //     now, before anyone moves against their boxes (`crate::door`;
@@ -542,6 +551,12 @@ impl Sim {
             }
             if self.units[i].mount.is_some() {
                 self.ride(i, pad_i);
+                continue;
+            }
+            if self.units[i].droideka.is_some() {
+                if self.units[i].alive {
+                    self.step_droideka(i, pad_i, dt);
+                }
                 continue;
             }
             // Where the tick's move starts: the wall pass tests the move, not
@@ -819,7 +834,8 @@ impl Sim {
             // bytes; B2 FUN_00240bf8 cases 4 / 8 / 9 likewise. (The fall
             // state is not blocked here yet.)
             let blocked = matches!(self.units[i].soldier.stance, Stance::Roll | Stance::Jump)
-                || self.units[i].soldier.no_fire();
+                || self.units[i].soldier.no_fire()
+                || self.units[i].droideka.as_ref().is_some_and(|d| d.no_fire());
             // A soldier with more slots than the one in its hands (GREN):
             // the channels decide whether FIRE reaches the primary.
             let mut fire_held = if self.units[i].held.is_empty() {
@@ -961,19 +977,9 @@ impl Sim {
         // 5. Bolt flight + impacts (in spawn order): first what each bolt
         //    passes through on this tick's flight (issue #41).
         self.tick_cloaks(dt);
+        self.fly_missiles(dt);
         self.fly_shells(dt);
-        self.sweep_bolts(dt);
-        let mut done = Vec::new();
-        for (i, b) in self.bolts.iter_mut().enumerate() {
-            if b.advance(dt) {
-                done.push(i);
-            }
-        }
-        for &i in &done {
-            let b = self.bolts[i].clone();
-            self.resolve_bolt(&b);
-        }
-        self.bolts.retain(|b| b.remaining > 0.0);
+        self.fly_bolts(dt);
 
         // 5b. The thrown grenades (GREN).
         self.tick_stickies(dt);
@@ -984,6 +990,7 @@ impl Sim {
 
         // 5c. The pickups (PWUP): flight, life, the touch.
         self.tick_buffs(dt);
+        self.tick_burns(dt);
         self.tick_pickups(dt);
 
         // 5c'. The health / ammo droids (PWST): each station's clock and pass.
@@ -1198,7 +1205,7 @@ impl Sim {
         if u.scoped() {
             return (u.scope_point(self.ground_rules), u.aim_frame());
         }
-        let f = u.fire_point();
+        let f = u.droideka_muzzle().unwrap_or_else(|| u.fire_point());
         let (aim, aim_right, _) = u.aim_frame();
         let fwd = (self.aim_hit(i) - f).normalize_or(aim);
         let right = fwd.cross(Vec3::Y).normalize_or(aim_right);

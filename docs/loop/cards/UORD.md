@@ -6,12 +6,12 @@ value: 4
 phase: build
 status: blocked
 deps: HVYW
-files: engine/crates/core/src/weapon.rs, engine/crates/core/src/sim/ordnance.rs, engine/crates/core/src/sim/combat.rs, engine/crates/core/src/sim/guns.rs, engine/crates/game/src/roster.rs, engine/crates/core/src/ai/arsenal.rs, engine/CRATES.md
+files: engine/crates/core/src/weapon.rs, engine/crates/core/src/weapon/ordnance.rs, engine/crates/core/src/missile.rs, engine/crates/core/src/sim/missiles.rs, engine/crates/core/src/sim/ordnance.rs, engine/crates/core/src/sim/ordnance/tracers.rs, engine/crates/core/src/sim/combat.rs, engine/crates/core/src/sim/guns.rs, engine/crates/core/src/sim/step.rs, engine/crates/core/src/projectile.rs, engine/crates/game/src/roster.rs, engine/crates/game/src/bolt_vis.rs, engine/crates/game/src/fx/trail.rs, engine/crates/game/src/soldier_vis/runtime.rs, engine/crates/core/src/ai/arsenal.rs, engine/CRATES.md
 declares: sim; sweep; arena
-needs: restore UORD replay rows, census tools, baked maps/classes/vehicles, missions and approved validation device
+needs: the four PS2 replay JSONs (lead_tmp/uord/ps2/b1_m_free.json, b2_m_free.json, b1_homing.json, b2_homing.json), the census tool (lead_tmp/hvyw/tools/hvcen.py) and an 8 x 32 sweep
 effort:
-branch:
-resume: Cloud preflight 2026-10-24 08:53 UTC: blocked before implementation; 26/29 prerequisite paths missing. Restore four uord/ps2 replay JSONs, audit-uord mutations, hvcen census and real bakes/missions; verify current main then loopctl start UORD. Preserve RE result/build acceptance and BF2 waver PROVISIONAL. Report engine/artifacts/loop/reports/20261024_0853_card_UORD.md; inventory lead_tmp/uord_20261024_0852/inventory.json.
+branch: uord-missiles
+resume: 2026-10-30: implementation LANDED on branch uord-missiles (70da755 + uncommitted tree) - missile law, dwell lock, per-tick sweep, draw, and BF2's secondary tracers. Status stays blocked on acceptance evidence only: the four PS2 replay JSONs are absent (paths checked, see Evidence), so the replay-comparison criterion is UNSATISFIED; the mutation run, the 45/20 deg shell test and the hvcen sweep are also missing. Restore the rows, add the replay test, run the sweep, then land.
 created: 2026-09-29
 alpha: yes
 ---
@@ -87,7 +87,7 @@ refuted; live PCSX2 rows in `lead_tmp/uord/ps2/`). Split: the bolt family's per-
    its held target at every shot. Bots do NOT wait for the lock (no AI fire path reads it).
 Slices left as notes: the BF1 mortar's charge stage on channel 0 (tap = `_ord1` shell, hold > 0.675 s = the `_ord`
 sticky; `FUN_00285108`); the lock HUD (BF1's shrinking square B1:262320-262339, BF2 `player%d.missileLock*`) -> a
-HUD card when this lands; the BF2 shotgun tracers (visual).
+HUD card when this lands. (The BF2 shotgun tracers are in - the tracer module above.)
 
 ### Acceptance (build)
 - Replay tests on the PS2's own rows (copy 20-40 rows of `lead_tmp/uord/ps2/b1_m_free.json`, `b2_m_free.json`,
@@ -116,3 +116,115 @@ HUD card when this lands; the BF2 shotgun tracers (visual).
 - IMP's torpedo ordnance authors no Waver key (REP / ALL 0.5 only): read the class, never a side table.
 - The mortar shell at 45 deg bursts ~6.8 m up after 90 updates of v-then-position steps (not 7.7 m): use that number
   in the shell test if it asserts a height.
+
+## What landed 2026-10-30 (branch `uord-missiles`, 70da755 + uncommitted tree)
+A `missile` ordnance now steers, homes on a locked target and meets the world on its own per-tick chord, and
+BF2's secondary tracers spawn beside the round that carries them. Line numbers are the working tree's. This is
+code, not acceptance: the card's replay criterion is still open (below).
+
+- **The class** (`engine/crates/core/src/missile.rs:28-111`): `MissileClass` reads `TurnRate`, `WaverRate`,
+  `WaverTurn`, the unnamed ramp period `0x73e5a988` (stored as `1 / value`) and BF2's `MinSpeed` /
+  `Acceleration`, with the PS2's MinSpeed -> Acceleration fall-through; `speed_ramps()` (l.108-110) is BF2-only
+  and off above 9000. The loader fills it for every `OrdKind::Missile` class and sets `ramps = db.is_bf2()`
+  (`engine/crates/game/src/roster.rs:781-790`); the kind comes from the engine base `missile`
+  (`engine/crates/core/src/weapon/ordnance.rs:118-135`).
+- **The law** (`missile.rs:170-255`): ramp `min(1, r + dt)`; turn `r x TurnRate`, about `dir x desired`, clamped
+  by the SINE of the angle left (Rodrigues); the two-axis waver about the launch line, its phases advanced by two
+  fresh LCG draws a tick; BF2's speed ramp from `MinSpeed` to `Velocity`; no gravity. `Missile::launch`
+  (l.170-191) draws the two phases and starts at `MinSpeed` / `Velocity`. The round's steering state rides on the
+  bolt (`engine/crates/core/src/projectile.rs:86-88`, replay-hashed at l.190-219): `as_missile` clears the spawn
+  ray's hit and the fall and attaches the steering state (l.432-446); `guide` steers one update (l.451-466).
+- **The sim** (`engine/crates/core/src/sim/missiles.rs`): `probe_flight` (l.20-53) is the per-tick chord against
+  terrain, water and the map's bodies (no predictive ray); `missile_aim` (l.60-65) resolves the target point (a
+  soldier's `aim_point`, a vehicle's aim-sphere centre); `fly_missiles` (l.70-93) steers, then probes, and drops
+  a dead handle; `tick_locks` (l.101-139) counts a launcher's dwell (human: the magnet target; bot: `ai.target`,
+  no cone). Wired at step 2a (`engine/crates/core/src/sim/step.rs:499-501`) and step 5 (l.980).
+- **The press** (`engine/crates/core/src/sim/ordnance.rs:141`; lock read l.238-255, missile l.272-281):
+  `WeaponState::locked` gates the target the round carries at the press and every shot consumes the lock. A
+  seat's missile (the cannon wrist rockets) passes its held target with no dwell
+  (`engine/crates/core/src/sim/guns.rs:433-447`). `WeaponClass::lock_time` (`weapon.rs:181-187`) is read only for
+  a `launcher` base (`roster.rs:886-891`); `WeaponState::{lock_target, lock_held, locked}` at
+  `weapon.rs:1190-1238`, hashed at `weapon.rs:1643-1657`.
+- **The draw**: a steering missile keeps one identity (its launch line and waver phases,
+  `engine/crates/game/src/bolt_vis.rs:72-96`) and draws as its class's `ordnance.geometry` model
+  (`bolt_vis.rs:104-111`, `missiles_in_flight` l.119-135, chained into `weapon_draws` at
+  `engine/crates/game/src/soldier_vis/runtime.rs:863-866`); the trail matches it on that key alone
+  (`engine/crates/game/src/fx/trail.rs:31-69`).
+- **The BF2 secondary tracers** (`engine/crates/core/src/sim/ordnance/tracers.rs:29-79`; the class data at
+  `weapon.rs:142-173`): a weapon that names `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod` spawns a
+  zero-damage `Bolt` of the tracer class beside the primary on every period-th round (`sim/ordnance.rs:305-309`),
+  on the primary's ray with no extra LCG draw; a class that names a real second round (the sonic blaster) spawns
+  nothing (`weapon/ordnance.rs:158-162`).
+- **Tests, run 2026-10-30** from `engine/`: `cargo test -p core --lib missile` -> 14 passed, 0 failed (7 in
+  `missile.rs`, 6 scene tests in `sim/missiles/tests.rs`, 1 `ai::gunner_foot` missile-line test; 1,392
+  filtered). `cargo test -p core --lib a_shell_falls` -> 1 passed. `cargo test -p core --lib tracer` -> 5 passed,
+  0 failed (1,406 filtered): a period-1 class rides a tracer on every round, period 5 on the fifth only, the
+  tracer does no damage and dies at life-end, a class with no secondary spawns nothing, and a real second round
+  (the sonic blaster) is not spawned as a tracer. `cargo test -p game --lib missile` -> 4
+  passed (the two draw tests, the trail identity test, and one unrelated VO test on the filter). The scene tests
+  are: homing onto a moving soldier's point and the drop of a target that dies; an unguided round's straight
+  line and its `ExplosionExpire` burst (blast damage matched to `blast_falloff`); the dwell lock reaching
+  LockTime and a new target restarting it; the press consuming the lock (guided at 1.0 s, unguided at 0.5 s); a
+  bot locking its combat target with no magnet and no cone; a vehicle target homed on its aim-sphere centre, not
+  its origin (`sim/missiles/tests.rs:139-493`).
+
+## Every non-hero weapon draws and strikes (2026-10-30, after the maintainer's report)
+- Secondaries: every `SecondaryOrdnanceName` class is registered and spawned on rounds 1, 1 + period, ... (PS2
+  `FUN_0032f208`), with its own kind and the primary's charge: the sonic blaster's `fatray` blast (trail
+  `imp_sfx_weap_sonicblast_ord`) and the geonosian turret's hidden bolt now fly.
+- `fatray` (`sim/fatray.rs`): the PS2 sweep, piercing, falloff by distance from the line, damage floor.
+- `beam` (`sim/beam.rs`): the BF2 award sniper rifles and the vehicle beams follow the fire point for their
+  LifeSpan, cast Range each tick, spread their damage over the life, and draw as a ribbon (`bolt_vis::beam_draw`).
+- A bullet-family round with a GeometryName draws as its model (B1 `FUN_00277130`): the BF1 jet trooper's rocket.
+- RE: `analysis/re-ordnance-kinds.md` §7 and §9b.
+
+## What is deferred (not built, with the reason)
+- **Burn over time**: built 2026-10-30 from the BF2 decomp (`FUN_003156e0` keys, `FUN_00236e28` /
+  `FUN_00236f50`); see card UORDE's "Burn, the shot effect and the burn bone effects".
+- **Deflection, per-hit buffs, Force push / pull**: §8 names each in a clause - "deflection by the target's
+  weapon", "pull (Push < 0)", "buffs" - with no key, unit or class table, and no code models them. `kick_and_push`
+  returns on `push <= 0.0` (`engine/crates/core/src/sim/blast.rs:311`), so a negative `Push` (a pull) does
+  nothing; the zero-damage emitter (Force push / pull) is kept on the bolt path by design
+  (`sim/ordnance.rs:192-199`, test `sim/emitter.rs:431`).
+- **Missile `GeometryName`**: the model path is unexercised for the Bespin map's missile round. In
+  `engine/assets_baked/bf1_bes1/classes.ron:114-135` (`bes_weap_cloudcar_miss_ord`) the 15 props are the
+  explosion, trail sound, damage, velocity, life and waver numbers - no `GeometryName` - and `ordnance.geometry`
+  is read from that key alone (`engine/crates/core/src/weapon/ordnance.rs:270-272`), so `missiles_in_flight`
+  yields no model for it and the round draws nothing. Expected, not a bug. (The brief's "the only missile
+  ordnance in the bake" holds for the map file, not the class db: 33 classes in `engine/assets_baked/classes/`
+  carry `base: "missile"` and the Bespin map file adds the 34th; the infantry torpedo classes do name a model -
+  `rep_weap_inf_torpedo_launcher_ord` -> `com_weap_missile` at `engine/assets_baked/classes/bf1_rep.ron:2609`.) No
+  in-game visual check has been made either way.
+
+## Evidence (2026-10-30)
+- Source: the files and lines above, on branch `uord-missiles` at 70da755 ("Missiles steer: the PS2 flight law,
+  the launcher dwell lock and the per-tick sweep") plus the uncommitted working tree (14 modified code paths; six
+  new: `core/src/emitter.rs`, `core/src/sim/emitter.rs`, `core/src/sim/missiles/`,
+  `core/src/sim/ordnance/tracers.rs`, `core/src/weapon/emitter.rs`, `game/src/fx/arc.rs`).
+- **The acceptance replay rows are ABSENT.** `Test-Path` is false for all four, checked from the repo root:
+  `lead_tmp/uord/ps2/b1_m_free.json`, `lead_tmp/uord/ps2/b2_m_free.json`,
+  `lead_tmp/uord/ps2/b1_homing.json`, `lead_tmp/uord/ps2/b2_homing.json`, and false for the same four under
+  `engine/artifacts/lead_tmp/uord/ps2/`. A recursive glob finds no `*homing*.json` and no `*m_free*` path
+  anywhere in the tree. The probes that wrote them are gone too: `lead_tmp/uord/ps2/missile_b1.py`,
+  `replay_b1.py`, `homing_check.py` are all false. The doc's rows (`analysis/re-ordnance-kinds.md` §4.5: 1,400
+  pairs, the law to 1.1e-4 m/s, 263 / 442 / 27 / 87 pairs per set) are cited there, not in the tree.
+- **The replay-comparison acceptance criterion is UNSATISFIED.** No consumer exists: the criterion asks for
+  20-40 of those rows as constants in a test that predicts the next velocity to <= 1e-3 m/s and the homing
+  desired direction to 0.01 deg. `the_step_matches_the_documented_law` (`missile.rs:425`) compares the module
+  with the doc's own pseudocode, not with the PS2 rows, and its comment says so. Restoring the four JSONs and
+  adding that test (run with `cargo test -p core --lib missile`) is what closes it.
+- Acceptance status, item by item:
+  | item | status |
+  |---|---|
+  | replay rows: next velocity <= 1e-3 m/s | NOT MET - fixtures absent, no test |
+  | replay rows: homing desired <= 0.01 deg | NOT MET - same |
+  | mutation check (reversed rotation, no ramp, waver axis) | NOT RUN - `lead_tmp/audit-uord/mut/M1` false |
+  | lock at 1.5 s (BF1) / 1.0 s (BF2) | PARTLY - the fixture class locks at 1.0 s (30 ticks); per-game class times not asserted |
+  | a press before the lock fires unguided | MET (0.5 s scene) |
+  | a target change restarts the clock | MET |
+  | a shot consumes the lock | MET |
+  | a torpedo never locks a soldier | NOT TESTED - enforced by the magnet's `target_kind` bits (`sim/input.rs:463-464`) |
+  | a bot fires without waiting | BY CONSTRUCTION - the press is the only `locked()` reader (`sim/ordnance.rs:246`) |
+  | shell test at 45 / 20 deg | NOT WRITTEN - the shell test in the tree is a level arc plus a 1.2 rad air burst (`sim/ordnance.rs:1534`) |
+  | census 8 x 32 sweep, 256 / 256 | NOT RUN - `lead_tmp/hvyw/tools/hvcen.py` false |
+- Status stays `blocked` for the missing replay fixtures and the unrun acceptance runs, not for missing code.

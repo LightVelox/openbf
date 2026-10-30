@@ -129,10 +129,11 @@ fn team_templates(
         factions,
         b.mission.as_ref(),
     ) {
-        Ok((rosters, warnings)) => {
+        Ok((mut rosters, warnings)) => {
             for w in &warnings {
                 eprintln!("{w}");
             }
+            game::droideka::install(&mut rosters, &scene.dir, &scene.manifest.source_game);
             // One `Sim::weapon_classes` index per weapon NAME (a Vec scan —
             // the sim never iterates a hash map), and the per-team class
             // TABLE the AI mix and the spawn-select both read.
@@ -361,6 +362,9 @@ pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim
                 );
                 walk.vehicle_geometry = p.geometry;
                 walk.vehicle_seats = p.seats;
+                walk.vehicle_weapon_hud = p.weapon_hud;
+                walk.walker_shot_styles = p.walker_shot_styles;
+                walk.load_walker_views(&scene.manifest, scene.dir.parent().unwrap_or(&scene.dir));
                 walk.vehicle_riders = p.riders;
                 walk.vehicle_engines = p.engines;
                 walk.vehicle_labels = p.labels;
@@ -466,14 +470,17 @@ pub(super) fn hud_model(
     let slot = me.spec.player_slot.map_or(0, usize::from);
     // On foot the soldier's rows; flying, the droid's.
     let [weapon, weapon2] = game::hud_feed::weapon_rows(walk);
-    let reticle = (on_foot || droid.is_some() || guided.is_some()).then(|| {
-        walk.sim
-            .reticle_pick
-            .first()
-            .copied()
-            .flatten()
-            .map_or(0, |(_, rel)| rel)
-    });
+    let reticle =
+        (on_foot || droid.is_some() || guided.is_some() || game::hud_feed::armed_seat(walk)).then(
+            || {
+                walk.sim
+                    .reticle_pick
+                    .first()
+                    .copied()
+                    .flatten()
+                    .map_or(0, |(_, rel)| rel)
+            },
+        );
     ui::hud::HudModel {
         team_names: [walk.teams[0].faction.clone(), walk.teams[1].faction.clone()],
         tickets: [b.teams[0].tickets(), b.teams[1].tickets()],

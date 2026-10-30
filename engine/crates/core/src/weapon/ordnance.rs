@@ -75,6 +75,12 @@ pub struct OrdnanceClass {
     /// damage is lerp(Damage, MaxDamage, charge) (B1 `FUN_00278208`
     /// 199074-199075). None: `max_damage` whatever the charge.
     pub min_damage: Option<f32>,
+    /// A `missile` class's steering keys (card UORD,
+    /// [`crate::missile::MissileClass`]); `None` for every other base. Filled
+    /// by the class loader.
+    pub missile: Option<crate::missile::MissileClass>,
+    pub fat_ray: Option<super::FatRayClass>,
+    pub beam: Option<super::BeamClass>,
 }
 
 impl Default for OrdnanceClass {
@@ -101,6 +107,9 @@ impl Default for OrdnanceClass {
             expire: None,
             knots: Vec::new(),
             min_damage: None,
+            missile: None,
+            fat_ray: None,
+            beam: None,
         }
     }
 }
@@ -147,6 +156,17 @@ pub struct DamageDesc {
 impl OrdnanceClass {
     pub fn max_range(&self) -> f32 {
         self.velocity * self.life_span
+    }
+
+    /// Is this ordnance a TRACER - a round that exists only to be drawn? Every
+    /// BF2 class a weapon names as its `SecondaryOrdnanceName` is one
+    /// (`com_weap_inf_shotgun_tracer`, `com_weap_inf_chaingun_tracer`, ...:
+    /// `MaxDamage 0`, no scales; `analysis/re-ordnance-kinds.md` §7). The
+    /// exception on the discs is the probe droid's sonic blaster, whose
+    /// "secondary" is a real 100-damage round, so the spawn is gated on this
+    /// test rather than on the key's presence.
+    pub fn is_tracer(&self) -> bool {
+        self.max_damage <= 0.0
     }
 
     /// Damage descriptor at impact. `age` = bolt flight time (BF2 falloff);

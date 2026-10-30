@@ -272,12 +272,8 @@ fn every_faction_builds_its_whole_default_class_list() {
             for c in &r.classes {
                 println!("{}", row(c));
             }
-            // Four, not five: BF1's CIS mission mix is four soldier droids
-            // plus `cis_inf_droideka`, which is a `walkerdroid` and is left
-            // out of the default list (as BF2's CIS list leaves it out too).
-            // Every other pair fields five or six.
             assert!(
-                r.classes.len() >= if r.faction == "cis" { 4 } else { 5 },
+                r.classes.len() >= 5,
                 "{}: only {} classes",
                 r.faction,
                 r.classes.len()
@@ -424,8 +420,7 @@ fn tat1_alliance_roster_is_the_missions_mix() {
 }
 
 /// BF2 `SetupTeams` slot order reaches the roster with both counts, and the
-/// CIS `special` slot — the droideka — is REJECTED (a `walkerdroid`, not a
-/// soldier chain), leaving five classes and one skip.
+/// CIS `special` slot — the droideka, a `walkerdroid` — builds as a droideka.
 #[test]
 fn kam1_clone_wars_rosters_carry_slot_order_min_and_max() {
     let Some(dir) = classes_dir() else { return };
@@ -454,7 +449,6 @@ fn kam1_clone_wars_rosters_carry_slot_order_min_and_max() {
     for c in &rep.classes {
         println!("{}", row(c));
     }
-    // The CIS side names the droideka in its `special` slot; it drops out.
     let cis_names: Vec<&str> = cis.classes.iter().map(|c| c.class.as_str()).collect();
     assert_eq!(
         cis_names,
@@ -464,26 +458,92 @@ fn kam1_clone_wars_rosters_carry_slot_order_min_and_max() {
             "cis_inf_engineer",
             "cis_inf_sniper",
             "cis_inf_officer",
+            "cis_inf_droideka",
         ],
-        "the mission's sixth CIS class (cis_inf_droideka) is not a soldier"
     );
-    assert_eq!(cis.classes[4].class, "cis_inf_officer");
+    let deka = &cis.classes[5];
+    let c = deka.droideka.as_ref().expect("a droideka class");
+    assert_eq!(deka.max_health, 550.0);
+    assert_eq!(c.shield.max, 3000.0);
+    assert!(!c.shield.drains_full);
+    assert!(deka.chunk.is_none());
+    assert!(cis.classes[..5].iter().all(|c| c.droideka.is_none()));
 }
 
-/// The droideka is rejected by its BASE chain. BF1 heroes are soldier
-/// chains, but the default conquest class lists exclude them.
+/// The droideka builds by its BASE chain on either disc, from BF2's gameplay
+/// data. BF1 heroes are soldier chains, but the default conquest class lists
+/// exclude them.
 #[test]
-fn non_soldier_chains_are_rejected() {
+fn droideka_chains_build_as_droidekas() {
     let Some(dir) = classes_dir() else { return };
     let bf2 = game::roster::load_classdb(&dir, "bf2", &FOUR).expect("bf2 db");
     assert!(bf2.get("cis_inf_droideka").is_some(), "the class IS baked");
     assert_eq!(bf2.engine_base("cis_inf_droideka"), Some("walkerdroid"));
     assert!(!game::roster::is_soldier_chain(&bf2, "cis_inf_droideka"));
-    let e = ClassRoster::build(&bf2, "cis_inf_droideka", 1, None).unwrap_err();
-    assert!(format!("{e:#}").contains("walkerdroid"), "{e:#}");
+    assert!(game::roster::is_droideka_chain(&bf2, "cis_inf_droideka"));
+    let two = ClassRoster::build(&bf2, "cis_inf_droideka", 1, None).expect("bf2 droideka");
     assert!(game::roster::is_soldier_chain(&bf2, "rep_inf_ep3_rifleman"));
 
     let bf1 = game::roster::load_classdb(&dir, "bf1", &FOUR).expect("bf1 db");
+    assert!(game::roster::is_droideka_chain(&bf1, "cis_inf_droideka"));
+    let one = ClassRoster::build(&bf1, "cis_inf_droideka", 1, None).expect("bf1 droideka");
+    for r in [&two, &one] {
+        let c = r.droideka.as_ref().expect("droideka class");
+        println!(
+            "{} hp {} weapon {} shield {:?} ball r {} speed {} walk {} explosion {}",
+            r.class,
+            r.max_health,
+            r.weapon.name,
+            c.shield,
+            c.ball_radius,
+            c.ball_move_speed,
+            c.max_speed,
+            c.explosion.is_some()
+        );
+        assert_eq!(r.max_health, 550.0);
+        assert_eq!(c.shield.max, 3000.0);
+        assert!(!c.shield.drains_full);
+        assert!(c.explosion.is_some());
+        assert!(r.chunk.is_none());
+        assert!(r.geometry.is_none());
+        println!("{} engine {:?}", r.class, r.jet_look);
+        assert_eq!(
+            r.jet_look.engine.as_deref(),
+            Some("cis_walk_droideka_engine_parameterized")
+        );
+        assert_eq!(r.jet_look.turn_on.as_deref(), Some("cis_droideka_fold"));
+        assert_eq!(r.jet_look.turn_off.as_deref(), Some("cis_droideka_unfold"));
+    }
+    for r in [&two, &one] {
+        let c = r.droideka.as_ref().unwrap();
+        let stand = c
+            .camera_section(core::droideka::Form::Walk, false)
+            .expect("STAND");
+        let ball = c
+            .camera_section(core::droideka::Form::Ball, false)
+            .expect("CROUCH");
+        println!(
+            "{} cameras {} stand {stand:?} ball {ball:?}",
+            r.class,
+            c.cameras.len()
+        );
+        assert_eq!(
+            (stand.eye_y, stand.offset),
+            (1.8, glam::Vec3::new(0.0, 0.5, 4.5))
+        );
+        assert_eq!(
+            (ball.eye_y, ball.offset),
+            (1.0, glam::Vec3::new(0.0, 0.3, 4.5))
+        );
+        assert!((stand.tilt - 5f32.to_radians()).abs() < 1e-6);
+    }
+    let shield = |r: &ClassRoster| r.droideka.as_ref().unwrap().shield.sound.clone();
+    assert_eq!(shield(&one).as_deref(), Some("droid_fx7_hum"));
+    assert_eq!(shield(&two), None);
+    assert_eq!(
+        two.droideka.as_ref().unwrap().ball_move_speed,
+        one.droideka.as_ref().unwrap().ball_move_speed
+    );
     // BF1's heroes ARE soldier chains — they are excluded because no
     // conquest AddUnitClass list names them, not by this test.
     assert!(game::roster::is_soldier_chain(
@@ -785,9 +845,8 @@ fn pair_returns_its_warnings_rather_than_printing_them() {
 }
 
 /// The item's referee: EVERY shipped mission RON's class mix resolves against
-/// the db its own map's source game supplies. No mission falls back, and the
-/// only classes skipped are the ones a base-chain test rejects
-/// (`cis_inf_droideka`, a `walkerdroid`) — never a missing name.
+/// the db its own map's source game supplies. No mission falls back and no
+/// class is skipped.
 #[test]
 fn every_mission_mix_resolves_against_its_maps_own_disc() {
     let Some(dir) = classes_dir() else { return };
@@ -857,16 +916,8 @@ fn every_mission_mix_resolves_against_its_maps_own_disc() {
         fell_back.is_empty(),
         "missions still falling back: {fell_back:#?}"
     );
-    // What IS still skipped, and only this: the droideka's base chain.
-    assert!(
-        not_soldier.iter().all(|s| s.ends_with("cis_inf_droideka")),
-        "{not_soldier:#?}"
-    );
-    println!(
-        "{} missions, 0 missing, 0 fallbacks, {} non-soldier skips (all droideka)",
-        files.len(),
-        not_soldier.len()
-    );
+    assert!(not_soldier.is_empty(), "{not_soldier:#?}");
+    println!("{} missions, 0 missing, 0 fallbacks, 0 skips", files.len());
 }
 
 /// The soldier MODEL follows the class db onto the map's own disc. A class

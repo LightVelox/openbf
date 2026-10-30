@@ -129,6 +129,8 @@ pub struct PadBuild {
     /// Each class's seat ring with its cameras (card VSEAT), parallel to
     /// `classes`; filled by [`install`].
     pub seats: Vec<Vec<vehicle_class::SeatSpec>>,
+    pub walker_shot_styles: std::collections::HashMap<usize, crate::walker_shots::Style>,
+    pub weapon_hud: Vec<Vec<Vec<crate::walk::WeaponHud>>>,
     /// Each class's `EngineSound` and `TurnOffTime` (card VSND), parallel
     /// to `classes`; filled by [`install`].
     pub engines: Vec<Option<crate::engine_sound::EngineClass>>,
@@ -634,6 +636,20 @@ pub fn install(
                 .collect()
         })
         .collect();
+    b.weapon_hud = b
+        .seats
+        .iter()
+        .map(|ring| {
+            ring.iter()
+                .map(|seat| {
+                    seat.weapons
+                        .iter()
+                        .map(|w| crate::roster::weapon_hud(&db, &w.class))
+                        .collect()
+                })
+                .collect()
+        })
+        .collect();
     sim.seat_setup = b
         .classes
         .iter()
@@ -643,13 +659,35 @@ pub fn install(
             let empty = Vec::new();
             let hp = nodes.get(&c.to_ascii_lowercase()).unwrap_or(&empty);
             let building = vehicle_class::is_turret(&db, c);
+            let walker = db.engine_base(c).and_then(vehicle_kind) == Some(VehicleKind::Walker);
             setup.guns = ring
                 .iter()
                 .map(|s| {
                     let mut g = seat_gun(sim, &db, s, hp)?;
-                    if building && !g.pilot {
+                    if (building || walker) && !g.pilot {
                         turret_law(&mut g, s, game == "bf2");
-                        g.gunner = gunner_seat(m, c, s, game == "bf2");
+                        if building {
+                            g.gunner = gunner_seat(m, c, s, game == "bf2");
+                        }
+                        if walker && !g.framed {
+                            if let Some(axes) = s
+                                .aimer_node
+                                .as_deref()
+                                .and_then(|n| hp.iter().find(|h| h.name.eq_ignore_ascii_case(n)))
+                                .and_then(|h| h.axes)
+                            {
+                                g.aimer_bind =
+                                    glam::Quat::from_mat3(&glam::Mat3::from_cols_array_2d(&axes))
+                                        .normalize();
+                            }
+                        }
+                    } else if walker {
+                        g.aimer = aimer(
+                            s.aimer_yaw_limits.or(s.yaw_limits),
+                            s.aimer_pitch_limits.or(s.pitch_limits),
+                            s.aimer_yaw_rate.or(s.yaw_rate),
+                            s.aimer_pitch_rate.or(s.pitch_rate),
+                        );
                     }
                     Some(g)
                 })
@@ -657,6 +695,40 @@ pub fn install(
             Some(setup)
         })
         .collect();
+    for (class, setup) in sim
+        .seat_setup
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| s.as_ref().map(|s| (i, s)))
+    {
+        if db.engine_base(&b.classes[class]).and_then(vehicle_kind) != Some(VehicleKind::Walker) {
+            continue;
+        }
+        for w in setup.guns.iter().flatten().flat_map(|g| &g.weapons) {
+            let name = &sim.weapon_classes[w.class].name;
+            let tracer = db.prop(name, "SecondaryOrdnanceName").map(|c| {
+                let mut look = core::laser::LaserLook::replay(crate::roster::chain_props(&db, c));
+                let range = db.prop_f32(c, "Range").unwrap_or(40.0);
+                look.length = range;
+                look.glow_length = range;
+                look.blur_length = range;
+                look
+            });
+            let frequency = db
+                .prop_f32(name, "SecondaryOrdnancePeriod")
+                .unwrap_or(1.0)
+                .max(1.0) as u64;
+            let fire_sound = db.prop_hash(name, 0x2298cae8).map(str::to_owned);
+            b.walker_shot_styles.insert(
+                w.class,
+                crate::walker_shots::Style {
+                    tracer,
+                    frequency,
+                    fire_sound,
+                },
+            );
+        }
+    }
     Ok(b)
 }
 
@@ -898,7 +970,7 @@ fn hull_parts_from(
 
 /// Each `side_<game>/vehicles/*/vehicles.ron` beside the map's bake, in path
 /// order: its directory and its manifest.
-fn side_vehicle_files(
+pub fn side_vehicle_files(
     map_dir: &std::path::Path,
     game: &str,
 ) -> Vec<(std::path::PathBuf, manifest::VehicleManifest)> {
@@ -1007,6 +1079,7 @@ pub fn seat_gun(
         pilot,
         turn: None,
         framed: false,
+        aimer_bind: glam::Quat::IDENTITY,
         gunner: None,
     })
 }

@@ -265,7 +265,7 @@ pub(super) struct Candidate {
     pub(super) ctr: Vec3,
     r: f32,
     /// Where the LOS ray aims.
-    aim: Vec3,
+    pub(super) aim: Vec3,
     vel: Vec3,
     /// The assist's target radius (a soldier's capsule, a vehicle's bounds).
     assist_r: f32,

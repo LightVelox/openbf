@@ -33,19 +33,25 @@
 //! re-exported here; shared test fixtures stay in this facade.
 
 mod abilities;
+mod beam;
 mod blast;
 mod bounds;
 mod buffs;
 mod building_turrets;
+mod burn;
 mod cloaks;
 mod combat;
 mod doors;
 mod droid_death;
+mod droidekas;
+mod emitter;
+mod fatray;
 mod guided;
 mod guns;
 mod input;
 mod look;
 mod mines;
+mod missiles;
 mod ordnance;
 mod pickups;
 mod remotes;
@@ -60,13 +66,16 @@ pub mod trace;
 mod turrets;
 mod vehicles;
 
+pub use beam::Beam;
 pub use blast::{soldier_blast_sphere, BLAST_GATHER_MAX};
 pub use bounds::{
     Level, ReturnPath, BOUND_DROP, KILL_FLOOR_DROP, LEVEL_HUBS, LEVEL_RISE, UNDER_MAP_SPEED,
 };
 pub use buffs::Buffs;
 pub use building_turrets::{BuildingTurret, PosedBody, PosedParts, TurretFall};
+pub use burn::Burn;
 pub use droid_death::PUSHED_DEAD_HEALTH;
+pub use droidekas::{capsule_of as droideka_capsule, FLOOR_SNAP as DROIDEKA_FLOOR_SNAP};
 pub use guns::SeatLook;
 pub use input::{buttons, AimTarget, InputLog, PadState, LOOK_SCALE, LOOK_UNIT};
 pub use look::{LookPreview, MOUSE_STEER};
@@ -107,6 +116,16 @@ mod tests {
             offset_z: 2000.0,
             heights: vec![0.0; 4],
         }
+    }
+
+    pub(super) fn hits(s: &Sim) -> Vec<(u32, f32)> {
+        s.events
+            .iter()
+            .filter_map(|e| match e {
+                crate::sim::Event::Hit { victim, damage, .. } => Some((victim.index, *damage)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Player at the origin facing -Z, target trooper 20 m ahead.

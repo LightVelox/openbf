@@ -1414,3 +1414,112 @@ fn the_error_direction_turns_every_tick_not_once_a_think() {
         assert_eq!(moved, 50, "{rules:?}: it turns on every tick");
     }
 }
+
+/// Issue #29: the mortar in a bot's hands on the PS2's low-arc solution
+/// (`analysis/re-ordnance-kinds.md` §6, re-grenades §7.3) — the shell
+/// clears a 1 m wall 10 m out and comes down on the enemy behind it. A
+/// flat `seen_aim` shot at the same enemy falls short of him, so the scene
+/// fails without the lobbed aim.
+#[test]
+fn a_bot_lobs_a_mortar_shell_over_a_wall() {
+    use crate::collision::{Body, CollisionWorld, Shape};
+    use crate::heightfield::Heightfield;
+    use crate::sim::{Event, Sim};
+    use crate::unit::{Controller, UnitSpec};
+    use crate::weapon::{ExplosionClass, OrdKind, OrdnanceClass, Thrown, WeaponClass};
+    let _stand = crate::ai::tests::all_stand();
+    let mut s = Sim::empty(7);
+    s.ground_rules = crate::soldier::GroundRules::Bf1;
+    s.cheats.infinite_ammo = true;
+    s.heightfield = Some(Heightfield {
+        size: 2,
+        unit: 400.0,
+        offset_x: 200.0,
+        offset_z: 200.0,
+        heights: vec![0.0; 4],
+    });
+    // A waist-high wall across the way: a flat shot strikes it, the arc
+    // clears it. 1 m is well under the shell's line at 10 m.
+    s.collision = CollisionWorld::new(
+        vec![Body::new(
+            glam::Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0)),
+            Shape::Box {
+                half: Vec3::new(10.0, 1.0, 0.25),
+            },
+        )],
+        Vec::new(),
+    );
+    // The BF1 mortar launcher: a `grenade` class, ShotElevate 0.1,
+    // MaxPressedTime 0.75, its `_ord1` shell 40 m/s at Gravity 1.75 x 9.8
+    // and a 4 m blast (re-ordnance-kinds §6).
+    let mut mortar = WeaponClass::bf1_rifle();
+    mortar.trigger_single = true;
+    mortar.max_pressed_time = 0.75;
+    (
+        mortar.spread_per_shot,
+        mortar.posture_spread,
+        mortar.spread_threshold,
+        mortar.spread_limit,
+    ) = (0.0, [[0.0; 3]; 3], 0.0, 0.0);
+    mortar.shot_delay = [1.4, 1.4];
+    mortar.ai_range = [10.0, 32.0, 48.0];
+    mortar.thrown = Some(Thrown {
+        shot_elevate: 0.1,
+        hide_on_fire: true,
+        hand: None,
+    });
+    mortar.ordnance = OrdnanceClass {
+        velocity: 40.0,
+        life_span: 3.0,
+        max_damage: 150.0,
+        kind: OrdKind::Shell,
+        gravity: 1.75,
+        explosion: Some(ExplosionClass {
+            damage: 150.0,
+            damage_inner: 1.0,
+            damage_outer: 4.0,
+            ..ExplosionClass::default()
+        }),
+        ..OrdnanceClass::default()
+    };
+    let wc = s.add_weapon_class(mortar);
+    // Skill 4 draws the charge floor (0.15 x 0.75 s): a tap of the shell
+    // stage, not the 0.9 hold that swaps in the sticky (issue #29).
+    let shooter = s
+        .spawn(&UnitSpec {
+            controller: Controller::Ai,
+            weapon_class: wc,
+            ..UnitSpec::trooper(0, Vec3::ZERO)
+        })
+        .unwrap();
+    s.unit_mut(shooter).unwrap().skill = 4;
+    // The enemy 24 m out, behind the wall, with health enough to take the
+    // blast and be hurt by it more than once.
+    let enemy = s
+        .spawn(&UnitSpec::trooper(1, Vec3::new(0.0, 0.0, -24.0)))
+        .unwrap();
+    s.units[enemy.index as usize].health.max = 1e9;
+    s.units[enemy.index as usize].health.cur = 1e9;
+    let (mut shots, mut hurt) = (Vec::new(), 0.0f32);
+    for _ in 0..900 {
+        s.step(&[]);
+        for e in &s.events {
+            match *e {
+                Event::Shot { unit, dir, .. } if unit == shooter => shots.push(dir),
+                Event::Hit { victim, damage, .. } if victim == enemy => hurt += damage,
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        shots.len() >= 2,
+        "the bot fired the mortar: {}",
+        shots.len()
+    );
+    let dir = shots[0];
+    assert!(dir.y > 0.03, "the shell is lobbed, not fired flat: {dir}");
+    assert!(
+        hurt > 0.0,
+        "the shell came down on the enemy behind the wall: {hurt} damage"
+    );
+}

@@ -6,6 +6,8 @@
 //! that steps no tick would start every sound again, and one that steps two
 //! would lose the first tick's.
 
+pub(crate) mod ordnance;
+
 use crate::sounds::Listener;
 use crate::walk::WalkSim;
 use core::sim::Event;
@@ -73,6 +75,20 @@ pub fn each(walk: &WalkSim, ears: Vec3, mut play: impl FnMut(&str, Vec3)) {
                 if let Some(n) = &walk.sim.weapon_classes[*weapon_class as usize]
                     .ordnance
                     .collision_sound
+                {
+                    play(n, *pos);
+                }
+            }
+            Event::Droideka {
+                unit,
+                pos,
+                cue: core::droideka::Cue::ShieldOff,
+            } => {
+                if let Some(n) = walk
+                    .sim
+                    .unit(*unit)
+                    .and_then(|u| u.droideka_class())
+                    .and_then(|c| c.shield.off_sound.as_deref())
                 {
                     play(n, *pos);
                 }

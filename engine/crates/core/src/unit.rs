@@ -362,11 +362,13 @@ pub struct Unit {
     /// BF2's timed offense / defense buffs (card PWUP, `sim/pickups.rs`).
     /// HASHED only while one runs.
     pub buffs: crate::sim::Buffs,
+    pub burn: Option<crate::sim::Burn>,
     pub cloak: crate::cloak::CloakState,
     /// The zoom of the weapon in hand, `None` when not zoomed: every bot,
     /// always. HASHED only when `Some`, so a round nobody zooms in hashes as
     /// it did.
     pub zoom: Option<Zoom>,
+    pub droideka: Option<Box<crate::droideka::Droideka>>,
 }
 
 impl Unit {
@@ -448,7 +450,12 @@ impl Unit {
     /// The camera section this unit takes now: the stance's, or its ZOOM
     /// section while zoomed ([`camera_section`], one table on every map).
     pub fn section(&self) -> CameraSection {
-        camera_section(self.soldier.stance, self.zoom.is_some())
+        let own = self
+            .droideka
+            .as_deref()
+            .zip(self.droideka_class())
+            .and_then(|(d, c)| c.camera_section(d.form(), self.zoom.is_some()));
+        own.unwrap_or_else(|| camera_section(self.soldier.stance, self.zoom.is_some()))
     }
 
     /// Is the view the scope's (zoomed on a `ZoomFirstPerson` weapon)?
@@ -641,6 +648,9 @@ impl Unit {
         if self.buffs.active() {
             self.buffs.hash_into(eat);
         }
+        if let Some(b) = &self.burn {
+            b.hash_into(eat);
+        }
         if let Some(z) = self.zoom {
             eat(&[0x5a, z.step, z.scope as u8]);
             eat(&z.value.to_bits().to_le_bytes());
@@ -649,6 +659,9 @@ impl Unit {
         // Card DPRX: nothing at all for a unit that is not a proxy.
         if let Some(p) = &self.proxy_human {
             p.hash_into(eat);
+        }
+        if let Some(d) = &self.droideka {
+            d.hash_into(eat);
         }
     }
 
@@ -931,6 +944,7 @@ pub struct UnitClass {
     /// (`analysis/re-spawn-flow.md` §4.3, [`crate::sim::Sim::class_refusal`]).
     /// Bots are never refused.
     pub unlock_points: u32,
+    pub droideka: Option<std::sync::Arc<crate::droideka::DroidekaClass>>,
 }
 
 impl UnitClass {
@@ -970,6 +984,7 @@ impl UnitClass {
             drops: self.drops,
             class,
             skill: crate::skill_for(controller, skill),
+            droideka: self.droideka.clone(),
         }
     }
 }
@@ -1122,6 +1137,7 @@ pub struct UnitSpec {
     /// player constructors) — a sim with no class tables has one implied
     /// class per team and every unit is it.
     pub class: u8,
+    pub droideka: Option<std::sync::Arc<crate::droideka::DroidekaClass>>,
 }
 
 impl UnitSpec {
@@ -1151,6 +1167,7 @@ impl UnitSpec {
             drops: crate::sim::DropTable::default(),
             class: 0,
             skill: 0,
+            droideka: None,
         }
     }
 
@@ -1231,8 +1248,17 @@ impl UnitSpec {
             order: None,
             mount: None,
             buffs: crate::sim::Buffs::default(),
+            burn: None,
             cloak: crate::cloak::CloakState::default(),
             zoom: None,
+            droideka: self.droideka.as_ref().map(|c| {
+                let order = if self.is_player() {
+                    crate::droideka::Order::Deploy
+                } else {
+                    crate::droideka::Order::Roll
+                };
+                Box::new(crate::droideka::Droideka::new(c, order))
+            }),
         }
     }
 }

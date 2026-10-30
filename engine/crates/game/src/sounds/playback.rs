@@ -52,21 +52,56 @@ impl SoundLib {
         sim: &core::sim::Sim,
         listener: &Listener,
     ) {
+        let requests =
+            crate::repair_feedback::loops(sim)
+                .into_iter()
+                .map(|(unit, class, name, pos)| LoopRequest {
+                    source: LoopSource::Repair(unit, class),
+                    sound: fnv1a_lowercase(name),
+                    pos,
+                    gain: 1.0,
+                    pitch: 1.0,
+                });
+        self.play_loop_set(audio, listener, requests, |k| {
+            matches!(k, LoopSource::Repair(..))
+        });
+    }
+
+    pub fn play_shield_loops(
+        &mut self,
+        audio: &mut audio::Audio,
+        sim: &core::sim::Sim,
+        listener: &Listener,
+    ) {
+        let requests =
+            crate::droideka::shield_loops(sim)
+                .into_iter()
+                .map(|(unit, name, gain, pos)| LoopRequest {
+                    source: LoopSource::Shield(unit),
+                    sound: fnv1a_lowercase(name),
+                    pos,
+                    gain,
+                    pitch: 1.0,
+                });
+        self.play_loop_set(audio, listener, requests, |k| {
+            matches!(k, LoopSource::Shield(..))
+        });
+    }
+
+    fn play_loop_set(
+        &mut self,
+        audio: &mut audio::Audio,
+        listener: &Listener,
+        requests: impl IntoIterator<Item = LoopRequest>,
+        owns: impl Fn(&LoopSource) -> bool,
+    ) {
         let mut live = std::collections::HashSet::new();
-        for (unit, class, name, pos) in crate::repair_feedback::loops(sim) {
-            let request = LoopRequest {
-                source: LoopSource::Repair(unit, class),
-                sound: fnv1a_lowercase(name),
-                pos,
-                gain: 1.0,
-                pitch: 1.0,
-            };
+        for request in requests {
             if self.play_loop_voice(audio, &request, listener) {
                 live.insert(request.source);
             }
         }
-        self.loops
-            .retain(|k, _| !matches!(k, LoopSource::Repair(..)) || live.contains(k));
+        self.loops.retain(|k, _| !owns(k) || live.contains(k));
     }
 
     pub(super) fn sound(&mut self, audio: &mut audio::Audio, path: &Path) -> Result<()> {

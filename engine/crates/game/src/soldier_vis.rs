@@ -354,6 +354,7 @@ pub struct UnitVisual {
     pub dead_for: f32,
     /// The sim tick of the unit's last shot: its muzzle flash's clock.
     pub shot_tick: Option<u64>,
+    pub shot_class: Option<usize>,
     repair_shot: Option<usize>,
     repair_tick: Option<u64>,
     /// The weapon class last seen in the unit's hands and the set it picks.
@@ -514,7 +515,17 @@ fn rider_now<'a>(
         v.rot
     };
     let local = match hang {
-        crate::vehicle_class::RiderHang::Bind(b) => *b,
+        crate::vehicle_class::RiderHang::Bind(b) => rig
+            .and_then(|r| {
+                let scale = walk
+                    .sim
+                    .walker_params
+                    .get(class)
+                    .and_then(Option::as_ref)
+                    .map_or(1.0, |p| p.root_scale);
+                r.node_now(v, scale, seat.pilot_position.as_deref()?)
+            })
+            .unwrap_or(*b),
         crate::vehicle_class::RiderHang::Node(name, b) => rig
             .and_then(|r| {
                 let scale = walk
@@ -523,7 +534,7 @@ fn rider_now<'a>(
                     .get(class)
                     .and_then(Option::as_ref)
                     .map_or(1.0, |p| p.root_scale);
-                r.node_now(&v.walker, scale, name)
+                r.node_now(v, scale, name)
             })
             .unwrap_or(*b),
     };

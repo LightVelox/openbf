@@ -222,6 +222,7 @@ fn seat_gun_contact_uses_seat_weapon() {
             pilot: false,
             turn: None,
             framed: false,
+            aimer_bind: glam::Quat::IDENTITY,
             gunner: None,
         })],
     })];

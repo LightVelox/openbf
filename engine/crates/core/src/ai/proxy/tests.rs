@@ -307,6 +307,7 @@ fn a_proxy_respawns_as_its_class() {
         min: 0,
         max: None,
         unlock_points: 0,
+        droideka: None,
     };
     let (mut sim, a, _) = field(Difficulty::Normal);
     sim.classes[0] = vec![class(), class(), class()];

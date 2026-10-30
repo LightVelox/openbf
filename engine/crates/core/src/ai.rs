@@ -91,6 +91,7 @@ mod behave;
 mod command;
 pub mod dfocus;
 mod draw;
+pub mod droideka;
 pub mod fix;
 mod gunner;
 mod gunner_foot;

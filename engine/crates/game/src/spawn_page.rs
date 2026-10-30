@@ -252,6 +252,7 @@ mod tests {
             min: 1,
             max: Some(4),
             unlock_points: 12,
+            droideka: None,
         }];
         w.sim.set_spawn_points(0, 5);
         match page(&w, &feed, 0) {
