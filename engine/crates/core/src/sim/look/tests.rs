@@ -1,5 +1,5 @@
 use crate::sim::tests::flat_ground;
-use crate::sim::{buttons, InputLog, LookPreview, PadState, Sim, LOOK_UNIT};
+use crate::sim::{buttons, Event, InputLog, LookPreview, PadState, Sim, LOOK_UNIT};
 use crate::soldier::Stance;
 use crate::unit::UnitSpec;
 use glam::Vec3;
@@ -115,8 +115,10 @@ fn a_log_without_mouse_fields_loads_and_writes_none() {
     assert_eq!(log.tick_count(), 2);
     assert!(log.ticks.iter().all(|p| !p.has_look()));
     assert_eq!((log.ticks[0].rx, log.ticks[0].buttons), (3000, 1));
+    assert!(log.ticks.iter().all(|p| p.fire_lag == 0));
     let text = ron::to_string(&log).unwrap();
     assert!(!text.contains("mx") && !text.contains("my"), "{text}");
+    assert!(!text.contains("fire_lag"), "{text}");
 }
 
 #[test]
@@ -155,4 +157,151 @@ fn a_mouse_log_replays_to_the_same_sim() {
         ..log.clone()
     };
     assert_ne!(run(&still).1, a.1, "the mouse turned the soldier");
+}
+
+fn stick(rx: f32, ry: f32, b: u32) -> PadState {
+    PadState {
+        rx: PadState::quantize(rx),
+        ry: PadState::quantize(ry),
+        buttons: b,
+        ..Default::default()
+    }
+}
+
+/// A controller gets the mouse's preview (2026-10-29): the drawn aim is the
+/// one the next tick turns to under the held stick - standing, zoomed,
+/// crouched and with an enemy in the assist's magnet (its slowdown, and
+/// the pull once FIRE is held) - so the shot leaves where the reticle was
+/// drawn.
+#[test]
+fn the_stick_preview_is_what_the_tick_does() {
+    let mut s = foot();
+    s.spawn(&UnitSpec::trooper(1, Vec3::new(0.5, 0.0, -25.0)))
+        .unwrap();
+    let h = s.handle(0);
+    let zoom = stick(0.0, 0.0, buttons::ZOOM);
+    let crouch = stick(0.0, 0.0, buttons::ROLL_STANCE);
+    let mut checked = 0;
+    for pad in [
+        stick(0.3, -0.2, 0),
+        stick(-0.5, 0.1, 0),
+        zoom,
+        stick(0.4, 0.0, 0),
+        stick(-0.2, 0.3, buttons::FIRE),
+        zoom,
+        crouch,
+        stick(0.6, -0.4, 0),
+        stick(0.0, 0.0, 0),
+    ] {
+        let preview = s.look_preview(h, &pad);
+        let edge = pad.buttons & (buttons::ZOOM | buttons::ROLL_STANCE) != 0;
+        s.step(&[pad]);
+        if edge {
+            continue;
+        }
+        match preview {
+            Some(LookPreview::Foot { unit, yaw, pitch }) => {
+                assert_eq!(unit, 0);
+                assert_eq!((yaw, pitch), aim(&s), "{pad:?}");
+                checked += 1;
+            }
+            other => panic!("{pad:?}: {other:?}"),
+        }
+    }
+    assert_eq!(checked, 6);
+    assert!(s.magnet[0].is_some(), "the assist had a magnet");
+}
+
+fn shot_dir(s: &Sim) -> Option<Vec3> {
+    s.events.iter().find_map(|e| match e {
+        Event::Shot { dir, .. } => Some(*dir),
+        _ => None,
+    })
+}
+
+/// [ours] 2026-10-29: a FIRE press with a fire lag leaves that share of the
+/// tick's stick turn early (where the window drew the aim), and the turn
+/// still ends where it would have.
+#[test]
+fn a_lagged_press_fires_part_way_into_the_turn() {
+    let shot = |lag: u8| {
+        let mut s = foot();
+        for _ in 0..40 {
+            s.step(&[PadState::default()]);
+        }
+        let from = aim(&s);
+        s.step(&[PadState {
+            fire_lag: lag,
+            ..stick(0.6, 0.3, buttons::FIRE)
+        }]);
+        let d = shot_dir(&s).expect("fired");
+        (from, aim(&s), (-d.x).atan2(-d.z), d.y.asin())
+    };
+    let (from, to, yaw0, pitch0) = shot(0);
+    let (f, t, yaw1, pitch1) = shot(255);
+    assert_eq!((f, t), (from, to));
+    // Lag 0 fires at the turned aim, lag 255 at the aim before it.
+    assert!(
+        (yaw0 - yaw1 - (to.0 - from.0)).abs() < 1e-3,
+        "{yaw0} {yaw1}"
+    );
+    assert!((pitch0 - pitch1 - (to.1 - from.1)).abs() < 1e-3);
+    assert!(
+        (to.0 - from.0).abs() > 0.03,
+        "the stick turned: {from:?} {to:?}"
+    );
+    for lag in [64, 128, 191] {
+        let (f, t, yaw, pitch) = shot(lag);
+        assert_eq!((f, t), (from, to), "the turn ends where it would");
+        let k = 1.0 - f32::from(lag) / 255.0;
+        assert!(
+            (yaw - (yaw1 + (yaw0 - yaw1) * k)).abs() < 1e-4,
+            "{lag}: {yaw}"
+        );
+        assert!((pitch - (pitch1 + (pitch0 - pitch1) * k)).abs() < 1e-4);
+    }
+}
+
+/// A log with fire lags replays to the same sim, through text; the lags
+/// change it (the shots left earlier in their turns).
+#[test]
+fn a_log_with_fire_lags_replays_to_the_same_sim() {
+    let log = InputLog {
+        seed: 11,
+        slots: 1,
+        ticks: (0..240)
+            .map(|i| {
+                let press = i % 9 == 0;
+                PadState {
+                    fire_lag: if press { ((i * 37) % 255) as u8 } else { 0 },
+                    ..stick(
+                        if i % 60 < 30 { 0.5 } else { -0.4 },
+                        0.1,
+                        if i % 9 < 2 { buttons::FIRE } else { 0 },
+                    )
+                }
+            })
+            .collect(),
+    };
+    let text = ron::to_string(&log).unwrap();
+    assert!(text.contains("fire_lag"));
+    let back: InputLog = ron::from_str(&text).unwrap();
+    assert_eq!(back.ticks, log.ticks);
+    let run = |log: &InputLog| {
+        let mut s = foot();
+        for pads in log.frames() {
+            s.step(pads);
+        }
+        s.hash()
+    };
+    assert_eq!(run(&log), run(&back));
+    let plain = InputLog {
+        ticks: log
+            .ticks
+            .iter()
+            .map(|p| PadState { fire_lag: 0, ..*p })
+            .collect(),
+        ..log.clone()
+    };
+    assert_ne!(run(&plain), run(&log), "the lags moved the shots");
 }

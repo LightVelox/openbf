@@ -58,6 +58,7 @@ fn model() -> ui::hud::HudModel {
         capture: None,
         ambush: Vec::new(),
         hit_critical: None,
+        hit_body: None,
         spawn: None,
         scope: None,
     }

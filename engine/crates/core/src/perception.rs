@@ -9,7 +9,8 @@
 //! `(20·bound_radius + 30) × mult × visibility`, and a line-of-sight ray that
 //! is the SAME one the AI's shots have to fly through. The tier columns that
 //! scale them (`view_mult`, `reaction_ticks`, `pressure`) are the lead's
-//! PROVISIONAL placeholders in [`crate::skill`], not RE.
+//! PROVISIONAL placeholders in [`crate::skill`], not RE. OURS: a bot standing
+//! still with a scoped rifle sees out to the rifle's range ([`sight`]).
 //!
 //! Nothing here reads wall time or the LCG: a scan is a pure function of the
 //! sim state, so it replays bit-exactly.
@@ -252,6 +253,54 @@ pub fn view_distance(stance: Stance, view_mult: f32) -> f32 {
     (20.0 * (capsule_height(stance) * 0.5) + 30.0) * view_mult * VIS
 }
 
+/// A scoped rifle's sight is used only below this speed (m/s, XZ): a
+/// sniper looks through its scope standing, not walking. OURS.
+pub const SCOPE_STILL: f32 = 1.0;
+
+/// OURS (2026-10-29, long-range bot sniping; FEEL_NOTES): how far a bot
+/// with weapon class `wc` in hand sees a standing soldier through its scope -
+/// `share` (the tier's [`Tier::scope_sight`], [`scope_share`]) of the rifle's
+/// `MaxRange` (128 m on every disc sniper) times the mission's view
+/// multiplier - for a scoped rifle (the AI sniper table's class,
+/// `WeaponClass::ai_distance_table`) and a share over 0, else `None`. The
+/// PS2's sight stops at [`view_distance`] (49 m standing at Normal), so its
+/// snipers never fired past it (re-soldier-ai 20.1) and a player in the open
+/// across a map was safe from them.
+pub fn scope_reach(sim: &Sim, wc: &crate::weapon::WeaponClass, share: f32) -> Option<f32> {
+    (share > 0.0 && wc.ai_distance_table())
+        .then(|| wc.ai_range[2] * share * sim.mission_ai.view_mult * VIS)
+}
+
+/// The share of a scope's reach unit `u` sees with under `tier`: the tier's
+/// [`Tier::scope_sight`]; a proxy (a stand-in for a strong human) Hard's.
+pub fn scope_share(u: &crate::unit::Unit, tier: &Tier) -> f32 {
+    if u.proxy_human.is_some() {
+        crate::skill::Difficulty::Hard.tier().scope_sight
+    } else {
+        tier.scope_sight
+    }
+}
+
+/// How far unit `u` sees a soldier in `stance` under `tier`:
+/// [`view_distance`], or on foot, standing still ([`SCOPE_STILL`]) with a
+/// scoped rifle in hand, its [`scope_reach`] scaled by stance as the plain
+/// sight is, if farther.
+pub fn sight(sim: &Sim, u: &crate::unit::Unit, stance: Stance, tier: &Tier) -> f32 {
+    let plain = view_distance(stance, tier.view_mult);
+    let v = u.soldier.vel;
+    if u.mount.is_some() || v.x * v.x + v.z * v.z >= SCOPE_STILL * SCOPE_STILL {
+        return plain;
+    }
+    let Some(r) = sim
+        .weapon_classes
+        .get(u.weapon_class)
+        .and_then(|wc| scope_reach(sim, wc, scope_share(u, tier)))
+    else {
+        return plain;
+    };
+    plain.max(r * view_distance(stance, 1.0) / view_distance(Stance::Stand, 1.0))
+}
+
 /// The view cone (RE §9.1, exactly): everything inside `omni_radius` is seen
 /// regardless of facing (BF2's 10 m bubble; BF1 has none), then the 77.5°
 /// half-angle test on the squared distance. `off` is target − eye.
@@ -339,7 +388,7 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
     let mut near: Vec<u32> = Vec::new();
     sim.units_within(
         eye,
-        view_distance(Stance::Stand, tier.view_mult) + NEAR_MARGIN,
+        sight(sim, u, Stance::Stand, &tier) + NEAR_MARGIN,
         &mut near,
     );
     for &i in &near {
@@ -353,7 +402,7 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
         if !in_cone(view, off, d2, sim.omni_radius) {
             continue;
         }
-        let vd = view_distance(o.soldier.stance, tier.view_mult) * o.cloak.visibility();
+        let vd = sight(sim, u, o.soldier.stance, &tier) * o.cloak.visibility();
         if d2 >= vd * vd {
             continue;
         }
@@ -882,6 +931,80 @@ mod tests {
         s.difficulty = Difficulty::Hard;
         assert!((s.ai_tier(0).view_mult - 1.25 * 0.35).abs() < 1e-6);
         assert!(seen(&s, a), "20 m < 21 m at Hard");
+    }
+
+    /// OURS (2026-10-29, long-range bot sniping, tied to the tiers by the
+    /// maintainer): a bot standing still with a scoped rifle in hand sees a
+    /// standing enemy out to its tier's share of the rifle's `MaxRange` (128
+    /// m), times the mission's view multiplier: Easy none (the plain 49 m),
+    /// Normal 0.75 (96 m), Hard and Elite all of it; a crouching one as much
+    /// nearer as the plain sight is. Not with the rifle slung, not on the
+    /// move; a proxy sees as Hard does on any tier.
+    #[test]
+    fn a_still_sniper_sees_out_to_its_tiers_share_of_its_rifles_range() {
+        let rifle = |s: &mut Sim| {
+            s.add_weapon_class(crate::weapon::WeaponClass {
+                trigger_single: true,
+                zoom_max: 8.0,
+                yaw_spread: 0.0,
+                ai_range: [20.0, 64.0, 128.0],
+                ..crate::weapon::WeaponClass::bf2_rifle()
+            })
+        };
+        let seen = |s: &Sim, a| {
+            let mut st = AiState::default();
+            scan(s, a, &mut st, s.unit_tier(s.unit(a).unwrap()));
+            st.contacts.iter().flatten().any(|c| c.seen_now)
+        };
+        let scene = |d: Difficulty, at: f32, stance: Stance| {
+            let (mut s, a) = watcher(3);
+            s.difficulty = d;
+            let w = rifle(&mut s);
+            s.units[a.index as usize].weapon_class = w;
+            let e = enemy_at(&mut s, Vec3::new(0.0, 0.0, -at));
+            s.units[e.index as usize].soldier.stance = stance;
+            (s, a)
+        };
+        let sees = |d, at| {
+            let (s, a) = scene(d, at, Stance::Stand);
+            seen(&s, a)
+        };
+        // Per tier, a standing enemy at 48, 80, 110 and 120 m.
+        for (d, want) in [
+            (Difficulty::Easy, [true, false, false, false]),
+            (Difficulty::Normal, [true, true, false, false]),
+            (Difficulty::Hard, [true, true, true, true]),
+            (Difficulty::Elite, [true, true, true, true]),
+        ] {
+            let got = [48.0, 80.0, 110.0, 120.0].map(|at| sees(d, at));
+            assert_eq!(got, want, "{d:?}");
+        }
+        assert!(sees(Difficulty::Normal, 94.0), "Normal: 94 m < 96 m");
+        assert!(!sees(Difficulty::Hard, 130.0), "Hard: 130 m > 128 m");
+        // Crouching at Hard: 128 x 46 / 49 = 120 m.
+        let (s, a) = scene(Difficulty::Hard, 115.0, Stance::Crouch);
+        assert!(seen(&s, a), "a crouching enemy at 115 m");
+        let (s, a) = scene(Difficulty::Hard, 125.0, Stance::Crouch);
+        assert!(!seen(&s, a), "but not at 125 m");
+        // Walking, it sees as anyone does.
+        let (mut s, a) = scene(Difficulty::Hard, 80.0, Stance::Stand);
+        s.units[a.index as usize].soldier.vel = Vec3::new(3.0, 0.0, 0.0);
+        assert!(!seen(&s, a), "not on the move");
+        // The rifle slung (a plain rifle in hand).
+        let (mut s, a) = scene(Difficulty::Hard, 80.0, Stance::Stand);
+        s.units[a.index as usize].weapon_class = 0;
+        assert!(!seen(&s, a), "not with a plain rifle");
+        // The mission's view multiplier shortens the scope too: 128 x 0.5.
+        let (mut s, a) = scene(Difficulty::Hard, 70.0, Stance::Stand);
+        s.mission_ai.set_view_mult(0.5);
+        assert!(!seen(&s, a), "70 m > 64 m at x 0.5");
+        let (mut s, a) = scene(Difficulty::Hard, 60.0, Stance::Stand);
+        s.mission_ai.set_view_mult(0.5);
+        assert!(seen(&s, a), "60 m < 64 m at x 0.5");
+        // A proxy at Easy sees as Hard does.
+        let (mut s, a) = scene(Difficulty::Easy, 120.0, Stance::Stand);
+        s.units[a.index as usize].proxy_human = Some(crate::ai::proxy::Strength::Average.profile());
+        assert!(seen(&s, a), "a proxy's scope at Easy");
     }
 
     /// A contact is kept for MEMORY_TICKS after the last sighting and cleared

@@ -764,6 +764,7 @@ mod tests {
                 pilot: false,
                 turn: None,
                 framed: false,
+                gunner: None,
             })],
         })];
         let vehicle = walk.sim.spawn_vehicle(&VehicleSpec {

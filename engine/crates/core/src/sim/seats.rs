@@ -855,15 +855,46 @@ impl Sim {
         }
     }
 
-    /// After the hovers tick: every rider follows its vehicle's origin.
+    /// After the hovers tick: every rider follows its vehicle's origin, a
+    /// building turret's drawn gunner his seat (`GunSetup::gunner`), facing
+    /// the way his drawn body faces.
     pub(super) fn carry_riders(&mut self) {
         for i in 0..self.units.len() {
             let Some(m) = self.units[i].mount.filter(|_| self.units[i].alive) else {
                 continue;
             };
-            if let Some(p) = self.vehicle(m.vehicle).map(|v| v.pos) {
+            if let Some((p, yaw)) = self.vehicle(m.vehicle).map(|v| self.rider_pose(v, m.seat)) {
                 self.units[i].soldier.pos = p;
+                if let Some(yaw) = yaw {
+                    self.units[i].soldier.yaw = yaw;
+                }
             }
+        }
+    }
+
+    /// Where a rider of seat `seat` of `v` stands: the origin, or a drawn
+    /// building-turret gunner's seat at the gun's look with the yaw his
+    /// drawn body faces (`None` = keep his own).
+    pub(super) fn rider_pose(&self, v: &crate::vehicle::Vehicle, seat: u8) -> (Vec3, Option<f32>) {
+        let s = usize::from(seat);
+        let gun = self
+            .seat_setup
+            .get(v.class as usize)
+            .and_then(Option::as_ref)
+            .and_then(|st| st.guns.get(s)?.as_ref());
+        match gun.and_then(|g| Some((g, g.gunner?))) {
+            Some((g, hang)) if v.kind == VehicleKind::Turret => {
+                let look = v
+                    .guns
+                    .get(s)
+                    .and_then(Option::as_ref)
+                    .map_or(g.rest().0, |st| st.look);
+                let f = hang.frame(look);
+                let face = v.rot * f.z_axis.truncate();
+                let yaw = (face.x != 0.0 || face.z != 0.0).then(|| yaw_facing(face));
+                (v.pos + v.rot * f.w_axis.truncate(), yaw)
+            }
+            _ => (v.pos, None),
         }
     }
 }

@@ -316,9 +316,13 @@ fn run(c: &Case) {
     select(&mut w, me, c.weapon);
 
     // 1. At full health: the drop is the ordnance's, by the building scales.
+    let seat = w.sim.unit(gunner).unwrap().soldier.pos - v.pos;
     let s = fire(&mut w, me, vh, wall);
+    // A drawn gunner stands at his seat, out of his building's bodies: a
+    // blast at the wall may kill him first (re-turret-collision 3.4).
+    let blasted = s.kills.contains(&(me, gunner));
     eprintln!(
-        "{} {} <- {}: drop {} (direct {}, expected {}), destroyed {}",
+        "{} {} <- {}: drop {} (direct {}, expected {}), destroyed {}, gunner's seat {seat:.2}, killed {blasted}",
         c.map, c.turret, c.weapon, s.drop, s.direct, s.expected, s.destroyed
     );
     assert!(
@@ -344,12 +348,14 @@ fn run(c: &Case) {
     }
     // 2. The round that empties it destroys it and kills its gunner.
     if !s.destroyed {
-        assert_eq!(
-            w.sim.unit(gunner).and_then(|g| g.mount).map(|m| m.vehicle),
-            Some(vh),
-            "{}: the gunner is still seated",
-            c.map
-        );
+        if !blasted {
+            assert_eq!(
+                w.sim.unit(gunner).and_then(|g| g.mount).map(|m| m.vehicle),
+                Some(vh),
+                "{}: the gunner is still seated",
+                c.map
+            );
+        }
         // One health left of one: a bot gunner leaves a turret under 30 %
         // of its health at his next think (`ai::man`'s exit rule 3, ours),
         // so the pool is shrunk whole, not emptied.
@@ -357,7 +363,12 @@ fn run(c: &Case) {
         (h.cur, h.max) = (1.0, 1.0);
         let s = fire(&mut w, me, vh, wall);
         assert!(s.destroyed, "{}: destroyed at 0", c.map);
-        assert!(s.kills.contains(&(me, gunner)), "{}: {:?}", c.map, s.kills);
+        assert!(
+            blasted || s.kills.contains(&(me, gunner)),
+            "{}: {:?}",
+            c.map,
+            s.kills
+        );
     } else {
         assert!(s.kills.contains(&(me, gunner)), "{}: {:?}", c.map, s.kills);
     }

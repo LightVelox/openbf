@@ -242,3 +242,80 @@ fn a_mouse_aimed_sniper_is_never_pulled() {
         }
     }
 }
+
+/// The sniper's assist is under the same speed cap as every weapon's
+/// (`core::aim_assist::speed_cap`, [ours] 2026-10-29: 3 x BF1's 0.675
+/// rad/s): scoped at both zoom steps, a held trigger on an enemy crossing
+/// at three times the tracking's capped rate, the stick at rest. No tick
+/// turns the aim further than the tracking and the pull at their caps,
+/// divided by the zoom (the PS2's one-unit clamp turns up to twice that).
+#[test]
+fn a_scoped_snipers_assist_turns_no_faster_than_the_cap() {
+    use core::aim_assist::GAIN;
+    for (game, weapon) in [
+        ("bf1", "all_weap_inf_sniperrifle"),
+        ("bf2", "rep_weap_inf_sniper_rifle"),
+    ] {
+        let Some(w) = sniper(game, weapon) else {
+            eprintln!("SKIP: no baked classes");
+            return;
+        };
+        for presses in [1, 2] {
+            let dist = 30.0;
+            let (mut s, e) = range(&w, game, dist, true);
+            if presses == 2 {
+                for b in [buttons::ZOOM, 0] {
+                    s.step(&[PadState {
+                        buttons: b,
+                        ..Default::default()
+                    }]);
+                }
+            }
+            // The disc classes' MaxTurnSpeed (the spec's default is 2.0,
+            // under 3 x BF1's, where the cap is the PS2's one unit).
+            s.units[0].consts.max_turn_speed = 4.0;
+            let me = &s.units[0];
+            // Standing: the turn factor is 1.
+            assert_eq!(me.soldier.stance, core::soldier::Stance::Stand);
+            let z = me.zoom.expect("scoped");
+            let r = me.consts.max_turn_speed;
+            // rad/s the tracking turns at its cap, zoomed.
+            let cap = (3.0 * 0.675 / r).min(1.0) * r / z.divisor;
+            let vel = Vec3::X * (3.0 * cap * dist);
+            let u = s.unit_mut(e).unwrap();
+            u.controller = core::unit::Controller::Pacer { vel, period: 0 };
+            u.soldier.vel = vel;
+            u.health.cur = 1.0e9;
+            let fire = PadState {
+                buttons: buttons::FIRE,
+                ..Default::default()
+            };
+            let mut largest = 0.0f32;
+            for _ in 0..30 {
+                let held = s.magnet_at(0).is_some();
+                let yaw0 = s.units[0].soldier.yaw;
+                s.step(&[fire]);
+                s.unit_mut(e).unwrap().health.cur = 1.0e9;
+                if held {
+                    largest = largest.max((s.units[0].soldier.yaw - yaw0).abs());
+                }
+            }
+            // Both terms at their caps: the tracking's and GAIN of it.
+            let bound = (1.0 + GAIN) * cap * core::TICK_DT;
+            println!(
+                "{weapon} zoom x{} (divisor {}): largest assist turn {largest:.5} rad of {bound:.5}",
+                z.value, z.divisor
+            );
+            assert!(
+                largest <= bound * 1.001,
+                "{weapon} x{}: {largest} > {bound}",
+                z.value
+            );
+            assert!(
+                largest >= 0.9 * cap * core::TICK_DT,
+                "{weapon} x{}: the assist acts",
+                z.value
+            );
+        }
+    }
+}

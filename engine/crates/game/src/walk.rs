@@ -1013,8 +1013,8 @@ impl WalkSim {
             blend.before_tick(self);
             self.blend = blend;
             self.step_tick(&pads);
-            if pads.iter().any(PadState::has_look) {
-                pads.to_mut().iter_mut().for_each(PadState::clear_look);
+            if pads.iter().any(|p| p.has_look() || p.fire_lag != 0) {
+                pads.to_mut().iter_mut().for_each(PadState::clear_once);
             }
             each(self);
             self.accum -= core::TICK_DT;

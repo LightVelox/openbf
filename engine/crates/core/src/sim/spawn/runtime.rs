@@ -687,6 +687,7 @@ impl Sim {
         self.assist.resize(n, AssistState::default());
         self.assist_lead.resize(n, None);
         self.magnet.resize(n, None);
+        self.magnet_hidden.resize(n, 0);
         self.reticle_pick.resize(n, None);
         self.spawn_choice.resize(n, 0);
         self.prev_spawn_bits.resize(n, 0);
@@ -890,7 +891,16 @@ impl Sim {
                 table[c].spec(old.team, pos, yaw, old.controller, c as u8, base)
             }
             None => match ai_class {
-                Some(c) => table[usize::from(c)].spec(old.team, pos, yaw, old.controller, c, base),
+                // [ours] A proxy with a class picks it, as a player does (the
+                // draw above is still spent).
+                Some(c) => {
+                    let c = self.units[i]
+                        .proxy_human
+                        .and_then(|p| p.class)
+                        .filter(|&k| usize::from(k) < table.len())
+                        .unwrap_or(c);
+                    table[usize::from(c)].spec(old.team, pos, yaw, old.controller, c, base)
+                }
                 None => UnitSpec { pos, yaw, ..old },
             },
         };
@@ -905,6 +915,7 @@ impl Sim {
         unit.deaths = self.units[i].deaths;
         // Card DPRX: a proxy comes back a proxy.
         unit.proxy_human = self.units[i].proxy_human;
+        crate::ai::proxy::hand_weapons(&mut unit);
         self.units[i] = unit;
         let h = UnitHandle {
             index: i as u32,

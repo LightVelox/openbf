@@ -406,6 +406,7 @@ struct App {
     /// The shell pointer: position, fresh motion and a waiting click.
     shell_pointer: ui::cursor::Pointer,
     kbm: game::kbm::Kbm,
+    focused: bool,
     /// The PS2 shell's front screens (`None` until the shell first draws).
     front: Option<FrontShell>,
     /// One click of L3 sprints (`input::SprintLatch`).
@@ -617,6 +618,7 @@ impl App {
             keys_held: 0,
             keys_tapped: 0,
             shell_pointer: ui::cursor::Pointer::default(),
+            focused: true,
             kbm,
             front: None,
             sprint_latch: input::SprintLatch::default(),
@@ -682,9 +684,7 @@ impl App {
     /// playlist and options in `FrontShell`).
     fn init_shell(&mut self) {
         self.screen = Screen::Shell;
-        if let Some(window) = &self.window {
-            window.set_cursor_visible(false);
-        }
+        self.sync_grab();
     }
 
     /// LAUNCH: the playlist in order, the first row now (§1.4, §7).
@@ -764,9 +764,7 @@ impl App {
             beep,
         });
         self.screen = Screen::Loading;
-        if let Some(window) = &self.window {
-            window.set_cursor_visible(true);
-        }
+        self.sync_grab();
         true
     }
 
@@ -775,9 +773,7 @@ impl App {
     fn redraw_loading(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let Some(l) = self.loading.as_mut() else {
             self.screen = Screen::Shell;
-            if let Some(window) = &self.window {
-                window.set_cursor_visible(false);
-            }
+            self.sync_grab();
             return;
         };
         if l.load_pending {
@@ -993,9 +989,7 @@ impl App {
         self.outcome_reported = false;
         self.round_recorded = false;
         self.screen = Screen::Battle;
-        if let Some(window) = &self.window {
-            window.set_cursor_visible(true);
-        }
+        self.sync_grab();
         self.start_frame_record();
     }
 
@@ -1213,14 +1207,16 @@ impl winit::application::ApplicationHandler for App {
                 .expect("create window"),
         );
         let mut renderer = Renderer::new_windowed(window.clone()).expect("renderer");
-        if matches!(self.screen, Screen::Shell) {
-            window.set_cursor_visible(false);
-        }
         self.overlay = Some(ui::overlay::EguiOverlay::new(
             &window,
             renderer.device(),
             renderer.surface_format(),
         ));
+        window.set_cursor(winit::window::CursorIcon::Default);
+        if let Some(overlay) = &mut self.overlay {
+            overlay.set_window_cursor(mouse::menu_cursor(event_loop, window.scale_factor()));
+        }
+        self.focused = window.has_focus();
         let Some(map) = self.map.clone() else {
             // Shell start: no map yet.
             self.init_shell();
@@ -1302,6 +1298,11 @@ impl winit::application::ApplicationHandler for App {
         }
         if let (Some(o), Some(w)) = (&mut self.overlay, &self.window) {
             let _ = o.on_window_event(w, &event);
+        }
+        if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = &event {
+            if let Some(overlay) = &mut self.overlay {
+                overlay.set_window_cursor(mouse::menu_cursor(event_loop, *scale_factor));
+            }
         }
         self.mouse_window_event(&event);
         match event {
@@ -1443,6 +1444,8 @@ impl winit::application::ApplicationHandler for App {
                     };
                     let paused = self.paused;
                     let (walk, cube) = self.walk.as_mut().unwrap();
+                    // A FIRE press fires where the reticle was drawn.
+                    let pad = walk.blend.stamp(pad);
                     let mut stuck_alarm = false;
                     let mut look = PadState::default();
                     if paused {
@@ -1611,7 +1614,7 @@ impl winit::application::ApplicationHandler for App {
                                 note_sounds(bb, self.sounds.as_mut(), walk.sim.tick);
                             }
                             if let Some(m) = self.matchlog.as_mut() {
-                                m.tick(&walk.sim, (tick_pad.lx, tick_pad.ly));
+                                m.tick(&walk.sim, &tick_pad);
                                 if walk.sim.outcome.is_some() && !m.written() {
                                     if let Some(p) = m.write(&walk.sim, "outcome") {
                                         println!("matchlog: wrote {}", p.display());
@@ -1622,15 +1625,25 @@ impl winit::application::ApplicationHandler for App {
                                 let hook = hook_t0.elapsed().as_secs_f64() * 1000.0;
                                 p.tick(walk.sim.ai_wall_ms, hook);
                             }
-                            tick_pad.clear_look();
+                            tick_pad.clear_once();
                         });
                         self.kbm.consumed(&pad, ticks);
+                        walk.blend.consumed(ticks);
                         if walk.flush_class_kills(&mut self.profile) {
                             if let Err(e) = self.profile.save() {
                                 eprintln!("profile autosave failed: {e:#}");
                             }
                         }
                         look = self.kbm.look();
+                        // A controller's preview is its held stick (the
+                        // next tick's turn, `Sim::look_preview`).
+                        if !look.has_look() && !look.mouse_aim() {
+                            look = PadState {
+                                mx: 0,
+                                my: 0,
+                                ..pad
+                            };
+                        }
                         if let Some(p) = self.frame_profile.as_mut() {
                             p.lap("sim_ms");
                         }
@@ -2039,7 +2052,7 @@ impl winit::application::ApplicationHandler for App {
 mod tests {
     use super::*;
 
-    fn setup(cap: Option<u32>) -> BattleSetup {
+    pub(super) fn setup(cap: Option<u32>) -> BattleSetup {
         BattleSetup {
             seed: 42,
             difficulty: Default::default(),

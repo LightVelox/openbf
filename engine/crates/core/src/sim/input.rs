@@ -5,7 +5,7 @@
 //! `acquire_magnet`, `apply_assist`, [`Sim::magnet_at`]). The replay, pad-slot and aim-assist tests live here.
 
 use super::state::Sim;
-use crate::aim_assist::{self, AssistEnv, Lead, Sticks};
+use crate::aim_assist::{self, AssistEnv, AssistState, Lead, Sticks};
 use crate::collision::lead_point;
 use crate::perception;
 use crate::unit::UnitHandle;
@@ -77,7 +77,18 @@ pub mod buttons {
 
 pub const LOOK_UNIT: f32 = 1.0 / 65536.0;
 
+/// The right stick's scale before quantization (the `input` crate applies
+/// it): the player's aim turns at this share of the class's turn rate at
+/// full stick. Ours (the maintainer, 2026-10-04, FEEL_NOTES: the camera was too
+/// sensitive); bots do not come through here. The aim assist's weight
+/// reads the push before it (`aim_assist::AssistEnv::look_scale`).
+pub const LOOK_SCALE: f32 = 0.80;
+
 fn zero(v: &i32) -> bool {
+    *v == 0
+}
+
+fn zero_u8(v: &u8) -> bool {
     *v == 0
 }
 
@@ -94,6 +105,13 @@ pub struct PadState {
     pub mx: i32,
     #[serde(default, skip_serializing_if = "zero")]
     pub my: i32,
+    /// [ours] (the maintainer, 2026-10-29): on a FIRE press, the share of
+    /// the tick's stick turn still to come when the shot leaves, in 1/255
+    /// (the window draws a controller's aim part way into the next tick's
+    /// turn). 0: the shot leaves after the whole turn (bots, the mouse, old
+    /// logs). See `Sim::step` phase 4.
+    #[serde(default, skip_serializing_if = "zero_u8")]
+    pub fire_lag: u8,
 }
 
 impl PadState {
@@ -133,6 +151,24 @@ impl PadState {
     pub fn clear_look(&mut self) {
         self.mx = 0;
         self.my = 0;
+    }
+
+    /// The fields a frame's pad gives only its first tick: the mouse look
+    /// and the fire lag.
+    pub fn clear_once(&mut self) {
+        self.clear_look();
+        self.fire_lag = 0;
+    }
+
+    /// The fire lag of a press drawn `drawn` (0..1) of the way into the
+    /// next tick's turn.
+    pub fn lag_of(drawn: f32) -> u8 {
+        ((1.0 - drawn.clamp(0.0, 1.0)) * 255.0).round() as u8
+    }
+
+    /// The share of the tick's turn taken before the shot (1 at lag 0).
+    pub fn fire_share(&self) -> f32 {
+        1.0 - f32::from(self.fire_lag) / 255.0
     }
 }
 
@@ -244,18 +280,44 @@ pub(super) struct Candidate {
 /// @0x25f4a8, `analysis/re-aim-assist.md` §3.3).
 const STICKY_WIDEN: f32 = std::f32::consts::FRAC_PI_4;
 
-/// OURS, PROVISIONAL: the share of the held magnet's score a challenger must
-/// beat while the player is not steering ([`Sim::acquire_magnet`]).
-pub const MAGNET_HOLD: f32 = 0.5;
-/// OURS, PROVISIONAL: an aim-stick deflection past this (either axis) is the
-/// player steering the aim; a mouse always is.
+/// OURS, PROVISIONAL: the aim stick's deflection toward a challenger, past
+/// which the player is steering to it ([`Sim::acquire_magnet_steering`]).
 pub const MAGNET_STEER: f32 = 0.2;
+/// OURS, PROVISIONAL: how long (s) a held magnet out of sight is kept.
+pub const MAGNET_LOS_GRACE: f32 = 0.25;
+
+/// How the player moves the aim this tick, for the magnet's hold.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Steer {
+    /// The aim stick, (right, up) in -1..1.
+    Stick(glam::Vec2),
+    /// The mouse (no assist; the PS2's tournament every tick).
+    Mouse,
+}
+
+impl Steer {
+    /// The pad's steer.
+    pub fn of(pad: &PadState) -> Self {
+        if pad.mouse_aim() {
+            Steer::Mouse
+        } else {
+            Steer::Stick(glam::Vec2::new(
+                PadState::axis(pad.rx),
+                PadState::axis(pad.ry),
+            ))
+        }
+    }
+}
 
 /// FUN_00241b98 in its 3-D mode (`re-aim-assist.md` §3.4): `t + 16·d²` for a
 /// target of radius `r` centred `ctr`, seen from `pos` along the unit `dir`
 /// — `t` its distance along the axis (0 to `maxd + r`), `d` its distance
 /// off it, inside the cone of radius `r + t·slope` — else −1. Lower is
 /// better.
+/// What [`Sim::assisted`] returns: the assisted pad, the slot's timer after
+/// it and its lead (`None`: the lead is off).
+type Assisted = (PadState, AssistState, Option<(AimTarget, Lead)>);
+
 pub(crate) fn cone_score(r: f32, slope: f32, maxd: f32, pos: Vec3, dir: Vec3, ctr: Vec3) -> f32 {
     let v = ctr - pos;
     let t = v.dot(dir);
@@ -342,27 +404,32 @@ impl Sim {
     /// candidate's bounds sphere and has no 300 cap; the PS2's LockOffAngle
     /// hold (launchers only) and channel 1 are not ported.
     ///
-    /// OURS (issue: the magnet flicks between two enemies side by side):
+    /// OURS (issue #39 and the maintainer, 2026-10-29: "another bot walks
+    /// near the bot I was aiming at and the aim assist just flips over"):
     /// on the PS2 a challenger that scores lower than the held magnet takes
-    /// it, and the pull itself turns the aim toward the one it does not
-    /// hold, so two soldiers close together trade the magnet every few
-    /// ticks. While the player is not `steering` the aim, a challenger must
-    /// score under [`MAGNET_HOLD`] of the held one's score (a far nearer
-    /// enemy stepping in); while steering, the PS2's rule. (The tests' entry:
-    /// the tick calls [`Sim::acquire_magnet_steering`].)
+    /// it. Here a held magnet is kept while it is alive, in the held cone
+    /// and in sight (out of sight up to [`MAGNET_LOS_GRACE`]), whatever a
+    /// challenger scores; on the stick it changes hands only when the stick
+    /// pushes past [`MAGNET_STEER`] toward the challenger (the tournament
+    /// then over the enemies on that side). A mouse keeps the PS2's rule.
+    /// (The tests' entry: the tick calls [`Sim::acquire_magnet_steering`].)
     #[cfg(test)]
     pub(super) fn acquire_magnet(&mut self, slot: usize, ph: UnitHandle, fire_held: bool) {
-        self.acquire_magnet_steering(slot, ph, fire_held, false);
+        self.acquire_magnet_steering(slot, ph, fire_held, Steer::Stick(glam::Vec2::ZERO));
     }
 
-    /// [`Sim::acquire_magnet`] with whether the player steers the aim.
+    /// [`Sim::acquire_magnet`] with how the player steers the aim.
     pub(super) fn acquire_magnet_steering(
         &mut self,
         slot: usize,
         ph: UnitHandle,
         fire_held: bool,
-        steering: bool,
+        steer: Steer,
     ) {
+        let hidden_before = self.magnet_hidden.get(slot).copied().unwrap_or(0);
+        if let Some(h) = self.magnet_hidden.get_mut(slot) {
+            *h = 0;
+        }
         let Some(p) = self.unit(ph) else {
             self.magnet[slot] = None;
             self.reticle_pick[slot] = None;
@@ -414,6 +481,12 @@ impl Sim {
         let mut target = self.magnet[slot].filter(|&t| self.aim_candidate(t).is_some());
         let mut valid = target.is_some();
         let mut best = f32::MAX;
+        let mut hidden = 0u8;
+        // The stick's push toward a challenger (ours): only enemies on that
+        // side of the held one may take it.
+        let mut toward: Option<(Vec3, glam::Vec2)> = None;
+        let right = dir.cross(Vec3::Y).normalize_or_zero();
+        let up = right.cross(dir);
         if let Some((t, u)) = target.and_then(|t| Some((t, self.aim_candidate(t)?))) {
             let cone = angle + if fire_held { STICKY_WIDEN } else { 0.0 };
             // OURS (the assist's lead): the held magnet is kept while its
@@ -423,12 +496,24 @@ impl Sim {
                 _ => Vec3::ZERO,
             };
             let s = cone_score(u.r, cone, er, pos, dir, u.ctr + lead);
-            if s >= 0.0 && live(t) && clear(&u) {
+            if s >= 0.0 && live(t) && !clear(&u) {
+                hidden = hidden_before.saturating_add(1);
+            }
+            let grace = f32::from(hidden) * crate::TICK_DT <= MAGNET_LOS_GRACE;
+            if s >= 0.0 && live(t) && grace {
                 valid = passes(&u) && (u.ctr - pos).length() <= lor + u.r;
-                best = if steering { s } else { s * MAGNET_HOLD };
+                best = match steer {
+                    Steer::Mouse => s,
+                    Steer::Stick(v) if v.length() > MAGNET_STEER => {
+                        toward = Some((u.ctr, v));
+                        s
+                    }
+                    Steer::Stick(_) => 0.0,
+                };
             } else {
                 target = None;
                 valid = false;
+                hidden = 0;
             }
         }
         if 0.0 < best {
@@ -451,6 +536,13 @@ impl Sim {
                 {
                     continue;
                 }
+                if let Some((held, v)) = toward {
+                    let off = u.ctr - held;
+                    let side = glam::Vec2::new(off.dot(right), off.dot(up));
+                    if v.dot(side.normalize_or_zero()) <= MAGNET_STEER {
+                        continue;
+                    }
+                }
                 let s = cone_score(u.r, angle, er, pos, dir, u.ctr);
                 if 0.0 <= s && s < best && clear(&u) {
                     best = s;
@@ -466,6 +558,9 @@ impl Sim {
             None
         };
         self.reticle_pick[slot] = pick;
+        if let Some(h) = self.magnet_hidden.get_mut(slot) {
+            *h = hidden;
+        }
     }
 
     /// Apply core::aim_assist to slot `slot`'s pad against magnet `m`.
@@ -477,8 +572,28 @@ impl Sim {
         pad: &PadState,
         dt: f32,
     ) -> PadState {
-        let (Some(p), Some(t)) = (self.unit(ph), self.aim_candidate(m)) else {
+        let Some((out, st, lead)) = self.assisted(slot, ph, m, pad, dt) else {
             return *pad;
+        };
+        self.assist[slot] = st;
+        if let Some(l) = lead {
+            self.assist_lead[slot] = Some(l);
+        }
+        out
+    }
+
+    /// [`Sim::apply_assist`] without keeping its state ([`Assisted`]).
+    /// `None` when the player or the magnet is gone (the pad as it is).
+    pub(super) fn assisted(
+        &self,
+        slot: usize,
+        ph: UnitHandle,
+        m: AimTarget,
+        pad: &PadState,
+        dt: f32,
+    ) -> Option<Assisted> {
+        let (Some(p), Some(t)) = (self.unit(ph), self.aim_candidate(m)) else {
+            return None;
         };
         // The pull steers the reticle's ray (card AIMA), not the chest's.
         let (_, lat, _) = p.aim_frame();
@@ -487,6 +602,7 @@ impl Sim {
         let center = t.assist_ctr;
         let ord = &self.weapon_classes[p.weapon_class].ordnance;
         let speed = ord.velocity;
+        let mut kept = None;
         let (lead, lead_vel) = if self.assist_lead_on {
             // OURS (`core::aim_assist`'s lead): the low-passed velocity times
             // the round's flight from where it leaves (the fire point, the
@@ -511,26 +627,29 @@ impl Sim {
             } else {
                 0.0
             };
-            let mut l = match self.assist_lead[slot] {
+            let mut l = match self.assist_lead.get(slot).copied().flatten() {
                 Some((held, l)) if held == m => l,
                 _ => Lead::start(t.vel),
             };
+            // A fast round meets a soldier where he was at the press
+            // (`unit::human_meet_lag`): no flight to lead.
+            let instant = matches!(m, AimTarget::Unit(_)) && crate::unit::fast_round(speed);
             let eased = l.step(dt, t.vel, |v| {
+                if instant {
+                    return v * -crate::unit::HUMAN_SHOT_LAG;
+                }
                 lead_point(center - from, v, speed).map_or(Vec3::ZERO, |rel| {
                     let secs = rel.length() / speed.max(1e-3);
                     rel - (center - from) + v * ahead + Vec3::Y * (0.5 * fall * secs * secs)
                 })
             });
-            self.assist_lead[slot] = Some((m, l));
+            kept = Some((m, l));
             (Some(center + l.offset), Some(t.vel + eased))
         } else {
             // Ballistic lead (FUN_0026d3f0, flat-fire branch — bolts have no
             // gravity).
             let lead = lead_point(center - eye, t.vel, speed).map(|rel| eye + rel);
             (lead, None)
-        };
-        let Some(p) = self.unit(ph) else {
-            return *pad;
         };
         // Sign bridge: aim_assist yaw stick is POSITIVE-LEFT (BF1 f2
         // semantics); our rx is positive-right.
@@ -557,19 +676,16 @@ impl Sim {
             fire_held: pad.pressed(buttons::FIRE),
             armed: self.assist_armed,
             lead_vel,
+            look_scale: LOOK_SCALE,
         };
-        aim_assist::apply(
-            dt,
-            &mut sticks,
-            &env,
-            &mut self.assist[slot],
-            self.assist_intensity,
-        );
-        PadState {
+        let mut st = self.assist.get(slot).copied().unwrap_or_default();
+        aim_assist::apply(dt, &mut sticks, &env, &mut st, self.assist_intensity);
+        let out = PadState {
             rx: PadState::quantize(-sticks.yaw),
             ry: PadState::quantize(sticks.pitch),
             ..*pad
-        }
+        };
+        Some((out, st, kept))
     }
 
     /// The aim magnet of player slot `slot` (`None` when that slot has no
@@ -846,24 +962,28 @@ mod tests {
     }
 
     /// Two enemies side by side, the second scoring a little better than
-    /// the held first: a player who is not steering keeps the first; one
-    /// steering the aim gets the second (the PS2's rule). A far nearer enemy
-    /// takes the magnet either way.
+    /// the held first: still, or the stick pushed away from the second, the
+    /// first is kept; the stick pushed toward the second (left) or a mouse
+    /// gives it to the second. A far nearer enemy on the aim's line does not
+    /// take a held magnet either.
     #[test]
-    fn the_magnet_holds_its_target_unless_the_player_steers() {
+    fn the_magnet_holds_its_target_unless_the_player_steers_to_another() {
         let a = (1, Vec3::new(0.3, 0.0, -20.0));
         let b = (1, Vec3::new(-0.6, 0.0, -20.0));
-        for (steering, want) in [(false, 0), (true, 1)] {
+        let stick = |x: f32| Steer::Stick(glam::Vec2::new(x, 0.0));
+        for (steer, want) in [
+            (stick(0.0), 0),
+            (stick(0.1), 0),
+            (stick(0.6), 0),
+            (stick(-0.6), 1),
+            (Steer::Mouse, 1),
+        ] {
             let (mut s, p, o) = range(&[a, b]);
             s.magnet[0] = Some(AimTarget::Unit(o[0]));
             // Aim a little toward the second.
             s.units[p.index as usize].soldier.yaw = 0.01;
-            s.acquire_magnet_steering(0, p, false, steering);
-            assert_eq!(
-                s.magnet[0],
-                Some(AimTarget::Unit(o[want])),
-                "steering {steering}"
-            );
+            s.acquire_magnet_steering(0, p, false, steer);
+            assert_eq!(s.magnet[0], Some(AimTarget::Unit(o[want])), "{steer:?}");
         }
         // On the aim's line (the eye 1.3 m over a body's middle): the held
         // one at 20 m, the newcomer at 6 m.
@@ -875,12 +995,86 @@ mod tests {
             s.unit_mut(h).unwrap().soldier.pos.y = 1.3;
         }
         s.magnet[0] = Some(AimTarget::Unit(o[0]));
-        s.acquire_magnet_steering(0, p, false, false);
-        assert_eq!(
-            s.magnet[0],
-            Some(AimTarget::Unit(o[1])),
-            "a far nearer enemy"
-        );
+        s.acquire_magnet(0, p, false);
+        assert_eq!(s.magnet[0], Some(AimTarget::Unit(o[0])), "a nearer enemy");
+    }
+
+    /// The maintainer's report (2026-10-29): aiming at one bot 20 m out,
+    /// another walks across the aim's line in front of it or behind it. The
+    /// player holds the stick still, or nudges it up or down (fine aim, not
+    /// toward the passer). The magnet stays on the first all the way; on
+    /// the old rule a nudge gave it to the passer 3 m in front, and a still
+    /// stick to one 11 m in front.
+    #[test]
+    fn a_bot_walking_past_the_held_one_does_not_take_the_magnet() {
+        let up = Steer::Stick(glam::Vec2::new(0.0, 0.3));
+        let still = Steer::Stick(glam::Vec2::ZERO);
+        for (z, steer) in [(-17.0, up), (-23.0, up), (-9.0, still), (-17.0, still)] {
+            let (mut s, p, o) = range(&[
+                (1, Vec3::new(0.0, 0.0, -20.0)),
+                (1, Vec3::new(-4.0, 0.0, z)),
+            ]);
+            // Their middles on the aim's line (the eye 1.3 m over a body's).
+            for &h in &o {
+                s.unit_mut(h).unwrap().soldier.pos.y = 1.3;
+            }
+            s.acquire_magnet(0, p, true);
+            assert_eq!(s.magnet[0], Some(AimTarget::Unit(o[0])));
+            for _ in 0..60 {
+                s.unit_mut(o[1]).unwrap().soldier.pos.x += 8.0 / 60.0;
+                s.acquire_magnet_steering(0, p, true, steer);
+                assert_eq!(
+                    s.magnet[0],
+                    Some(AimTarget::Unit(o[0])),
+                    "passer at z {z}, x {:.2}, {steer:?}",
+                    s.unit(o[1]).unwrap().soldier.pos.x
+                );
+            }
+        }
+    }
+
+    /// The held magnet dies: the enemy beside it takes the magnet.
+    #[test]
+    fn a_held_magnet_that_dies_hands_over() {
+        let (mut s, p, o) = range(&[
+            (1, Vec3::new(0.3, 0.0, -20.0)),
+            (1, Vec3::new(-0.8, 0.0, -20.0)),
+        ]);
+        s.magnet[0] = Some(AimTarget::Unit(o[0]));
+        s.acquire_magnet(0, p, false);
+        assert_eq!(s.magnet[0], Some(AimTarget::Unit(o[0])));
+        s.unit_killed(o[0], None);
+        s.acquire_magnet(0, p, false);
+        assert_eq!(s.magnet[0], Some(AimTarget::Unit(o[1])));
+    }
+
+    /// Out of sight for up to `MAGNET_LOS_GRACE` (7 ticks) the held magnet
+    /// is kept; longer, it is let go.
+    #[test]
+    fn a_held_magnet_out_of_sight_is_kept_briefly() {
+        use crate::collision::{Body, CollisionWorld, Shape};
+        let wall = || {
+            Body::new(
+                glam::Mat4::from_translation(Vec3::new(0.0, 5.0, -10.0)),
+                Shape::Box {
+                    half: Vec3::new(5.0, 5.0, 0.5),
+                },
+            )
+        };
+        for (hidden, kept) in [(7, true), (8, false)] {
+            let (mut s, p, o) = range(&[(1, Vec3::new(0.0, 0.0, -20.0))]);
+            s.acquire_magnet(0, p, false);
+            assert_eq!(s.magnet[0], Some(AimTarget::Unit(o[0])));
+            s.collision.push_body(wall());
+            for _ in 0..hidden {
+                s.acquire_magnet(0, p, false);
+            }
+            assert_eq!(s.magnet[0].is_some(), kept, "{hidden} ticks hidden");
+            // Back in sight: held again only if it was kept.
+            s.collision = CollisionWorld::new(Vec::new(), Vec::new());
+            s.acquire_magnet(0, p, false);
+            assert_eq!(s.magnet_hidden[0], 0);
+        }
     }
 
     /// The flicker in play: two enemies 1.5 m apart 20 m out walking across
@@ -1303,7 +1497,8 @@ mod tests {
     /// about every `period` ticks, around the player's line; the player's
     /// rifle firing a round of `speed` and `life`. The player holds his
     /// sticks still, aimed at the runner's centre at the start, and taps
-    /// FIRE every 10 ticks for `ticks`. `lead`: the assist's lead on or off
+    /// FIRE every 10 ticks for `ticks`, the magnet already acquired (a press
+    /// with no magnet arms nothing). `lead`: the assist's lead on or off
     /// (off = the PS2's assist).
     fn strafe(lead: bool, dist: f32, speed: f32, life: f32, period: u32, ticks: u32) -> Strafe {
         let (mut s, p, o) = range(&[(1, Vec3::new(0.0, 0.0, -dist))]);
@@ -1325,6 +1520,7 @@ mod tests {
         let me = &mut s.units[p.index as usize].soldier;
         me.yaw = crate::fmath::atan2(-c.x, -c.z);
         me.pitch = crate::fmath::atan2(c.y, (c.x * c.x + c.z * c.z).sqrt());
+        s.acquire_magnet(0, p, false);
         let mut out = Strafe {
             hits: 0,
             shots: 0,
@@ -1398,8 +1594,9 @@ mod tests {
             assert_eq!(ps2.shots, ours.shots, "{name} {dist}");
             let share = ours.hits as f32 / ours.shots as f32;
             assert!(share >= floor, "{name} at {dist} m: {share}");
+            // Twice the PS2's and ten more, or every shot.
             assert!(
-                ours.hits >= ps2.hits * 2 + 10,
+                ours.hits >= (ps2.hits * 2 + 10).min(ours.shots),
                 "{name} at {dist} m: {} vs {}",
                 ours.hits,
                 ps2.hits

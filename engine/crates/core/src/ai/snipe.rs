@@ -13,6 +13,11 @@
 //! inside the rifle's MinRange or for a target within 25 m and coming on,
 //! kept to the pistol's own reach.
 //!
+//! Standing still with the rifle in hand it sees out to its tier's share of
+//! the rifle's `MaxRange` (`perception::scope_reach`, OURS, 2026-10-29), its
+//! lanes reach as far, and on its spot it fights from there
+//! (`behave::position`); at Easy (share 0) none of the three.
+//!
 //! The PS2's sniper stands 60-120 s at one hint whatever it sees (BF1 60-100
 //! s; `analysis/re-soldier-ai.md` 20, card CLSE4: 99 % of its rifle time in
 //! the stand, 23 shots in 3,051 unit-seconds) - the statue the maintainer does not
@@ -289,7 +294,8 @@ pub fn pick(sim: &Sim, me: UnitHandle, u: &Unit, left: Option<Vec3>) -> Option<S
 /// The lane from spot `p` for sniper `u`: every point of ENEMY GROUND - a
 /// post its side does not hold, and a hub whose nearest post is such a one -
 /// between [`LANE_MIN`] and the sniper's sight of a standing soldier
-/// (`perception::view_distance` at its tier) that a ray from the spot's eye
+/// (`perception::view_distance` at its tier, or its scope's at the tier,
+/// `perception::scope_reach`, if farther) that a ray from the spot's eye
 /// reaches, each weighted by its distance over that sight. Answers the score
 /// and the lane's length (its farthest point in sight).
 ///
@@ -297,13 +303,20 @@ pub fn pick(sim: &Sim, me: UnitHandle, u: &Unit, left: Option<Vec3>) -> Option<S
 /// `AISnipeSuitabilityDist` - the far edge of the PS2's own suitability
 /// query, a sphere of that radius centred that far out along the hint
 /// (`FUN_002d8398`, whose answer the PS2 never uses: re-soldier-ai 20). Its
-/// default (70 m) reaches past every tier's sight; the indoor maps' 30 m
-/// keeps a lane to 60 m.
+/// default (70 m) gives a lane to 140 m, past a scope's 128 m; the indoor
+/// maps' 30 m keeps a lane to 60 m.
 pub fn lane(sim: &Sim, u: &Unit, p: Vec3) -> (f32, f32) {
     let Some(g) = sim.nav.as_ref() else {
         return (0.0, 0.0);
     };
-    let sight = perception::view_distance(Stance::Stand, sim.ai_tier(u.team).view_mult)
+    let tier = sim.unit_tier(u);
+    let share = perception::scope_share(u, &tier);
+    let scope = std::iter::once(u.weapon_class)
+        .chain(u.held.iter().map(|w| w.class))
+        .filter_map(|c| perception::scope_reach(sim, &sim.weapon_classes[c], share))
+        .fold(0.0f32, f32::max);
+    let sight = perception::view_distance(Stance::Stand, tier.view_mult)
+        .max(scope)
         .min(2.0 * sim.mission_ai.snipe_suitability);
     let eye = p + Vec3::Y * crate::unit::muzzle_height(Stance::Stand);
     let enemy_post = |i: usize| sim.cps[i].owner != Some(u.team);

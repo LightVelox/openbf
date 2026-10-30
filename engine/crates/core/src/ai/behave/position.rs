@@ -96,16 +96,23 @@ pub(super) fn fight_position(
     }
     h.until = h.until.max(sim.tick + HOLD_CLOSE);
     // Card TPOS: the Tactician's position, when the table has one for this
-    // fight; else the bot's own style below.
-    if super::tactic::fight(
-        sim,
-        tk,
-        st,
-        &super::tactic::Foe::seen(e),
-        &mut h,
-        thinking,
-        nt,
-    ) {
+    // fight; else the bot's own style below. Not for a sniper on its spot
+    // with a scope's sight (not Easy): it fights from there (OURS,
+    // 2026-10-29: with a scope's band it walked off its perch to a table
+    // position nearer the target).
+    let perched =
+        super::snipe::holds(st, live) && crate::perception::scope_share(u, &tk.tier) > 0.0;
+    if !perched
+        && super::tactic::fight(
+            sim,
+            tk,
+            st,
+            &super::tactic::Foe::seen(e),
+            &mut h,
+            thinking,
+            nt,
+        )
+    {
         // (In the open, a croucher by style crouches.)
         if !st.tpos.covered && crouches && h.stance_mask == 0 {
             h.stance_mask = crate::commander::MASK_CROUCH;

@@ -400,39 +400,58 @@ impl Kbm {
     }
 
     pub fn sync_grab(&mut self, window: &Window, allowed: bool) {
-        let want = self.want_grab && allowed;
-        if want == self.grabbed {
-            return;
+        let was_grabbed = self.grabbed;
+        if let Err(e) = self.sync_grab_with(allowed, |mode| window.set_cursor_grab(mode)) {
+            eprintln!("mouse: cannot update the pointer grab ({e})");
         }
-        if want {
+        if self.grabbed && !was_grabbed {
+            // Wayland accepts a position hint only after locking.
             let size = window.inner_size();
             let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(
                 size.width / 2,
                 size.height / 2,
             ));
-            let locked = window
-                .set_cursor_grab(CursorGrabMode::Locked)
-                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
-            if let Err(e) = locked {
-                eprintln!("mouse: the pointer cannot be grabbed ({e}); it stays free");
-            }
-            window.set_cursor_visible(false);
-            self.grabbed = true;
-        } else {
-            self.free(window);
+        }
+        if was_grabbed != self.grabbed {
+            window.set_cursor_visible(!self.grabbed);
         }
     }
 
-    fn free(&mut self, window: &Window) {
-        let _ = window.set_cursor_grab(CursorGrabMode::None);
-        window.set_cursor_visible(true);
+    fn sync_grab_with<E>(
+        &mut self,
+        allowed: bool,
+        mut grab: impl FnMut(CursorGrabMode) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if !allowed {
+            self.want_grab = false;
+        }
+        let want = self.want_grab && allowed;
+        if want == self.grabbed {
+            return Ok(());
+        }
+        if want {
+            // A failed request stays free until the next click.
+            self.want_grab = false;
+            grab(CursorGrabMode::Locked).or_else(|_| grab(CursorGrabMode::Confined))?;
+            self.want_grab = true;
+            self.grabbed = true;
+        } else {
+            grab(CursorGrabMode::None)?;
+            self.clear_grab();
+        }
+        Ok(())
+    }
+
+    fn clear_grab(&mut self) {
         self.pending = (0.0, 0.0);
         self.grabbed = false;
     }
 
     pub fn release(&mut self, window: &Window) {
         self.want_grab = false;
-        self.free(window);
+        let _ = window.set_cursor_grab(CursorGrabMode::None);
+        window.set_cursor_visible(true);
+        self.clear_grab();
     }
 }
 

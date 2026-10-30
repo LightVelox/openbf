@@ -17,10 +17,18 @@
 //! `proxy`), difficulty, seed, build and checkout commits. A human's log
 //! follows the player's unit (`Sim::players[0]`) through the side select and
 //! every respawn, and its header's `unit` / `team` are the unit and team he
-//! last spawned as (schema 2; schema 1 kept the team before the side select).
+//! last spawned as (schema 2 on; schema 1 kept the team before the side
+//! select).
 //! Then one array per row, the first item its kind, ticks at 30 Hz:
 //! - `["spawn", tick, class, team]` (class: `names.classes[team]` index);
-//! - `["shot", tick, weapon]` (a press, `Event::Shot`; weapon: `names.weapons`);
+//! - `["shot", tick, weapon, yaw, pitch, zoom, rx, ry, near, near_off,
+//!   near_along]` (a press, `Event::Shot`; weapon: `names.weapons`; the
+//!   shot's direction in 1e-4 rad (yaw 0 = -z, positive turning left;
+//!   pitch up), the zoom step (-1 none), the look stick (-32767..32767,
+//!   after the input crate's scaling; 0 for a bot), the live enemy nearest
+//!   the ray by angle (its slot, the angle off the ray in 1e-4 rad, the
+//!   metres along it; nulls for none). Schema 3; schema 2 wrote only
+//!   `["shot", tick, weapon]`);
 //! - `["hit", tick, shooter, victim, victim_gen, victim_team, damage,
 //!   health_left, direct]` for a hit the subject deals or takes (direct 1 =
 //!   a bolt, 0 = a blast);
@@ -45,7 +53,7 @@
 //! so a tick does not allocate; the file is encoded only when written.
 
 use crate::walk::WalkSim;
-use core::sim::{Cheats, Event, Sim};
+use core::sim::{Cheats, Event, PadState, Sim};
 use serde::Serialize;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -80,7 +88,20 @@ pub fn on() -> bool {
 #[derive(Debug, Clone, Copy)]
 enum Row {
     Spawn(u64, u8, u8),
-    Shot(u64, u32),
+    Shot {
+        tick: u64,
+        weapon: u32,
+        /// The shot's yaw and pitch (1e-4 rad).
+        yaw: i32,
+        pitch: i32,
+        /// The zoom step (-1: none).
+        zoom: i8,
+        rx: i16,
+        ry: i16,
+        /// The enemy nearest the ray: slot, angle off it (1e-4 rad),
+        /// distance along it.
+        near: Option<(u32, i32, f32)>,
+    },
     Hit {
         tick: u64,
         shooter: u32,
@@ -121,7 +142,22 @@ impl Row {
         use serde_json::json;
         match *self {
             Row::Spawn(t, c, team) => json!(["spawn", t, c, team]),
-            Row::Shot(t, w) => json!(["shot", t, w]),
+            Row::Shot {
+                tick,
+                weapon,
+                yaw,
+                pitch,
+                zoom,
+                rx,
+                ry,
+                near,
+            } => {
+                let (id, off, along) = match near {
+                    Some((i, a, d)) => (json!(i), json!(a), json!(r2(d))),
+                    None => (json!(null), json!(null), json!(null)),
+                };
+                json!(["shot", tick, weapon, yaw, pitch, zoom, rx, ry, id, off, along])
+            }
             Row::Hit {
                 tick,
                 shooter,
@@ -173,6 +209,28 @@ impl Row {
             ]),
         }
     }
+}
+
+/// The live enemy of `team` nearest the ray from `origin` along `dir` (unit
+/// vector) by angle, ahead of it: (slot, angle off the ray in rad, distance
+/// along it in m).
+fn nearest_enemy(
+    sim: &Sim,
+    team: u8,
+    origin: glam::Vec3,
+    dir: glam::Vec3,
+) -> Option<(u32, f32, f32)> {
+    sim.units
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.alive && o.team != team)
+        .filter_map(|(i, o)| {
+            let v = o.capsule().center() - origin;
+            let along = v.dot(dir);
+            let off = core::fmath::atan2(v.cross(dir).length(), along);
+            (along > 0.0).then_some((i as u32, off, along))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
 /// The header line.
@@ -266,7 +324,7 @@ impl MatchLog {
         env.sort();
         let header = Header {
             kind: "header",
-            schema: 2,
+            schema: 3,
             map: meta.map.clone(),
             mission: meta.mission.clone(),
             era: era.to_owned(),
@@ -310,9 +368,11 @@ impl MatchLog {
         &self.path
     }
 
-    /// Record the tick the sim just stepped; `stick`: the human's move stick.
+    /// Record the tick the sim just stepped; `pad`: the human's pad that tick
+    /// (sticks after the input crate's scaling; the default for a bot).
     /// Writes the file at the round's outcome (once).
-    pub fn tick(&mut self, sim: &Sim, stick: (i16, i16)) {
+    pub fn tick(&mut self, sim: &Sim, pad: &PadState) {
+        let stick = (pad.lx, pad.ly);
         let t = sim.tick;
         self.follow(sim);
         let i = self.header.unit as usize;
@@ -326,8 +386,24 @@ impl MatchLog {
         for ev in &sim.events {
             match *ev {
                 Event::Shot {
-                    unit, weapon_class, ..
-                } if unit.index == me => self.rows.push(Row::Shot(t, weapon_class)),
+                    unit,
+                    weapon_class,
+                    origin,
+                    dir,
+                } if unit.index == me => {
+                    let mrad = |a: f32| (a * 1.0e4).round() as i32;
+                    self.rows.push(Row::Shot {
+                        tick: t,
+                        weapon: weapon_class,
+                        yaw: mrad(core::fmath::atan2(-dir.x, -dir.z)),
+                        pitch: mrad(core::fmath::asin(dir.y.clamp(-1.0, 1.0))),
+                        zoom: u.zoom.map_or(-1, |z| z.step as i8),
+                        rx: pad.rx,
+                        ry: pad.ry,
+                        near: nearest_enemy(sim, u.team, origin, dir)
+                            .map(|(i, a, d)| (i, mrad(a), d)),
+                    });
+                }
                 Event::Hit {
                     shooter,
                     victim,
@@ -535,10 +611,16 @@ mod tests {
         let mut log = MatchLog::start(&meta, &walk, walk.player.index, "human", "gcw", &dir);
         let sim = &mut walk.sim;
         sim.tick = 10;
-        log.tick(sim, (0, 32767));
+        log.tick(
+            sim,
+            &PadState {
+                ly: 32767,
+                ..Default::default()
+            },
+        );
         sim.cheats.infinite_ammo = true;
         sim.tick = 11;
-        log.tick(sim, (0, 0));
+        log.tick(sim, &PadState::default());
         sim.cheats.infinite_ammo = false;
         let path = log.write(sim, "quit").expect("written");
         assert!(log.write(sim, "quit").is_none(), "once");
@@ -577,18 +659,18 @@ mod tests {
         // The side select moves him to team 1 before his first life.
         walk.sim.units[p].alive = false;
         walk.sim.tick = 1;
-        log.tick(&walk.sim, (0, 0));
+        log.tick(&walk.sim, &PadState::default());
         walk.sim.units[p].team = 1;
         walk.sim.units[p].spec.team = 1;
         walk.sim.units[p].alive = true;
         walk.sim.tick = 2;
-        log.tick(&walk.sim, (0, 0));
+        log.tick(&walk.sim, &PadState::default());
         assert_eq!(log.header().team, 1);
         // A respawn: a new generation in the same slot, a new spawn row.
         walk.sim.units[p].gen += 1;
         walk.sim.players[0] = Some(walk.sim.handle(p));
         walk.sim.tick = 3;
-        log.tick(&walk.sim, (0, 0));
+        log.tick(&walk.sim, &PadState::default());
         // His unit moves to another slot (on team 1): the log goes with it,
         // and his hits from there are his.
         let other = walk
@@ -609,7 +691,7 @@ mod tests {
             health_left: 90.0,
             dir: glam::Vec3::X,
         });
-        log.tick(&walk.sim, (0, 0));
+        log.tick(&walk.sim, &PadState::default());
         assert_eq!(log.header().unit, other.index);
         let path = log.write(&walk.sim, "quit").expect("written");
         let text = std::fs::read_to_string(&path).unwrap();
@@ -617,7 +699,7 @@ mod tests {
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
-        assert_eq!(lines[0]["schema"], 2);
+        assert_eq!(lines[0]["schema"], 3);
         assert_eq!(lines[0]["team"], 1);
         assert_eq!(lines[0]["unit"], other.index);
         let spawns: Vec<_> = lines.iter().filter(|l| l[0] == "spawn").collect();
@@ -642,7 +724,92 @@ mod tests {
         let dir = std::env::temp_dir();
         let mut log = MatchLog::start(&meta, &walk, bot.index, "proxy", "gcw", &dir);
         walk.sim.tick = 1;
-        log.tick(&walk.sim, (0, 0));
+        log.tick(&walk.sim, &PadState::default());
         assert_eq!((log.header().unit, log.header().team), (bot.index, 1));
+    }
+
+    /// Schema 3 (2026-10-29): the player's shot row carries the shot's
+    /// direction (yaw / pitch, 1e-4 rad), his zoom step, his look stick and
+    /// the enemy nearest the shot's ray (its slot, the angle off the ray in
+    /// 1e-4 rad and the distance along it).
+    #[test]
+    fn a_shot_row_carries_its_aim_and_the_nearest_enemy() {
+        use glam::Vec3;
+        let mut walk = WalkSim::new(7, Vec3::ZERO, None);
+        let me = walk.player;
+        let near = walk
+            .sim
+            .spawn(&core::unit::UnitSpec::trooper(
+                1,
+                Vec3::new(1.0, 0.0, -20.0),
+            ))
+            .unwrap();
+        walk.sim
+            .spawn(&core::unit::UnitSpec::trooper(
+                1,
+                Vec3::new(8.0, 0.0, -20.0),
+            ))
+            .unwrap();
+        walk.sim
+            .spawn(&core::unit::UnitSpec::trooper(
+                0,
+                Vec3::new(0.0, 0.0, -10.0),
+            ))
+            .unwrap();
+        let meta = crate::blackbox::Meta {
+            map: "test".into(),
+            ..Default::default()
+        };
+        let dir = std::env::temp_dir().join(format!("openbf_matchlog_shot_{}", std::process::id()));
+        let mut log = MatchLog::start(&meta, &walk, me.index, "human", "gcw", &dir);
+        walk.sim.tick = 1;
+        log.tick(&walk.sim, &PadState::default());
+        let origin = walk.sim.unit(me).unwrap().soldier.pos + Vec3::Y * 1.5;
+        let aim = Vec3::new(0.0, 0.05, -1.0).normalize();
+        walk.sim.tick = 2;
+        walk.sim.events.push(Event::Shot {
+            unit: me,
+            weapon_class: 0,
+            origin,
+            dir: aim,
+        });
+        let pad = PadState {
+            rx: 1000,
+            ry: -500,
+            ..Default::default()
+        };
+        log.tick(&walk.sim, &pad);
+        let path = log.write(&walk.sim, "quit").expect("written");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["schema"], 3);
+        let shot = lines.iter().find(|l| l[0] == "shot").expect("a shot row");
+        let shot = shot.as_array().unwrap();
+        assert_eq!(shot.len(), 11, "{shot:?}");
+        assert_eq!((shot[1].as_u64(), shot[2].as_u64()), (Some(2), Some(0)));
+        assert_eq!(shot[3], 0, "yaw straight ahead");
+        assert_eq!(
+            shot[4].as_i64(),
+            Some((core::fmath::asin(aim.y) * 1e4).round() as i64)
+        );
+        assert_eq!(shot[5], -1, "no zoom");
+        assert_eq!(
+            (shot[6].as_i64(), shot[7].as_i64()),
+            (Some(1000), Some(-500))
+        );
+        assert_eq!(
+            shot[8].as_u64(),
+            Some(u64::from(near.index)),
+            "the nearest enemy"
+        );
+        let c = walk.sim.unit(near).unwrap().capsule().center() - origin;
+        let along = c.dot(aim);
+        let off = core::fmath::atan2(c.cross(aim).length(), along);
+        assert_eq!(shot[9].as_i64(), Some((off * 1e4).round() as i64));
+        assert!((shot[10].as_f64().unwrap() - f64::from(along)).abs() < 0.01);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

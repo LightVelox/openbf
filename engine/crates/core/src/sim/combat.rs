@@ -34,8 +34,9 @@ impl Sim {
     /// not move. A rider of a vehicle whose hull the bolt passes is passed
     /// too (a gun's own crew). Cost: one prim list a tick, a box test per bolt and
     /// soldier, and a hull-only ray per bolt. A human's bolt meets each soldier
-    /// [`crate::unit::HUMAN_SHOT_LAG`] back along his velocity (OURS: where
-    /// the window drew him).
+    /// [`crate::unit::HUMAN_SHOT_LAG`] back along his velocity, a fast
+    /// round its age further (OURS: where the window drew him,
+    /// [`crate::unit::human_meet_lag`]).
     pub(super) fn sweep_bolts(&mut self, dt: f32) {
         if self.bolts.is_empty() {
             return;
@@ -53,8 +54,7 @@ impl Sim {
             .map(|(h, u)| {
                 let p = u.bolt_prims();
                 let (min, max) = p.bounds();
-                let back = -u.soldier.vel * crate::unit::HUMAN_SHOT_LAG;
-                (h, u.mount.map(|m| m.vehicle), p, min, max, back)
+                (h, u.mount.map(|m| m.vehicle), p, min, max, u.soldier.vel)
             })
             .collect();
         let (world, bolts) = (&self.collision, &mut self.bolts);
@@ -74,9 +74,10 @@ impl Sim {
                 _ => [None; 2],
             };
             let mut mult = 1.0;
-            for (h, rides, prims, min, max, back) in &units {
+            let lag = crate::unit::human_meet_lag(speed, b.age);
+            for (h, rides, prims, min, max, vel) in &units {
                 let by = if b.shooter_is_player {
-                    *back
+                    -*vel * lag
                 } else {
                     Vec3::ZERO
                 };
@@ -167,8 +168,16 @@ impl Sim {
     /// skill but not its level-3 rules, so it goes without
     /// this). BF1 has no such gate; one rule on both games' maps.
     fn hit_scale(&self, b: &Bolt) -> f32 {
-        let bot_gate =
-            !b.shooter_is_player && self.difficulty_of(b.team) < crate::skill::Difficulty::Hard;
+        // [ours] A proxy with `headshots` counts its head hits as a player
+        // does (its slot keeps the flag through deaths).
+        let proxy_head = self
+            .units
+            .get(b.owner.index as usize)
+            .and_then(|u| u.proxy_human)
+            .is_some_and(|p| p.headshots);
+        let bot_gate = !b.shooter_is_player
+            && !proxy_head
+            && self.difficulty_of(b.team) < crate::skill::Difficulty::Hard;
         if b.hit_mult > 1.0 && bot_gate {
             1.0
         } else {

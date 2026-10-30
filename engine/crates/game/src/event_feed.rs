@@ -33,7 +33,9 @@
 //! The critical-hit flash (hitmark, `analysis/re-target-hud.md` §12): the
 //! viewer's sniper-rifle headshot, or his rocket launcher's hit on a
 //! vehicle's weak spot, lights BF2's `hitCritical` reticle mark
-//! ([`EventFeed::hit_critical`]).
+//! ([`EventFeed::hit_critical`]). Every other hit he deals an enemy soldier
+//! lights the plain `hit` flash ([`EventFeed::hit_body`], [ours]
+//! 2026-10-29).
 //!
 //! The statistics (§5, §9): kills less two per team kill, and BF2's points
 //! from its own table (PS2 RAM [M]) — see [`points`].
@@ -386,6 +388,9 @@ pub struct EventFeed {
     /// The viewer's last marked critical hit: its tick and the
     /// victim's relation colour ([`EventFeed::hit_critical`]).
     critical: Option<(u64, [u8; 3])>,
+    /// The tick of the viewer's last body hit on an enemy
+    /// ([`EventFeed::hit_body`]).
+    body: Option<u64>,
     /// What was said lately, and when (the one-line rule).
     recent: Vec<(String, u64)>,
     /// The tick whose events were already read.
@@ -433,6 +438,7 @@ impl EventFeed {
             out: Vec::new(),
             ambush: Vec::new(),
             critical: None,
+            body: None,
             recent: Vec::new(),
             seen: None,
             owners: Vec::new(),
@@ -627,13 +633,16 @@ impl EventFeed {
                     damage,
                     ..
                 } if shooter == viewer
-                    && damage > 0.0
                     && sim
                         .units
                         .get(victim.index as usize)
                         .is_some_and(|u| u.gen == victim.gen && u.team != my_team) =>
                 {
-                    self.battle.hits = self.battle.hits.saturating_add(1);
+                    // The plain hit flash: any enemy body hit ([ours]).
+                    self.body = Some(tick);
+                    if damage > 0.0 {
+                        self.battle.hits = self.battle.hits.saturating_add(1);
+                    }
                 }
                 Event::VehicleHit {
                     shooter: Some(shooter),
@@ -838,6 +847,16 @@ impl EventFeed {
         self.critical
             .filter(|&(at, _)| tick.saturating_sub(at) < HIT_TIMER_TICKS)
             .map(|(_, c)| c)
+    }
+
+    /// The plain hit flash at `tick` (`HudModel::hit_body`, [ours] the
+    /// maintainer 2026-10-29): enemy red while the 0.5 s hit timer of the
+    /// viewer's last hit on an enemy soldier runs, any weapon, blasts too;
+    /// else `None`. The HUD sends the critical mark instead while one runs.
+    pub fn hit_body(&self, tick: u64) -> Option<[u8; 3]> {
+        self.body
+            .filter(|&at| tick.saturating_sub(at) < HIT_TIMER_TICKS)
+            .map(|_| ui::hud::target_color::ENEMY)
     }
 
     /// The chevron edges lit since the last call (`HudModel::ambush`).
@@ -1317,6 +1336,37 @@ mod tests {
     /// sniper rifle lights the mark for the PS2's 0.5 s hit timer, in the
     /// victim's relation colour; a rifle's critical hit, another unit's, or
     /// a plain body hit lights nothing.
+    /// [ours] (the maintainer, 2026-10-29): every hit the viewer deals an
+    /// enemy soldier, any weapon, blasts too, lights the plain hit flash
+    /// for the 0.5 s hit timer; a team-mate, a bot's hit and a hit taken
+    /// do not.
+    #[test]
+    fn an_enemy_body_hit_lights_the_plain_flash() {
+        let mut s = scene();
+        let (me, mate, rebel) = (s.me, s.mate, s.rebels[0]);
+        let hit = |shooter, victim, age| Event::Hit {
+            shooter,
+            victim,
+            damage: 50.0,
+            age,
+            health_left: 250.0,
+            dir: Vec3::X,
+        };
+        happen(&mut s, &[hit(me, mate, 0.1)]);
+        assert_eq!(s.feed.hit_body(s.sim.tick), None, "a team-mate");
+        happen(&mut s, &[hit(rebel, me, 0.1)]);
+        assert_eq!(s.feed.hit_body(s.sim.tick), None, "a hit taken");
+        happen(&mut s, &[hit(rebel, mate, 0.1)]);
+        assert_eq!(s.feed.hit_body(s.sim.tick), None, "a bot's hit");
+        happen(&mut s, &[hit(me, rebel, 0.1)]);
+        let at = s.sim.tick;
+        assert_eq!(s.feed.hit_body(at), Some(ui::hud::target_color::ENEMY));
+        assert!(s.feed.hit_body(at + HIT_TIMER_TICKS - 1).is_some());
+        assert_eq!(s.feed.hit_body(at + HIT_TIMER_TICKS), None, "0.5 s");
+        happen(&mut s, &[hit(me, rebel, core::sim::BLAST_AGE)]);
+        assert!(s.feed.hit_body(s.sim.tick).is_some(), "a blast");
+    }
+
     #[test]
     fn a_sniper_headshot_lights_the_critical_mark() {
         let mut s = scene();

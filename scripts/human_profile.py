@@ -35,7 +35,9 @@ Metrics (one definition for a human and a proxy):
   kd             kills / deaths (deaths: killed + environmental)
   kills_min      kills per minute
   acc            hits / shots (a hit: an enemy hit, one per victim per tick;
-                 a shot: a press)
+                 a shot: a press - its row's kind only, so schema 2 logs and
+                 schema 3's aim columns (direction, zoom, look stick, nearest
+                 enemy to the ray) read alike)
   sight_hit_s    median seconds from SEEING an enemy (60 m, 40 deg of his
                  aim, a clear line; again after 5 s unseen) to his first hit
                  on it; sight_hit_n engagements hit, sight_conv their share
@@ -81,6 +83,18 @@ def load(path, allow_cheats=False):
     return head, rows, end
 
 
+def life_starts(spawns, ends):
+    """The `spawn` rows that start a life: the first, and each one after a
+    death. The log also writes a `spawn` row when a live unit's generation
+    changes (a class change at a post), which is the same life going on."""
+    out, dead = [], True
+    for s in sorted(spawns):
+        if dead or any(out[-1] <= e <= s for e in ends):
+            out.append(s)
+        dead = False
+    return out
+
+
 def tally(head, rows, end):
     """The raw counts of one log."""
     u, team = head["unit"], head["team"]
@@ -88,9 +102,9 @@ def tally(head, rows, end):
          "lives": [], "alive_ticks": 0, "foot": 0, "dist": 0.0, "strafe": 0, "strafe_starts": 0,
          "crouch": 0, "crouch_starts": 0, "prone": 0, "prone_starts": 0, "minutes": 0.0,
          "cheats": list(end.get("cheats", []))}
-    spawns = [r[1] for r in rows if r[0] == "spawn"]
     ends = sorted([r[1] for r in rows if r[0] == "death"]
                   + [r[1] for r in rows if r[0] == "kill" and r[3] == u])
+    spawns = life_starts([r[1] for r in rows if r[0] == "spawn"], ends)
     first = spawns[0] if spawns else head.get("from", 0)
     t["minutes"] = max(end["tick"] - first, 0) / HZ / 60.0
     for s in spawns:
@@ -326,7 +340,10 @@ def calibrate(args):
           f" ({'within' if worst <= args.tol else 'OUTSIDE'} the {100 * args.tol:.0f} % tolerance)")
     print("set these in Strength::Good's row (engine/crates/core/src/ai/proxy.rs), then drop PROVISIONAL:")
     names = {"skill": "skill", "reaction": "reaction_ticks", "view": "view_mult", "circles": "circles",
-             "strafe": "react[0]", "roll": "react[1]", "move": "react[2]", "grenade": "grenade"}
+             "strafe": "react[0]", "roll": "react[1]", "move": "react[2]", "grenade": "grenade",
+             "hand": "hand (Some(Hand::DEFAULT) / None)", "hfloor": "hand.floor", "hacquire": "hand.acquire",
+             "hsettle": "hand.settle", "hup": "hand.up", "head": "headshots", "hunts": "hunts",
+             "class": "class", "mend": "mend", "picks": "picks"}
     for k, v in point.items():
         print(f"  {names.get(k, k)} = {v}")
     print(f"logs kept in {keep}")

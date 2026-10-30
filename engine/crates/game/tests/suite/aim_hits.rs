@@ -234,10 +234,10 @@ enum Aim {
 
 /// One shot at the enemy, standing or running across the lane at `run` x
 /// his class's MaxSpeed: the reticle on his drawn body as a frame `alpha`
-/// of the way from the tick before the last to the last drew it, plus his
-/// motion over the bolt's flight (the player's own lead); the press is
-/// taken by the next tick. The hit's damage, if it hit.
-fn shot(r: &mut Range, run: f32, alpha: f32, aim: Aim) -> Option<f32> {
+/// of the way from the tick before the last to the last drew it, plus, if
+/// `lead`, his motion over the bolt's flight (the player's own lead); the
+/// press is taken by the next tick. The hit's damage, if it hit.
+fn shot(r: &mut Range, run: f32, alpha: f32, aim: Aim, lead: bool) -> Option<f32> {
     let side = Vec3::Y.cross(r.dir).normalize();
     let run = r.walk.sim.unit(r.enemy).unwrap().consts.max_speed * run;
     let start = r.walk.sim.unit(r.enemy).unwrap().soldier.pos;
@@ -273,7 +273,8 @@ fn shot(r: &mut Range, run: f32, alpha: f32, aim: Aim) -> Option<f32> {
     let me = r.walk.sim.unit(r.walk.player).unwrap();
     let v = r.walk.sim.weapon_classes[me.weapon_class].ordnance.velocity;
     let flight = (cur - me.soldier.pos).length() / v;
-    r.aim_at(prev.lerp(cur, alpha) + part + side * (run * flight));
+    let led = if lead { run * flight } else { 0.0 };
+    r.aim_at(prev.lerp(cur, alpha) + part + side * led);
     let (mut got, mut fired) = (None, false);
     for k in 0..60 {
         let mut done = false;
@@ -310,6 +311,9 @@ const TROOPER: &str = "imp_inf_storm_trooper";
 /// The 60 fps window's frames: one just after a tick, one half way.
 const FRAMES: [f32; 2] = [0.0, 0.5];
 
+/// A swing's frames: the drawn aim is that share into the next tick's turn.
+const SWING_FRAMES: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
+
 /// A standing and a crouched soldier, shot in the drawn chest and belly:
 /// the sniper rifle unscoped and scoped at 30-150 m, the rifle at 30 and
 /// 60 m (past that its spread is the weapon's). Before the fix an unscoped
@@ -339,7 +343,7 @@ fn chest_and_belly_shots_register_at_range() {
                     r.tick(0);
                 }
                 for aim in [Aim::Chest, Aim::Belly] {
-                    let hit = shot(&mut r, 0.0, 0.5, aim);
+                    let hit = shot(&mut r, 0.0, 0.5, aim, false);
                     assert!(
                         hit.is_some(),
                         "{shooter} scoped {scoped} at {dist} m, {stance:?} {aim:?}: missed"
@@ -351,15 +355,16 @@ fn chest_and_belly_shots_register_at_range() {
 }
 
 /// A trooper crossing at his run speed, the sniper's reticle on his drawn
-/// chest and belly in both of a 60 fps window's frames, with the flight's
-/// lead: every shot hits. Before the fix the frame just after a tick (the
-/// drawn body 2 ticks behind the bolt's) missed at 70 m, and unscoped
-/// shots past 110 m flew over him.
+/// chest and belly with NO lead (a 2000 m/s round is instant to a player),
+/// in four frames of a tick: every shot hits. Before the fix the frame
+/// just after a tick (the drawn body 2 ticks behind the bolt's) missed at
+/// 70 m and unscoped shots past 110 m flew over him; a round that met him
+/// in its second tick (past 66.7 m) met him a tick further on than drawn.
 #[test]
 fn shots_at_a_runner_register_at_range() {
     for (scoped, dists) in [
-        (false, &[30.0, 70.0, 100.0, 120.0, 150.0][..]),
-        (true, &[30.0, 70.0, 100.0, 150.0][..]),
+        (false, &[30.0, 70.0, 75.0, 90.0, 120.0, 150.0][..]),
+        (true, &[30.0, 70.0, 75.0, 90.0, 150.0][..]),
     ] {
         for &dist in dists {
             let Some(mut r) = range(MAP, "bf1", SIDES, "all_inf_marksman", TROOPER, dist) else {
@@ -369,14 +374,18 @@ fn shots_at_a_runner_register_at_range() {
             if scoped {
                 r.scope_in();
             }
+            let mut misses = Vec::new();
             for aim in [Aim::Chest, Aim::Belly] {
-                for alpha in FRAMES {
-                    assert!(
-                        shot(&mut r, 1.0, alpha, aim).is_some(),
-                        "scoped {scoped} at {dist} m, {aim:?}, frame {alpha}: missed"
-                    );
+                for alpha in [0.0, 0.25, 0.5, 0.75] {
+                    if shot(&mut r, 1.0, alpha, aim, false).is_none() {
+                        misses.push(format!("{aim:?} frame {alpha}"));
+                    }
                 }
             }
+            assert!(
+                misses.is_empty(),
+                "scoped {scoped} at {dist} m: missed {misses:?}"
+            );
         }
     }
 }
@@ -394,7 +403,7 @@ fn shots_beside_the_body_miss() {
             for aim in [Aim::Beside, Aim::Over] {
                 for alpha in FRAMES {
                     assert_eq!(
-                        shot(&mut r, run, alpha, aim),
+                        shot(&mut r, run, alpha, aim, false),
                         None,
                         "at {dist} m, run {run}, {aim:?}, frame {alpha}: hit"
                     );
@@ -522,13 +531,163 @@ fn probe_table() {
                     let hits: Vec<String> = [0.0, 0.5, 0.99]
                         .iter()
                         .map(|&a| {
-                            shot(&mut r, run, a, aim).map_or("-".into(), |d| format!("{d:.0}"))
+                            shot(&mut r, run, a, aim, false)
+                                .map_or("-".into(), |d| format!("{d:.0}"))
                         })
                         .collect();
                     out += &format!(" {label}/{aim:?}:{}", hits.join(","));
                 }
             }
             println!("{shooter} scoped {scoped} at {dist} m:{out}");
+        }
+    }
+}
+
+/// One shot from a controller swinging the reticle across a standing enemy
+/// (2026-10-29): the right stick held at `rx` (the pad's value), the frame
+/// `alpha` of the way into the next tick (the window's blend on), the press
+/// in the frame whose DRAWN reticle (`render_blend::blend_in_looking` with
+/// the held pad, as the windowed game draws it) is on `at` + the drawn
+/// ribcage, stamped as the window stamps it (`Blend::stamp`: the press
+/// fires at the share of the turn drawn). Hit or miss.
+fn swing_shot(r: &mut Range, rx: f32, alpha: f32, at: Vec3) -> bool {
+    const DT: f32 = core::TICK_DT;
+    let pi = r.player();
+    let w = &mut r.walk.sim.units[pi].weapon;
+    (w.clip, w.reload_timer) = (w.clip.max(50), 0.0);
+    r.walk.blend.on = true;
+    let pad = |b: u32| PadState {
+        buttons: b,
+        rx: PadState::quantize(rx),
+        ..Default::default()
+    };
+    // Past the last press's 1 s pull timer.
+    for _ in 0..35 {
+        r.tick(0);
+    }
+    // The frame `alpha` into the tick: the accumulator's left-over.
+    let lag = (alpha * DT - r.walk.accum()).rem_euclid(DT);
+    r.walk.advance(lag, &[PadState::default()]);
+    let target = r.bone("ribcage") + at;
+    // Turn back by the drawn offset until the frame after a stick tick
+    // draws the reticle on the target.
+    let mut back = 0.0;
+    let mut err = f32::MAX;
+    for _ in 0..8 {
+        r.aim_at(target);
+        let want = r.walk.sim.units[pi].soldier.yaw;
+        r.walk.sim.units[pi].soldier.yaw = want + back;
+        r.walk.advance(DT, &[pad(0)]);
+        r.pose(DT);
+        game::render_blend::blend_in_looking(&mut r.walk, &pad(0));
+        let drawn = r.walk.sim.units[pi].soldier.yaw;
+        r.walk.blend_out();
+        err = drawn - want;
+        if err.abs() < 1e-4 {
+            break;
+        }
+        back -= err;
+    }
+    // 0.1 mrad: 8 mm at 80 m.
+    assert!(
+        err.abs() < 1e-4,
+        "rx {rx} frame {alpha}: drawn off by {err}"
+    );
+    // The drawn frame's trigger is up (the window stamps every frame).
+    r.walk.blend.stamp(pad(0));
+    let mut b = buttons::FIRE;
+    let (mut got, mut fired) = (false, false);
+    for _ in 0..30 {
+        let p = r.walk.blend.stamp(pad(b));
+        let ticks = r.walk.advance(DT, &[p]);
+        r.walk.blend.consumed(ticks);
+        r.pose(DT);
+        b = 0;
+        let mut done = false;
+        for e in r.walk.sim.events.clone() {
+            match e {
+                Event::Hit { victim, .. } if victim == r.enemy => {
+                    got = true;
+                    done = true;
+                }
+                Event::Shot { unit, .. } if unit == r.walk.player => fired = true,
+                Event::BoltExpired { .. } => done = true,
+                _ => {}
+            }
+        }
+        if done {
+            break;
+        }
+    }
+    assert!(fired, "the shot fired");
+    got
+}
+
+/// A controller's reticle is drawn where the next tick fires (the stick's
+/// preview, `Sim::look_preview`; 2026-10-29): the marksman scoped at x2 and
+/// x8 swings across a standing trooper at 40 and 80 m at a pad stick of
+/// +-0.2 and +-0.5, assist off and on, and presses when the drawn reticle
+/// meets the drawn ribcage, in frames 0, 1/4, 1/2 and 3/4 into the next
+/// tick's turn (the press fires at that share): every shot hits. Before,
+/// the shot left 1-2 ticks of turn past the drawn reticle (80 m x8 at 0.2:
+/// 1 hit in 4).
+#[test]
+fn a_swinging_controller_hits_where_the_reticle_is_drawn() {
+    for dist in [40.0, 80.0] {
+        let Some(mut r) = range(MAP, "bf1", SIDES, "all_inf_marksman", TROOPER, dist) else {
+            eprintln!("skip: no bake");
+            return;
+        };
+        r.walk.sim.unit_mut(r.enemy).unwrap().health.cur = 1.0e6;
+        r.scope_in();
+        for step in 0..2 {
+            if step == 1 {
+                r.tick(buttons::ZOOM);
+                for _ in 0..15 {
+                    r.tick(0);
+                }
+            }
+            let z = r.walk.sim.unit(r.walk.player).unwrap().zoom.unwrap().value;
+            let mut misses = Vec::new();
+            for intensity in [0.0, 1.0] {
+                r.walk.sim.assist_intensity = intensity;
+                for rx in [0.2, -0.2, 0.5, -0.5] {
+                    for alpha in SWING_FRAMES {
+                        r.walk.sim.unit_mut(r.enemy).unwrap().health.cur = 1.0e6;
+                        if !swing_shot(&mut r, rx, alpha, Vec3::ZERO) {
+                            misses.push(format!("assist {intensity} rx {rx} frame {alpha}"));
+                        }
+                    }
+                }
+            }
+            r.walk.sim.assist_intensity = 0.0;
+            assert!(misses.is_empty(), "{dist} m x{z}: missed {misses:?}");
+        }
+    }
+}
+
+/// The control: the same swing pressed with the drawn reticle 0.7 m beside
+/// the drawn chest still misses (assist off: its pull would draw the shot
+/// in).
+#[test]
+fn a_swinging_controller_beside_the_body_still_misses() {
+    for dist in [40.0, 80.0] {
+        let Some(mut r) = range(MAP, "bf1", SIDES, "all_inf_marksman", TROOPER, dist) else {
+            eprintln!("skip: no bake");
+            return;
+        };
+        r.walk.sim.unit_mut(r.enemy).unwrap().health.cur = 1.0e6;
+        r.scope_in();
+        let side = Vec3::Y.cross(r.dir).normalize() * 0.7;
+        for rx in [0.2, -0.2, 0.5, -0.5] {
+            for alpha in SWING_FRAMES {
+                for at in [side, -side] {
+                    assert!(
+                        !swing_shot(&mut r, rx, alpha, at),
+                        "{dist} m rx {rx} frame {alpha} beside {at}: hit"
+                    );
+                }
+            }
         }
     }
 }

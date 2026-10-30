@@ -172,6 +172,7 @@ pub(super) fn run(
         true => arsenal::armed(sim, u, st),
         false => Armed::Hand,
     };
+    let hand = u.proxy_human.and_then(|p| p.hand);
     let mut reaches = false;
     let look_at = match (*aim, &armed) {
         // A grenade: the low-arc solution to the target's feet, where it is
@@ -188,8 +189,20 @@ pub(super) fn run(
             reaches = ok;
             p
         }
-        (AimRequest::Enemy(e, _), _) => {
-            let p = seen_aim(sim, me, st, eye, e, wc.ordnance.velocity, wc);
+        (AimRequest::Enemy(e, c), _) => {
+            // [ours] A proxy's hand aims as a player does (`proxy::hand`).
+            let p = match hand {
+                Some(h) => super::proxy::hand::aim(
+                    &h,
+                    me,
+                    sim.tick,
+                    c.first_seen,
+                    eye,
+                    e,
+                    wc.ordnance.velocity,
+                ),
+                None => seen_aim(sim, me, st, eye, e, wc.ordnance.velocity, wc),
+            };
             let off = barred.and_then(|h| super::tokn::miss_offset(sim, me, h, eye, p));
             p + off.unwrap_or(Vec3::ZERO)
         }
@@ -216,7 +229,14 @@ pub(super) fn run(
     // clamp and damping, with a 30° slew when the target is far off the
     // current aim (RE §4.2 steps 3-4). Without a target it is idle and the
     // travel facing is exactly what it was before Phase C.
-    let (want_yaw, want_pitch) = if aiming {
+    let (want_yaw, want_pitch) = if aiming && hand.is_some() {
+        // [ours] A proxy's hand follows its aim point straight (the assist
+        // rate-matches the target; the hand's own error is in the point),
+        // under the stick's turn rate below.
+        st.aim_dir = dir;
+        st.aim_vel = Vec3::ZERO;
+        (yaw_toward(dir), fmath::asin(dir.y.clamp(-1.0, 1.0)))
+    } else if aiming {
         let (accel, damping) = skill.tracker_for(true);
         let mut ad = st.aim_dir;
         let mut av = st.aim_vel;
@@ -336,6 +356,8 @@ pub(super) fn run(
                 // Card HVYW: no shot at a vehicle no weapon of the bot's
                 // hurts (`re-soldier-ai.md` 22: it is not attacked at all),
                 // nor with a heavy weapon at a soldier it is not for.
+                // [ours] A proxy's hand fires out to the round's reach.
+                Armed::Hand if hand.is_some() => range <= wc.ordnance.max_range() && !st.arm.spare,
                 Armed::Hand => {
                     range <= wc.ordnance.max_range() && range < wc.ai_range[2] && !st.arm.spare
                 }
@@ -348,12 +370,19 @@ pub(super) fn run(
                 }
             };
             no_throw = matches!(armed, Armed::Thrown(_, true)) && !in_reach;
-            let on_target =
-                ready && e_yaw.abs() < AIM_TOLERANCE && e_pitch.abs() < AIM_TOLERANCE && in_reach;
+            let tol = match hand {
+                Some(_) => super::proxy::hand::tolerance(range),
+                None => AIM_TOLERANCE,
+            };
+            let on_target = ready && e_yaw.abs() < tol && e_pitch.abs() < tol && in_reach;
             // Card FFLN: on target, and a friend is in the way — no shot.
             nt.line_held = u32::from(on_target && line.is_some());
             let on_target = on_target && line.is_none();
-            let want_fire = on_target && st.burst > 0 && sim.tick >= st.pause_until;
+            let want_fire = match hand {
+                // [ours] A held trigger, no bursts, let go near the heat.
+                Some(_) => on_target && super::proxy::hand::holds(u.weapon.heat),
+                None => on_target && st.burst > 0 && sim.tick >= st.pause_until,
+            };
             if let Armed::Draw(button) = armed {
                 // The switch is an edge, and dead while a trigger is down.
                 if sim.tick.is_multiple_of(2) {
@@ -372,6 +401,10 @@ pub(super) fn run(
                 st.charge_until = 0;
             } else if wc.max_pressed_time > 0.0 {
                 charge(sim, me, st, wc, &skill, want_fire, line.is_some(), pad);
+            } else if wc.trigger_single && hand.is_some() {
+                if super::proxy::hand::tap(&mut st.tap_gate, on_target) {
+                    pad.buttons |= buttons::FIRE;
+                }
             } else if wc.trigger_single {
                 // Card STTAP: a single-shot weapon fires on a fresh press
                 // only, so the bot TAPS it, by the PS2's own rule and not by

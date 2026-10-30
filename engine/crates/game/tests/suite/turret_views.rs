@@ -668,6 +668,7 @@ fn fixture_walk(first: Option<f32>) -> game::walk::WalkSim {
         aimer: Aimer::default(),
         pilot: false,
         framed: false,
+        gunner: None,
         turn: Some(Turn::from_class(
             None,
             None,

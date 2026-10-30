@@ -99,6 +99,10 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         if let Some(h) = crate::ai::dfocus::pick(sim, me, st) {
             nt.acquired |= u8::from(perception::take_target(st, h, sim.tick));
         }
+        // [ours] A picking proxy chooses as a player does (`proxy::pick`).
+        if let Some(h) = crate::ai::proxy::pick(sim, me, st) {
+            nt.acquired |= u8::from(perception::take_target(st, h, sim.tick));
+        }
         nt.contacts = held;
         nt.heard = heard;
         // Card UCALL: hearing that made a record while no enemy is in sight
@@ -134,8 +138,13 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         // Card TBLD: a cutter carrier's broken turret (`fix::upkeep`).
         crate::ai::fix::upkeep(sim, me, u, st);
         let fixing = crate::ai::fix::walk(sim, me, st);
+        // [ours] A hurt proxy breaks off to a health droid (`proxy::mend`).
+        let mend = crate::ai::proxy::mend(sim, u);
         match (u.command, ring_walk(sim, st), super::snipe::walk(st)) {
             (Some(c), _, _) => crate::squad::steer(sim, me, st, &c, &mut nt),
+            _ if mend.is_some() => {
+                super::route::retarget_board(sim, me, st, mend.unwrap_or(eye), &mut nt)
+            }
             // Card TBLD: a fixer walks to its turret over the graph.
             _ if fixing.is_some() => {
                 super::route::retarget_board(sim, me, st, fixing.unwrap_or(eye), &mut nt)
@@ -467,8 +476,14 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     }
     // Card FGHT: the ring point a circling bot walks to — over the graph,
     // and straight at it on the last leg and with no route.
+    let mending = crate::ai::proxy::mend(sim, u).is_some();
     let ring = ring_walk(sim, st).filter(|_| {
-        ret.is_none() && flee.is_none() && boarding.is_none() && item.is_none() && st.cmd.is_none()
+        ret.is_none()
+            && flee.is_none()
+            && boarding.is_none()
+            && item.is_none()
+            && st.cmd.is_none()
+            && !mending
     });
     let goal = match ring {
         Some(p) if st.route.is_none_or(|r| r.is_last()) => Some(p),
@@ -484,6 +499,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
             && item.is_none()
             && st.cmd.is_none()
             && ring.is_none()
+            && !mending
     });
     let goal = match spot {
         Some(p) if st.route.is_none_or(|r| r.is_last()) => Some(p),
@@ -510,6 +526,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
             && item.is_none()
             && ring.is_none()
             && fixing.is_none()
+            && !mending
     });
     // Diagnostic (card BLKF): which link of the chain below walks the bot.
     let walk_kind = match () {

@@ -218,6 +218,7 @@ impl Difficulty {
                 grenade: 0.60,
                 grenade_delay: (18, 39),
                 cover: false,
+                scope_sight: 0.0,
             },
             Difficulty::Normal => Tier {
                 view_mult: 1.0,
@@ -229,6 +230,7 @@ impl Difficulty {
                 grenade: 0.60,
                 grenade_delay: (18, 39),
                 cover: false,
+                scope_sight: 0.75,
             },
             Difficulty::Hard => Tier {
                 view_mult: 1.25,
@@ -240,6 +242,7 @@ impl Difficulty {
                 grenade: 0.85,
                 grenade_delay: (0, 24),
                 cover: true,
+                scope_sight: 1.0,
             },
             Difficulty::Elite => Tier {
                 view_mult: 1.5,
@@ -253,6 +256,7 @@ impl Difficulty {
                 grenade: 0.95,
                 grenade_delay: (0, 24),
                 cover: true,
+                scope_sight: 1.0,
             },
         }
     }
@@ -384,6 +388,12 @@ pub struct Tier {
     /// they are every tier's and no column:
     /// `perception::tell` and `ai::team`'s flank board.)
     pub cover: bool,
+    /// OURS, PROVISIONAL (the maintainer, 2026-10-29: "Easy would be what it
+    /// was before, Normal is farther sniper sight, Hard and Elite are the full
+    /// fix"): the share of a scoped rifle's `MaxRange` a still sniper sees a
+    /// standing soldier at (`perception::scope_reach`); 0 = off, the plain
+    /// sight and the old perch, band and stay rules.
+    pub scope_sight: f32,
 }
 
 /// Everything the AI reads off its integer skill, computed once per think.
@@ -787,6 +797,11 @@ mod tests {
             assert_eq!((t.react, t.grenade, t.grenade_delay), (hit, gren, delay));
             assert_eq!(t.cover, cover, "{d:?}");
         }
+        // The scope's sight (the maintainer, 2026-10-29): Easy off.
+        assert_eq!(
+            Difficulty::ALL.map(|d| d.tier().scope_sight),
+            [0.0, 0.75, 1.0, 1.0]
+        );
         assert_eq!(Difficulty::Elite.tier().err_cap, Some(0.5));
         for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
             assert_eq!(d.tier().err_cap, None, "{d:?}: the skill's own cap");
@@ -819,6 +834,7 @@ mod tests {
             assert!(a.base_skill() <= b.base_skill(), "{a:?} -> {b:?}");
             assert!(ta.view_mult <= tb.view_mult && ta.reaction_ticks >= tb.reaction_ticks);
             assert!(ta.pressure <= tb.pressure);
+            assert!(ta.scope_sight <= tb.scope_sight);
             assert!(a.skill().err_cap >= b.skill().err_cap, "{a:?} -> {b:?}");
         }
     }

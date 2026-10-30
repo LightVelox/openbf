@@ -1241,6 +1241,67 @@ fn the_zoom_ends_on_its_cancels_and_no_others() {
     assert_eq!(s.units[0].zoom, None, "death");
 }
 
+/// A blast that throws the zoomed player ends the zoom (re-zoom §4: the
+/// thrown state clears it), and nothing zooms or fires again until he is
+/// up and out of the get-up's lock (playtest 2026-10-29, invincible: the
+/// scope stayed up while his body flew).
+#[test]
+fn a_throw_ends_the_zoom_and_holds_it_and_the_trigger_off_until_he_is_up() {
+    let thermal = crate::weapon::ExplosionClass {
+        damage: 320.0,
+        damage_inner: 4.5,
+        damage_outer: 6.5,
+        push: 10.0,
+        push_outer: 4.5,
+        ..Default::default()
+    };
+    for rules in [GroundRules::Bf1, GroundRules::Bf2] {
+        let mut s = zoom_sim(rules);
+        s.cheats.invincible = true;
+        tap(&mut s, buttons::ZOOM);
+        assert!(s.units[0].zoom.is_some(), "{rules:?}: zoomed");
+        let feet = s.units[0].soldier.pos;
+        s.explode(&thermal, feet + Vec3::new(2.0, 0.12, 0.0), None, Some(1));
+        assert_eq!(s.units[0].soldier.stance, Stance::Thrown, "{rules:?}");
+        let mut down = 0;
+        let mut shots = 0;
+        for t in 0..300 {
+            if !s.units[0].soldier.no_fire() {
+                break;
+            }
+            down += 1;
+            // Mash zoom and fire the whole time.
+            let b = if t % 2 == 0 {
+                buttons::ZOOM | buttons::FIRE
+            } else {
+                buttons::FIRE
+            };
+            s.step(&[pad(b)]);
+            assert_eq!(
+                s.units[0].zoom, None,
+                "{rules:?} tick {t}: no zoom while down"
+            );
+            // A shot on the tick the lock runs out is his first free one.
+            if s.units[0].soldier.no_fire() {
+                shots += s
+                    .events
+                    .iter()
+                    .filter(|e| matches!(e, Event::Shot { .. }))
+                    .count();
+            }
+        }
+        println!("{rules:?}: down {down} ticks, {shots} shots");
+        assert!(down > 30 && down < 300, "{rules:?}: thrown, then up");
+        assert_eq!(shots, 0, "{rules:?}: no shot while down");
+        // Up again: the zoom and the trigger work.
+        s.step(&[pad(0)]);
+        assert!(
+            tap(&mut s, buttons::ZOOM).is_some(),
+            "{rules:?}: zooms again"
+        );
+    }
+}
+
 /// Card ZOOM acceptance 3 (§6): zoomed, the yaw and pitch rates are the
 /// plain ones over the weapon's turn divisor (PS2: 1 / 2.497 to 1 / 2.499
 /// for 2.5 on every update), and the spread's posture takes the flag.

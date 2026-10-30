@@ -181,6 +181,7 @@ fn model(s: &Scoped, feed: &game::event_feed::EventFeed) -> ui::hud::HudModel {
         ),
         target: feed.target(&w.sim, 0),
         hit_critical: feed.hit_critical(w.sim.tick),
+        hit_body: feed.hit_body(w.sim.tick),
         reticle_y: w.reticle_y(),
         stats: Some(ui::hud::HudStats::default()),
         player_team: me.team,

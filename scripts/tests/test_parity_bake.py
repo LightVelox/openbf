@@ -27,11 +27,18 @@ class BakeCache(unittest.TestCase):
         source = self.root / 'engine/crates/game/examples/pose_render.rs'
         source.parent.mkdir(parents=True)
         source.touch()
+        subprocess.run(['git', 'init', '--initial-branch=main', str(self.root)],
+                       check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(self.root), 'add', str(source)], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Fixture',
+                        '-c', 'user.email=fixture', '-c', 'commit.gpgsign=false',
+                        'commit', '-m', 'fixture'], check=True, capture_output=True)
+        self.head = subprocess.check_output(['git', '-C', str(self.root), 'rev-parse', 'HEAD'],
+                                            text=True).strip()
         for name, value in dict(BAKED=str(self.baked), PUB=str(self.root / 'pub'),
                                 ART=str(self.root), LOCK=str(self.root / 'ci.lock')).items():
             self.enterContext(patch.object(parity, name, value))
         self.enterContext(patch.object(parity, 'main_root', return_value=str(self.root)))
-        self.enterContext(patch.object(parity, 'git_head', return_value='head'))
         self.enterContext(contextlib.redirect_stdout(io.StringIO()))
 
     def write_scores(self, out, value):
@@ -41,10 +48,10 @@ class BakeCache(unittest.TestCase):
             w = csv.DictWriter(f, parity.COLS)
             w.writeheader()
             w.writerow(dict(map='map', spot='spot', block=value, dluma=0, dp99=0))
-        return [], {'map': dict(n=1, block=value)}, value, 'head'
+        return [], {'map': dict(n=1, block=value)}, value, self.head
 
     def test_changed_bake_rescores_same_sha_and_ignores_legacy_cache(self):
-        legacy = Path(parity.PUB) / 'main/head.csv'
+        legacy = Path(parity.PUB) / f'main/{self.head}.csv'
         legacy.parent.mkdir(parents=True)
         legacy.write_text('legacy score must not be reused')
         def run(tree, target, out, **kwargs):

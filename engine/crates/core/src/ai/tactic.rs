@@ -732,10 +732,19 @@ fn span(me: crate::unit::UnitHandle, tick: u64, salt: u32, (lo, hi): (u64, u64))
 
 /// The weapon's band about its target, grown by [`BAND_GROW`] (m): inner =
 /// min(optimal, min + 3), outer = min(max(optimal, range - 10), view - 10)
-/// (re-soldier-ai 4.5).
-fn band(tk: &Tick) -> (f32, f32) {
+/// (re-soldier-ai 4.5). A scoped rifle's view is its scope's at the tier
+/// (`perception::scope_reach`): a sniper fighting across a map is in its band.
+fn band(sim: &Sim, tk: &Tick) -> (f32, f32) {
     let [lo, opt, max] = tk.wc.ai_range;
-    let view = crate::perception::view_distance(crate::soldier::Stance::Stand, tk.tier.view_mult);
+    let view = crate::perception::view_distance(crate::soldier::Stance::Stand, tk.tier.view_mult)
+        .max(
+            crate::perception::scope_reach(
+                sim,
+                tk.wc,
+                crate::perception::scope_share(tk.u, &tk.tier),
+            )
+            .unwrap_or(0.0),
+        );
     (
         opt.min(lo + 3.0) - BAND_GROW,
         opt.max(max - 10.0).min(view - 10.0) + BAND_GROW,
@@ -786,7 +795,7 @@ pub(super) fn choose(
     let pos = u.soldier.pos;
     let aim = foe.at;
     let chest = foe.chest;
-    let (inner, outer) = band(tk);
+    let (inner, outer) = band(sim, tk);
     let mut near = Vec::new();
     t.within(
         pos,
@@ -1327,7 +1336,7 @@ pub(super) fn fight(
     if let Some(i) = st.tpos.held.filter(|_| on) {
         let q = sim.positions.positions[i as usize];
         let d = xz(aim - q.pos);
-        let (inner, outer) = band(tk);
+        let (inner, outer) = band(sim, tk);
         let rescore = foe.seen && now >= st.tpos.rescore_at;
         if rescore {
             st.tpos.rescore_at = now + RESCORE;

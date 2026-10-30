@@ -7,9 +7,9 @@ license.workspace = true
 [dev-dependencies]
 bake = { path = "../bake" }
 mungefs = { path = "../mungefs" }
-image.workspace = true
 
 [dependencies]
+image.workspace = true
 core = { path = "../core" }
 manifest = { path = "../manifest" }
 pak = { path = "../pak" }
@@ -19,6 +19,8 @@ ui = { path = "../ui" }
 audio = { path = "../audio" }
 glam.workspace = true
 winit.workspace = true
+# The menu cursor is an SVG, rendered at the display's size at startup (no fonts or images needed).
+resvg = { version = "0.49", default-features = false }
 gilrs.workspace = true
 anyhow.workspace = true
 ron.workspace = true

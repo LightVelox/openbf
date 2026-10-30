@@ -288,6 +288,63 @@ pub struct GunSetup {
     /// class has a `TurretNodeName`, B1:136779-136783, B2:188004-188011);
     /// else its base is the model frame.
     pub framed: bool,
+    /// A building turret's drawn gunner: where his body stands
+    /// ([`GunnerSeat`]); `None` = at the model's origin.
+    pub gunner: Option<GunnerSeat>,
+}
+
+/// Where a building turret's drawn gunner stands (`analysis/re-turret-draw.md`
+/// 3.2, `re-turret-collision.md` 3.2 [O]): the PS2 puts his body at `L x E`
+/// in the model frame - `L` the `PilotPosition` hardpoint's bind relative to
+/// its parent node, `E` that node now. A turret-node parent turns with the
+/// look; any other parent is taken at its bind (PROVISIONAL for the aimer
+/// node's seats).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GunnerSeat {
+    /// The parent node's bind, model space.
+    pub node_bind: glam::Mat4,
+    /// `L`: the hardpoint relative to the parent.
+    pub local: glam::Mat4,
+    /// The parent is the turret node, posed by the look.
+    pub turns: bool,
+    /// `PitchTurnFactor` of the turret node's pitch.
+    pub pitch_factor: f32,
+}
+
+impl GunnerSeat {
+    /// His drawn matrix `E x L` in the model frame with the seat's camera
+    /// at `look`; the soldier model faces its +Z.
+    pub fn frame(&self, look: (f32, f32)) -> glam::Mat4 {
+        let e = if self.turns {
+            turret_node(&self.node_bind, look.0, -look.1 * self.pitch_factor)
+        } else {
+            self.node_bind
+        };
+        e * self.local
+    }
+
+    /// His feet in the model frame with the seat's camera at `look`.
+    pub fn feet(&self, look: (f32, f32)) -> Vec3 {
+        self.frame(look).w_axis.truncate()
+    }
+}
+
+/// The turret node's model-space matrix with the look at (`yaw`,
+/// `pitch_down`): +Z along the look, about the bind's up, at the bind's
+/// origin (`analysis/re-turret-draw.md` 2.2).
+pub fn turret_node(bind: &glam::Mat4, yaw: f32, pitch_down: f32) -> glam::Mat4 {
+    let (sa, ca) = fmath::sin_cos(yaw);
+    let (sb, cb) = fmath::sin_cos(pitch_down);
+    let dir = Vec3::new(sa * cb, -sb, ca * cb);
+    let z = dir.normalize();
+    let x = bind.y_axis.truncate().cross(dir).normalize();
+    let y = z.cross(x);
+    glam::Mat4::from_cols(
+        x.extend(0.0),
+        y.extend(0.0),
+        z.extend(0.0),
+        bind.w_axis.truncate().extend(1.0),
+    )
 }
 
 impl GunSetup {
@@ -497,6 +554,7 @@ mod tests {
             pilot: false,
             turn: None,
             framed: false,
+            gunner: None,
         };
         let b = g.bind_yaw();
         assert!((b.to_degrees() - 89.6).abs() < 0.2, "{}", b.to_degrees());

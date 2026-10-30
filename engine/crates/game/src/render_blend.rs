@@ -289,6 +289,13 @@ pub struct Blend {
     /// Whether it blends: off by default (headless runs draw ticks), on in
     /// the windowed game unless `OPENBF_RENDER_BLEND=0` ([`Blend::from_env`]).
     pub on: bool,
+    /// The share of the next tick's stick turn the last frame drew (None:
+    /// no stick preview drew).
+    drawn: Option<f32>,
+    /// FIRE was down in the last stamped pad.
+    fire_down: bool,
+    /// The fire lag of a press no tick has taken yet.
+    lag: u8,
 }
 
 impl Blend {
@@ -317,6 +324,29 @@ impl Blend {
     pub fn reset(&mut self) {
         debug_assert!(self.saved.is_none());
         self.prev = None;
+        (self.drawn, self.fire_down, self.lag) = (None, false, 0);
+    }
+
+    /// The frame's pad with the fire lag of a FIRE press: the share of the
+    /// turn the reticle was drawn at when it was pressed (the last frame's),
+    /// kept until a tick takes it ([`Blend::consumed`]).
+    pub fn stamp(&mut self, pad: PadState) -> PadState {
+        let down = pad.pressed(core::sim::buttons::FIRE);
+        if down && !self.fire_down {
+            self.lag = self.drawn.map_or(0, PadState::lag_of);
+        }
+        self.fire_down = down;
+        PadState {
+            fire_lag: self.lag,
+            ..pad
+        }
+    }
+
+    /// After the frame's ticks: a stepped tick took the press.
+    pub fn consumed(&mut self, ticks: u32) {
+        if ticks > 0 {
+            self.lag = 0;
+        }
     }
 
     /// Write the pose `t` of the way from the last tick's start to its end
@@ -386,8 +416,23 @@ impl Blend {
     }
 }
 
+/// The frame's blend with the player's look preview drawn in. The mouse's
+/// preview is drawn whole. A controller's on foot is drawn the frame's share
+/// of the way into the next tick's turn (all of it with the blend off), so
+/// the aim moves smoothly; [`Blend::stamp`] fires a press there.
 pub fn blend_in_looking(walk: &mut WalkSim, look: &PadState) {
-    let preview = walk.sim.look_preview(walk.player, look);
+    let mut preview = walk.sim.look_preview(walk.player, look);
+    let share = if walk.blend.on { fraction(walk) } else { 1.0 };
+    walk.blend.drawn = None;
+    let stick = !look.has_look() && !look.mouse_aim();
+    if let (true, Some(LookPreview::Foot { unit, yaw, pitch })) = (stick, preview.as_mut()) {
+        if let Some(u) = walk.sim.units.get(*unit) {
+            let (y0, p0) = (u.soldier.yaw, u.soldier.pitch);
+            *yaw = y0 + (*yaw - y0) * share;
+            *pitch = p0 + (*pitch - p0) * share;
+            walk.blend.drawn = Some(share);
+        }
+    }
     walk.blend_in();
     if let Some(p) = preview {
         let mut blend = std::mem::take(&mut walk.blend);
@@ -651,6 +696,78 @@ mod tests {
         assert!(drawn.angle_between(heading) < 1e-5, "{drawn} {heading}");
         b.restore(&mut w);
         assert_eq!(w.sim.vehicles[i].walker.aim_yaw, aim);
+    }
+
+    /// [ours] 2026-10-29: a held right stick draws the aim smoothly - each
+    /// frame the share of the next tick's turn it is into that tick - not a
+    /// step once a tick. 12 frames a tick over 3 ticks: the drawn yaw only
+    /// turns one way and no frame turns it over 1.5x the mean.
+    #[test]
+    fn a_held_stick_draws_the_aim_smoothly() {
+        let pad = PadState {
+            rx: PadState::quantize(0.5),
+            ..Default::default()
+        };
+        let mut w = walk();
+        w.advance(core::TICK_DT, &[PadState::default()]);
+        let dt = core::TICK_DT / 12.0;
+        let mut drawn = Vec::new();
+        for _ in 0..36 {
+            w.advance(dt, &[pad]);
+            blend_in_looking(&mut w, &pad);
+            let yaw = me(&mut w).yaw;
+            assert_eq!(w.camera().yaw, yaw, "the camera follows the aim");
+            drawn.push(yaw);
+            w.blend_out();
+        }
+        let steps: Vec<f32> = drawn.windows(2).map(|p| p[0] - p[1]).collect();
+        let mean = (drawn[0] - drawn[drawn.len() - 1]) / steps.len() as f32;
+        assert!(mean > 0.0, "the stick turned the aim");
+        for (k, d) in steps.iter().enumerate() {
+            assert!(*d >= 0.0, "frame {k} turned back: {d}");
+            assert!(*d <= 1.5 * mean, "frame {k} stepped {d} (mean {mean})");
+        }
+    }
+
+    /// A FIRE press takes the share of the turn the last frame drew, once:
+    /// held, it latches nothing new; a stepped tick clears it; a mouse aim
+    /// draws no share.
+    #[test]
+    fn a_press_takes_the_share_drawn_before_it() {
+        use core::sim::buttons::FIRE;
+        let stick = PadState {
+            rx: PadState::quantize(0.5),
+            ..Default::default()
+        };
+        let fire = PadState {
+            buttons: FIRE,
+            ..stick
+        };
+        let mut w = walk();
+        w.advance(core::TICK_DT * 1.25, &[PadState::default()]);
+        blend_in_looking(&mut w, &stick);
+        w.blend_out();
+        let mut b = std::mem::take(&mut w.blend);
+        assert_eq!(b.stamp(fire).fire_lag, PadState::lag_of(0.25));
+        assert_eq!(b.stamp(fire).fire_lag, PadState::lag_of(0.25), "kept");
+        b.consumed(0);
+        assert_eq!(b.stamp(fire).fire_lag, PadState::lag_of(0.25), "no tick");
+        b.consumed(1);
+        assert_eq!(b.stamp(fire).fire_lag, 0, "taken");
+        assert_eq!(b.stamp(stick).fire_lag, 0);
+        w.blend = b;
+        let mouse = PadState {
+            mx: PadState::quantize_look(0.1),
+            buttons: core::sim::buttons::MOUSE_AIM,
+            ..PadState::default()
+        };
+        blend_in_looking(&mut w, &mouse);
+        w.blend_out();
+        let fired = PadState {
+            buttons: FIRE | core::sim::buttons::MOUSE_AIM,
+            ..mouse
+        };
+        assert_eq!(w.blend.stamp(fired).fire_lag, 0, "the mouse");
     }
 
     /// The sim never reads the blend: a walk drawn blended at 144 Hz (the

@@ -39,15 +39,7 @@ pub const RECOIL_DECAY: f32 = 4.0;
 /// The `TurretNodeName` node: `bind` is its model-space bind matrix, `yaw`
 /// turns +z toward +x, `pitch_down` is the PS2's (positive = nose down),
 /// both already scaled by their turn factors.
-pub fn turret_node(bind: &Mat4, yaw: f32, pitch_down: f32) -> Mat4 {
-    let (sa, ca) = core::fmath::sin_cos(yaw);
-    let (sb, cb) = core::fmath::sin_cos(pitch_down);
-    look_along(
-        Vec3::new(sa * cb, -sb, ca * cb),
-        bind.y_axis.truncate(),
-        bind.w_axis.truncate(),
-    )
-}
+pub use core::vehicle::gun::turret_node;
 
 /// X = norm(up × dir), Z = norm(dir), Y = Z × X, at `origin`.
 fn look_along(dir: Vec3, up: Vec3, origin: Vec3) -> Mat4 {

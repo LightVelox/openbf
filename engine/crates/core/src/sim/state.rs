@@ -762,6 +762,9 @@ pub struct Sim {
     /// Aim magnet per player slot (parallel to `players`): a unit, or a
     /// vehicle / building turret (card HTGT).
     pub magnet: Vec<Option<super::input::AimTarget>>,
+    /// Per player slot: ticks the held magnet has been out of sight
+    /// (`MAGNET_LOS_GRACE`). Hashed only when one is not 0.
+    pub magnet_hidden: Vec<u8>,
     /// What each player slot's crosshair picks, with its relation (−1
     /// enemy, 0 team 0, 1 friend): the PS2's K+0x30 / K+0x40, which the HUD
     /// reticle colours by (`analysis/re-aim-assist.md` §3.7, card RETC) and
@@ -1281,6 +1284,7 @@ impl Sim {
             assist_lead_on: true,
             assist_lead: Vec::new(),
             magnet: Vec::new(),
+            magnet_hidden: Vec::new(),
             reticle_pick: Vec::new(),
             events: Vec::new(),
             players: Vec::new(),
@@ -1758,6 +1762,10 @@ impl Sim {
             };
             eat(&i.to_le_bytes());
             eat(&g.to_le_bytes());
+        }
+        if self.magnet_hidden.iter().any(|&h| h != 0) {
+            eat(&[0x4d]);
+            eat(&self.magnet_hidden);
         }
         eat(&(self.players.len() as u32).to_le_bytes());
         for p in &self.players {

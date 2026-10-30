@@ -92,7 +92,7 @@ pub(super) fn mouse_drive(
 impl Sim {
     pub fn look_preview(&self, h: UnitHandle, pad: &PadState) -> Option<LookPreview> {
         if !pad.has_look() && !pad.mouse_aim() {
-            return None;
+            return self.stick_preview(h, pad);
         }
         let u = self.unit(h).filter(|u| u.alive)?;
         if let Some(k) = self
@@ -144,6 +144,39 @@ impl Sim {
             seat,
             look: seat_look(&g, st.look, pad.look(), st.zoom),
             walker: false,
+        })
+    }
+}
+
+impl Sim {
+    /// [ours] (the maintainer, 2026-10-29): a controller's preview on foot,
+    /// as the mouse's: the aim the next tick's look step turns to under
+    /// `pad` - the aim assist on the stick as that tick applies it (last
+    /// tick's magnet), the zoom's divided rates, the stance's turn factor -
+    /// so the reticle is drawn where the next tick fires. The tick's zoom
+    /// press is not foreseen. `None` in a seat, flying a droid or a rocket.
+    fn stick_preview(&self, h: UnitHandle, pad: &PadState) -> Option<LookPreview> {
+        let u = self.unit(h).filter(|u| u.alive && u.mount.is_none())?;
+        if self.controlled_droid(h).is_some() || self.controlled_guided(h).is_some() {
+            return None;
+        }
+        let slot = self.players.iter().position(|p| *p == Some(h));
+        let magnet = slot.and_then(|k| Some((k, self.magnet.get(k).copied().flatten()?)));
+        let pad = magnet
+            .and_then(|(k, m)| self.assisted(k, h, m, pad, crate::TICK_DT))
+            .map_or(*pad, |(p, _, _)| p);
+        let mut c = u.consts;
+        if let Some(z) = u.zoom {
+            c.max_turn_speed /= z.divisor;
+            c.max_pitch_speed /= z.divisor;
+        }
+        let (yaw, pitch) = u
+            .soldier
+            .stick_turned(crate::TICK_DT, &pad, &c, u.is_player);
+        Some(LookPreview::Foot {
+            unit: h.index as usize,
+            yaw,
+            pitch,
         })
     }
 }

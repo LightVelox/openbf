@@ -685,6 +685,30 @@ pub struct BoltPrims {
 /// the soldiers where they are.
 pub const HUMAN_SHOT_LAG: f32 = 1.25 * crate::TICK_DT;
 
+/// OURS (the maintainer, 2026-10-29): a round covering this much in one
+/// tick is instant to a player: he aims at the body, not ahead of it. The
+/// discs' rounds are 600 m/s (20 m a tick) or less, or 2000 m/s (66.7 m:
+/// the sniper rifles, BF2's shotgun pellets) and over.
+pub const FAST_ROUND_TICK_M: f32 = 50.0;
+
+/// Is a round of `speed` (m/s) instant to a player ([`FAST_ROUND_TICK_M`])?
+pub fn fast_round(speed: f32) -> bool {
+    speed * crate::TICK_DT >= FAST_ROUND_TICK_M
+}
+
+/// How far back in time a human's bolt of `speed` that has flown `age`
+/// meets the soldiers: [`HUMAN_SHOT_LAG`], and for a [`fast_round`] its
+/// age too (OURS, 2026-10-29), so it meets a soldier where the player saw
+/// him at the press however many ticks it flies (2000 m/s: past 66.7 m it
+/// meets him in its second tick, a tick further on than drawn).
+pub fn human_meet_lag(speed: f32, age: f32) -> f32 {
+    if fast_round(speed) {
+        HUMAN_SHOT_LAG + age
+    } else {
+        HUMAN_SHOT_LAG
+    }
+}
+
 impl BoltPrims {
     /// The same prims `by` away (a human's bolt, [`HUMAN_SHOT_LAG`]).
     pub fn moved(self, by: Vec3) -> Self {
