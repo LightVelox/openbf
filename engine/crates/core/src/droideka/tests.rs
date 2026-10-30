@@ -1,4 +1,5 @@
 use super::*;
+use crate::weapon::{PropSource, DEG};
 use crate::TICK_DT;
 
 const ELF_TABLE: [u8; 112] = [
@@ -395,7 +396,7 @@ fn the_shield_toggles_drains_refills_and_drops_in_the_ball() {
         s.points, 3000.0,
         "a full BF2 shield does not drain until hit"
     );
-    s.absorb_bolt(80.0, 1.0);
+    s.absorb(80.0, 1.0);
     for _ in 0..30 {
         s.tick(TICK_DT, false, false, &c);
     }
@@ -426,13 +427,26 @@ fn the_shield_toggles_drains_refills_and_drops_in_the_ball() {
 }
 
 #[test]
-fn a_bolt_empties_the_shield_without_reaching_past_it() {
+fn the_shield_takes_damage_first_and_passes_on_what_it_cannot_hold() {
     let mut s = Shield {
         points: 50.0,
         on: true,
     };
-    s.absorb_bolt(80.0, 1.0);
+    assert_eq!(s.absorb(80.0, 1.0), 30.0);
     assert_eq!(s.points, 0.0);
+    let mut scaled = Shield {
+        points: 100.0,
+        on: true,
+    };
+    assert_eq!(scaled.absorb(40.0, 2.0), 0.0);
+    assert_eq!(scaled.points, 20.0);
+    assert_eq!(scaled.absorb(40.0, 2.0), 30.0);
+    let mut down = Shield {
+        points: 100.0,
+        on: false,
+    };
+    assert_eq!(down.absorb(40.0, 1.0), 40.0);
+    assert_eq!(down.points, 100.0);
 }
 
 #[test]
@@ -501,32 +515,41 @@ fn the_same_input_gives_the_same_hash() {
 
 #[test]
 fn class_props_read_the_disc_values() {
-    struct Props(Vec<(u32, &'static str)>);
+    struct Props(Vec<(&'static str, &'static str)>, Vec<(u32, &'static str)>);
     impl PropSource for Props {
-        fn prop(&self, _: &str) -> Option<&str> {
-            None
+        fn prop(&self, key: &str) -> Option<&str> {
+            self.0
+                .iter()
+                .find(|p| p.0.eq_ignore_ascii_case(key))
+                .map(|p| p.1)
         }
         fn prop_hash(&self, h: u32) -> Option<&str> {
-            self.0.iter().find(|p| p.0 == h).map(|p| p.1)
+            self.1.iter().find(|p| p.0 == h).map(|p| p.1)
         }
     }
-    let class = Props(vec![
-        (2262762340, "2.5"),
-        (1186703061, "30.0"),
-        (2897009420, "6.0"),
-        (3696381401, "1.0"),
-        (766138891, "1.27"),
-        (3356991735, "0.50"),
-        (839495124, "1.66"),
-        (872657209, "-25.0 25.0"),
-    ]);
-    let shield = Props(vec![
-        (3660878268, "3000"),
-        (3134802965, "-100"),
-        (1922955898, "300"),
-        (494035731, "0.0 1.0 0.125"),
-        (1519518134, "1.25"),
-    ]);
+    let class = Props(
+        vec![
+            ("MaxSpeed", "2.5"),
+            ("TurnThreshold", "30.0"),
+            ("BallMoveSpeed", "6.0"),
+            ("BallJumpHeight", "1.27"),
+            ("RollTime", "0.50"),
+            ("UnrollTime", "1.66"),
+            ("PitchLimits", "-25.0 25.0"),
+        ],
+        vec![(0xdc52_4dd9, "1.0")],
+    );
+    let shield = Props(
+        vec![
+            ("MaxShield", "3000"),
+            ("AddShield", "-100"),
+            ("AddShieldOff", "300"),
+            ("ShieldOffset", "0.0 1.0 0.125"),
+            ("ShieldRadius", "1.25"),
+            ("ShieldSound", "\"droid_fx7_hum\""),
+        ],
+        Vec::new(),
+    );
     let c = DroidekaClass::from_props(&class, Some(&shield));
     assert!((c.turn_threshold - 30.0 * DEG).abs() < 1e-6);
     assert!((c.jump_vy - 4.989).abs() < 1e-3);
@@ -534,6 +557,8 @@ fn class_props_read_the_disc_values() {
     assert_eq!(c.shield.sphere.center, Vec3::new(0.0, 1.0, 0.125));
     assert!((c.ball_omega_cap() - 6.0 / 0.65).abs() < 1e-4);
     assert!((c.pitch_limits.1 - 25.0 * DEG).abs() < 1e-6);
+    assert_eq!(c.shield.sound.as_deref(), Some("droid_fx7_hum"));
+    assert_eq!(c.shield.off_sound, None);
 }
 
 #[test]
@@ -558,4 +583,20 @@ fn the_camera_takes_the_class_sections_by_form_and_falls_back_without_them() {
         DroidekaClass::default().camera_section(Form::Walk, false),
         None
     );
+}
+
+#[test]
+fn the_engine_runs_while_folding_and_rolling_only() {
+    let c = DroidekaClass::default();
+    let mut d = Droideka::new(&c, Order::Roll);
+    for (state, on) in [
+        (IDLE, false),
+        (LEFT_TO_RIGHT, false),
+        (IDLE_TO_ROLL, true),
+        (ROLLING, true),
+        (ROLL_TO_IDLE, false),
+    ] {
+        d.state = state;
+        assert_eq!(d.engine_on(), on, "state {state}");
+    }
 }

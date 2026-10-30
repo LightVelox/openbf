@@ -896,16 +896,7 @@ impl SoldierVisuals {
             .sim
             .units
             .iter()
-            .map(|u| {
-                let (d, c) = (u.droideka.as_deref()?, u.droideka_class()?);
-                (u.alive && !u.burst).then(|| {
-                    core::droideka::local_to_world(
-                        u.soldier.pos,
-                        u.soldier.yaw,
-                        c.gun(d.barrel.wrapping_add(1)),
-                    )
-                })
-            })
+            .map(|u| u.droideka_gun(1).filter(|_| u.alive && !u.burst))
             .collect();
         for (i, sa, model, palette) in self.posed(walk) {
             if let (Some(hp), None) = (sa.hp_weapons, walk.sim.units[i].mount) {

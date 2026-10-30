@@ -183,10 +183,22 @@ pub fn skin_glb(
     bank: Option<&AnimBank<'_>>,
     class: &EntityClass,
 ) -> anyhow::Result<Vec<u8>> {
+    skin_glb_of(skel, bank, &ENTRIES, &LAYERS, |tracks, d| {
+        restore_atte_cannon_offset(tracks, d, skel, class);
+    })
+}
+
+pub fn skin_glb_of(
+    skel: &Skeleton,
+    bank: Option<&AnimBank<'_>>,
+    entries: &[(&str, bool)],
+    layers: &[&str],
+    fix: impl Fn(&mut [crate::skin_glb::ClipTrack], &mungefs::anim::DecodedClip),
+) -> anyhow::Result<Vec<u8>> {
     let mut clips = Vec::new();
     if let Some(bank) = bank {
-        for (name, _) in ENTRIES.iter().filter(|(n, _)| !n.is_empty()) {
-            for layer in LAYERS {
+        for (name, _) in entries.iter().filter(|(n, _)| !n.is_empty()) {
+            for layer in layers {
                 let full = format!("{name}{layer}");
                 let Some(k) = bank
                     .clip_index(&full)
@@ -196,7 +208,7 @@ pub fn skin_glb(
                 };
                 let Ok(d) = bank.decode_clip(k) else { continue };
                 let (mut tracks, _) = crate::soldier::clip_to_tracks(&d, skel, None);
-                restore_atte_cannon_offset(&mut tracks, &d, skel, class);
+                fix(&mut tracks, &d);
                 let mut kept: Vec<crate::skin_glb::ClipTrack> = Vec::new();
                 for t in tracks {
                     kept.retain(|k| k.bone != t.bone);

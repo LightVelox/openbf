@@ -154,22 +154,6 @@ fn the_side_bakes_carry_each_droideka_with_its_hardpoints() {
 }
 
 #[test]
-fn the_engine_runs_while_folding_and_rolling_only() {
-    let c = DroidekaClass::default();
-    let mut d = core::droideka::Droideka::new(&c, core::droideka::Order::Roll);
-    for (state, on) in [
-        (core::droideka::IDLE, false),
-        (core::droideka::LEFT_TO_RIGHT, false),
-        (core::droideka::IDLE_TO_ROLL, true),
-        (core::droideka::ROLLING, true),
-        (core::droideka::ROLL_TO_IDLE, false),
-    ] {
-        d.state = state;
-        assert_eq!(engine_on(&d), on, "state {state}");
-    }
-}
-
-#[test]
 fn the_shield_hum_fades_as_the_shield_wears() {
     assert_eq!(shield_gain(3000.0, 3000.0), 1.0);
     assert_eq!(shield_gain(1500.0, 3000.0), 0.75);

@@ -1,44 +1,24 @@
 use super::look::far_cull;
-use super::scene::{draw_in, spec_cull};
-use super::upload::{upload_cpu_texture, upload_submeshes, upload_texture_file};
-use super::vehicles::{find_model, find_texture, ModelSource, TexSource, VehicleSides};
-use super::walker_pose::{skin, WalkerRig};
+use super::scene::spec_cull;
+use super::upload::upload_cpu_texture;
+use super::vehicles::{
+    find_model, pose_class, upload_parts, ClassVis, ModelSource, TexSource, VehicleSides,
+};
+use super::walker_pose::WalkerRig;
 use crate::assets::{load_glb_joints, load_skinned_glb, Scene};
 use anyhow::Result;
 use core::droideka::{Droideka, DroidekaClass, ROLLING};
 use core::vehicle::walker::WalkerState;
 use glam::{Mat4, Vec3};
-use render::{
-    DrawCmd, DrawLayer, LightPath, MeshData, MeshHandle, ParticleDraw, ParticleShape, Renderer,
-    TextureHandle, Vertex,
-};
+use render::{DrawCmd, MeshHandle, ParticleDraw, ParticleShape, Renderer, TextureHandle};
 use std::collections::HashMap;
 use std::path::Path;
 
-struct Part {
-    texture: Option<TextureHandle>,
-    layer: DrawLayer,
-    spec: Option<([f32; 3], u32)>,
-    light: LightPath,
-    verts: Vec<u32>,
-    tris: Vec<u32>,
-}
-
-struct Model {
-    parts: Vec<Part>,
-    rig: WalkerRig,
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    uvs: Vec<[f32; 2]>,
-    colors: Vec<[u8; 4]>,
-    joints: Vec<[u8; 4]>,
-}
-
 #[derive(Default)]
 pub struct DroidekaVisuals {
-    models: Vec<Model>,
+    models: Vec<ClassVis>,
     by_class: [Vec<Option<usize>>; 2],
-    posed: HashMap<usize, (u32, usize, Vec<MeshHandle>)>,
+    posed: HashMap<usize, ((u32, usize), Vec<MeshHandle>)>,
     cull: Option<f32>,
     spec_cull: Option<f32>,
     bubble_texture: Option<TextureHandle>,
@@ -217,8 +197,12 @@ impl DroidekaVisuals {
             else {
                 continue;
             };
-            let w = walker_state(d, c);
-            let meshes = match pose(r, &mut self.posed, &self.models[k], slot, u.gen, k, &w) {
+            let model = &self.models[k];
+            let Some(rig) = model.rig() else {
+                continue;
+            };
+            let palette = rig.palette(&walker_state(d, c), 1.0);
+            let meshes = match pose_class(r, &mut self.posed, slot, (u.gen, k), model, &palette) {
                 Ok(m) => m,
                 Err(e) => {
                     eprintln!("droideka {slot}: {e:#}");
@@ -226,20 +210,13 @@ impl DroidekaVisuals {
                 }
             };
             let m = model_matrix(u.soldier.pos, u.soldier.yaw, d, c);
-            for (p, &mesh) in self.models[k].parts.iter().zip(&meshes) {
-                if let (Some(t), Some((rgb, power))) = (p.texture, p.spec) {
-                    out.push(
-                        DrawCmd::specular(mesh, t, rgb, power, m)
-                            .with_cull(self.spec_cull)
-                            .with_light(p.light),
-                    );
-                }
-                let base = match p.texture {
-                    Some(t) => draw_in(p.layer, mesh, t, m),
-                    None => DrawCmd::flat(mesh, [0.6, 0.6, 0.6, 1.0], m),
-                };
-                out.push(base.with_cull(self.cull).with_light(p.light));
-            }
+            model.draws(
+                &mut out,
+                Some(&meshes),
+                m,
+                (self.cull, self.spec_cull),
+                None,
+            );
         }
         out
     }
@@ -255,17 +232,14 @@ impl DroidekaVisuals {
                 continue;
             };
             let on = u.alive && d.shield.on;
-            let e = self.bubbles.entry(slot).or_insert((
+            let settled = (
                 u.gen,
                 on,
                 now - if on { BUBBLE_GROW } else { BUBBLE_SHRINK },
-            ));
+            );
+            let e = self.bubbles.entry(slot).or_insert(settled);
             if e.0 != u.gen {
-                *e = (
-                    u.gen,
-                    on,
-                    now - if on { BUBBLE_GROW } else { BUBBLE_SHRINK },
-                );
+                *e = settled;
             } else if e.1 != on {
                 *e = (u.gen, on, now);
             }
@@ -275,11 +249,7 @@ impl DroidekaVisuals {
             if u.burst {
                 continue;
             }
-            let pos = core::droideka::local_to_world(
-                u.soldier.pos,
-                u.soldier.yaw,
-                c.shield.sphere.center,
-            );
+            let pos = u.droideka_point(c.shield.sphere.center);
             let radius = c.shield.sphere.radius;
             let mut color = self.bubble_color;
             if pos.distance_squared(eye) < radius * radius {
@@ -299,66 +269,13 @@ impl DroidekaVisuals {
     }
 }
 
-fn pose(
-    r: &mut Renderer,
-    posed: &mut HashMap<usize, (u32, usize, Vec<MeshHandle>)>,
-    model: &Model,
-    slot: usize,
-    gen: u32,
-    k: usize,
-    w: &WalkerState,
-) -> Result<Vec<MeshHandle>> {
-    let palette = model.rig.palette(w, 1.0);
-    let (pos, nrm) = skin(&palette, &model.positions, &model.normals, &model.joints);
-    let at = |i: &u32| *i as usize;
-    let fresh = posed.get(&slot).is_none_or(|&(g, m, _)| g != gen || m != k);
-    let mut handles = Vec::with_capacity(model.parts.len());
-    for (n, p) in model.parts.iter().enumerate() {
-        if fresh {
-            let positions: Vec<[f32; 3]> = p.verts.iter().map(|i| pos[at(i)]).collect();
-            let normals: Vec<[f32; 3]> = p.verts.iter().map(|i| nrm[at(i)]).collect();
-            let uvs: Vec<[f32; 2]> = p.verts.iter().map(|i| model.uvs[at(i)]).collect();
-            let colors: Vec<[u8; 4]> = p.verts.iter().map(|i| model.colors[at(i)]).collect();
-            handles.push(
-                r.add_dynamic_mesh(&MeshData {
-                    positions: &positions,
-                    normals: &normals,
-                    uvs: &uvs,
-                    colors: Some(&colors),
-                    indices: &p.tris,
-                })
-                .map_err(|e| anyhow::anyhow!("part {n}: {e}"))?,
-            );
-        } else {
-            let h = posed[&slot].2[n];
-            let vs: Vec<Vertex> = p
-                .verts
-                .iter()
-                .map(|i| Vertex {
-                    position: pos[at(i)],
-                    normal: nrm[at(i)],
-                    uv: model.uvs[at(i)],
-                    color: model.colors[at(i)],
-                })
-                .collect();
-            r.update_vertices(h, &vs)
-                .map_err(|e| anyhow::anyhow!("part {n}: {e}"))?;
-            handles.push(h);
-        }
-    }
-    if fresh {
-        posed.insert(slot, (gen, k, handles.clone()));
-    }
-    Ok(handles)
-}
-
 fn upload(
     r: &mut Renderer,
     scene: &Scene,
     sides: &VehicleSides,
     textures: &mut HashMap<(Option<TexSource>, String), Option<TextureHandle>>,
     record: &manifest::ManifestDroideka,
-) -> Result<Model> {
+) -> Result<ClassVis> {
     let Some(ModelSource::Side(i, model)) = find_model(&scene.manifest, sides, &record.geometry)
     else {
         anyhow::bail!("no side model for {}", record.geometry);
@@ -371,80 +288,7 @@ fn upload(
     let skin_name = record.skin.as_deref().unwrap_or(&model);
     let a = load_skinned_glb(&dir.join("walkers").join(format!("{skin_name}.glb")))?;
     let rig = WalkerRig::new(a.skeleton, a.clips, &crate::droideka::as_walker(record));
-    let mut parts = Vec::new();
-    for (k, (_, mat, layer, _)) in upload_submeshes(r, &cpu)?.into_iter().enumerate() {
-        let texture = match mat {
-            Some(name) => texture(r, scene, sides, Some(i), textures, name)?,
-            None => None,
-        };
-        if texture.is_none() && super::route_untextured(mat) != super::Untextured::LookupFailed {
-            continue;
-        }
-        let (start, count) = (cpu.submeshes[k].0 as usize, cpu.submeshes[k].1 as usize);
-        let (verts, tris) = compact(&cpu.indices[start..start + count], cpu.positions.len());
-        parts.push(Part {
-            texture,
-            layer,
-            spec: cpu
-                .spec_pass(k)
-                .map(|p| (p.rgb_under(r.lighting.sun_color), p.power)),
-            light: cpu.light_path(k),
-            verts,
-            tris,
-        });
-    }
-    Ok(Model {
-        parts,
-        rig,
-        positions: cpu.positions.clone(),
-        normals: cpu.normals.clone(),
-        uvs: cpu.uvs.clone(),
-        colors: cpu.colors.clone(),
-        joints,
-    })
-}
-
-fn compact(idx: &[u32], vertices: usize) -> (Vec<u32>, Vec<u32>) {
-    let mut slot = vec![u32::MAX; vertices];
-    let mut verts = Vec::new();
-    let tris = idx
-        .iter()
-        .map(|&i| {
-            let s = &mut slot[i as usize];
-            if *s == u32::MAX {
-                *s = verts.len() as u32;
-                verts.push(i);
-            }
-            *s
-        })
-        .collect();
-    (verts, tris)
-}
-
-fn texture(
-    r: &mut Renderer,
-    scene: &Scene,
-    sides: &VehicleSides,
-    home: Option<usize>,
-    cache: &mut HashMap<(Option<TexSource>, String), Option<TextureHandle>>,
-    name: &str,
-) -> Result<Option<TextureHandle>> {
-    let name = name.to_ascii_lowercase();
-    let source = find_texture(&scene.manifest, sides, home, &name);
-    let key = (source, name.clone());
-    if let Some(&t) = cache.get(&key) {
-        return Ok(t);
-    }
-    let found = match source {
-        None => None,
-        Some(TexSource::Map) => match scene.textures.get(&name) {
-            Some(t) => Some(upload_cpu_texture(r, t, &name)?),
-            None => None,
-        },
-        Some(TexSource::Side(i)) => upload_texture_file(r, &sides.dir(i).join("textures"), &name)?,
-    };
-    cache.insert(key, found);
-    Ok(found)
+    upload_parts(r, scene, sides, textures, &cpu, Some(i), Some(rig), joints)
 }
 
 #[cfg(test)]

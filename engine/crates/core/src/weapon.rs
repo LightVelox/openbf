@@ -83,6 +83,15 @@ pub(crate) fn pair(src: &dyn PropSource, key: &str) -> Option<[f32; 2]> {
     Some([a, b])
 }
 
+pub fn floats<const N: usize>(v: &str) -> Option<[f32; N]> {
+    let mut out = [0.0; N];
+    let mut it = v.split_whitespace();
+    for slot in &mut out {
+        *slot = it.next()?.parse().ok()?;
+    }
+    Some(out)
+}
+
 mod ability;
 mod dispenser;
 mod ordnance;

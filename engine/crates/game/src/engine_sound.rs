@@ -391,7 +391,7 @@ impl EngineSounds {
                 && (u.soldier.stance.jetting()
                     || u.droideka
                         .as_deref()
-                        .is_some_and(crate::droideka::engine_on)),
+                        .is_some_and(core::droideka::Droideka::engine_on)),
             pos: u.soldier.pos,
             vel: u.soldier.vel,
             health: if u.health.max > 0.0 {

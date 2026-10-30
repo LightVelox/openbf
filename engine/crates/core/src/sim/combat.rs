@@ -11,7 +11,7 @@ use crate::droideka::{self, Sphere};
 use crate::impact::Surface;
 use crate::projectile::{Bolt, Hit, Target};
 use crate::soldier::Stance;
-use crate::unit::{Controller, UnitHandle};
+use crate::unit::{Controller, Unit, UnitHandle};
 use crate::vehicle::VehicleHandle;
 use crate::TICK_HZ;
 use glam::Vec3;
@@ -207,6 +207,11 @@ impl Sim {
     /// 3; the port's Hard and Elite - our Normal has the PS2 Elite's base
     /// skill but not its level-3 rules, so it goes without
     /// this). BF1 has no such gate; one rule on both games' maps.
+    fn bolt_spares(&self, b: &Bolt, victim: &Unit) -> bool {
+        (victim.is_player && self.cheats.invincible)
+            || (victim.is_human() && victim.team == b.team && !b.shooter_is_player)
+    }
+
     fn hit_scale(&self, b: &Bolt) -> f32 {
         // [ours] A proxy with `headshots` counts its head hits as a player
         // does (its slot keeps the flag through deaths).
@@ -236,8 +241,11 @@ impl Sim {
                 };
                 let victim_team = victim.team;
                 // Card DPRX: a proxy is a human victim (no cheats: below).
-                let victim_is_player = victim.is_human();
-                let victim_cheats = victim.is_player;
+                // A bolt of a unit that is not a human player does nothing to
+                // a human player of its own team (B1 FUN_001bc190, B2
+                // FUN_001dfb38: TakeDamage returns before the scale;
+                // re-blaster-damage.md section 6.3) - as a blast, `blast_unit`.
+                let invincible = self.bolt_spares(b, victim);
                 // Card TOKN: a bot without one of this human's tokens aimed
                 // beside him; a bolt that meets him anyway is real (counted).
                 if crate::ai::tokn::bars(self, b.owner, h) {
@@ -253,12 +261,6 @@ impl Sim {
                     .ordnance
                     .damage_desc_charged(b.age, false, b.charge);
                 let friendly = victim_team == b.team;
-                // A bolt of a unit that is not a human player does nothing to
-                // a human player of its own team (B1 FUN_001bc190, B2
-                // FUN_001dfb38: TakeDamage returns before the scale;
-                // re-blaster-damage.md section 6.3) - as a blast, `blast_unit`.
-                let invincible = (victim_cheats && self.cheats.invincible)
-                    || (victim_is_player && friendly && !b.shooter_is_player);
                 let ff = self.friendly_fire_scale;
                 // No tier multiplies a bot's bolt into a human (card DRETIRE,
                 // The maintainer 2026-10-28: D12's ×1.15 / ×1.3 retired).
@@ -311,21 +313,21 @@ impl Sim {
                 let Some(victim) = self.unit(h) else {
                     return;
                 };
-                let friendly = victim.team == b.team;
-                let invincible = (victim.is_player && self.cheats.invincible)
-                    || (victim.is_human() && friendly && !b.shooter_is_player);
+                let spared = self.bolt_spares(b, victim);
+                let ff = if victim.team == b.team {
+                    self.friendly_fire_scale
+                } else {
+                    1.0
+                };
                 let desc = self.weapon_classes[b.weapon_class]
                     .ordnance
                     .damage_desc_charged(b.age, false, b.charge);
-                let mut dmg = desc.damage * self.buff_scale(Some(b.owner), h);
-                if friendly {
-                    dmg *= self.friendly_fire_scale;
-                }
-                if !invincible {
-                    self.droideka_bolt_on_shield(h, dmg, desc.shield_scale);
-                }
+                let dmg = desc.damage * self.buff_scale(Some(b.owner), h) * ff;
                 let tick = self.tick;
                 if let Some(u) = self.unit_mut(h) {
+                    if let Some(d) = u.droideka.as_mut().filter(|_| !spared) {
+                        d.shield.absorb(dmg, desc.shield_scale);
+                    }
                     u.last_hit = Some((b.owner, tick));
                 }
                 self.nav_stats.bolt_hits += 1;

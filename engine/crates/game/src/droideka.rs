@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use core::droideka::{ClipInfo, DroidekaClass, Sphere, CLIP_FRAMES, STATES};
+use core::weapon::floats;
 use glam::Vec3;
 use manifest::{ManifestDroideka, ManifestHardpoint, ManifestWalker, VehicleManifest};
 
@@ -109,18 +110,13 @@ pub fn install(rosters: &mut [crate::roster::FactionRoster; 2], map_dir: &Path, 
 }
 
 pub fn camera_sections(db: &ClassDb, class: &str) -> Vec<(u32, core::unit::CameraSection)> {
-    let key = |n: &str| crate::classdb::fnv1a_lowercase(n);
+    let key = crate::classdb::fnv1a_lowercase;
     let (section, eye, track, tilt) = (
         key("CameraSection"),
         key("EyePointOffset"),
         key("TrackOffset"),
         key("TiltValue"),
     );
-    let floats = |v: &str| -> Vec<f32> {
-        v.split_whitespace()
-            .filter_map(|t| t.parse().ok())
-            .collect()
-    };
     let mut out: Vec<(u32, core::unit::CameraSection)> = Vec::new();
     let Some(def) = db.get(class) else {
         return out;
@@ -140,13 +136,18 @@ pub fn camera_sections(db: &ClassDb, class: &str) -> Vec<(u32, core::unit::Camer
         let Some((_, s)) = out.last_mut() else {
             continue;
         };
-        let f = floats(v);
-        if *k == eye && f.len() >= 3 {
-            s.eye_y = f[1];
-        } else if *k == track && f.len() >= 3 {
-            s.offset = Vec3::new(f[0], f[1], f[2]);
-        } else if *k == tilt && !f.is_empty() {
-            s.tilt = f[0].to_radians();
+        if *k == eye {
+            if let Some([_, y, _]) = floats::<3>(v) {
+                s.eye_y = y;
+            }
+        } else if *k == track {
+            if let Some(offset) = floats::<3>(v) {
+                s.offset = Vec3::from_array(offset);
+            }
+        } else if *k == tilt {
+            if let Some([t]) = floats::<1>(v) {
+                s.tilt = t.to_radians();
+            }
         }
     }
     out
@@ -194,13 +195,6 @@ pub fn droideka_class(
     c
 }
 
-pub fn engine_on(d: &core::droideka::Droideka) -> bool {
-    matches!(
-        d.state,
-        core::droideka::IDLE_TO_ROLL | core::droideka::ROLLING
-    )
-}
-
 pub fn shield_gain(points: f32, max: f32) -> f32 {
     let lost = 1.0
         - if max > 0.0 {
@@ -215,13 +209,14 @@ pub fn shield_loops(sim: &core::sim::Sim) -> Vec<(core::unit::UnitHandle, &str, 
     sim.alive_units()
         .filter_map(|(h, u)| {
             let (d, c) = (u.droideka.as_deref()?, u.droideka_class()?);
-            let name = c.shield.sound.as_deref().filter(|_| d.shield.on)?;
-            let centre = core::droideka::local_to_world(
-                u.soldier.pos,
-                u.soldier.yaw,
-                c.shield.sphere.center,
-            );
-            Some((h, name, shield_gain(d.shield.points, c.shield.max), centre))
+            let name = c.shield.sound.as_deref()?;
+            let bubble = u.droideka_shield()?;
+            Some((
+                h,
+                name,
+                shield_gain(d.shield.points, c.shield.max),
+                bubble.center,
+            ))
         })
         .collect()
 }

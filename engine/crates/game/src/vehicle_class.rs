@@ -33,7 +33,7 @@ pub use walker::{WalkerClass, WALKER_BASES};
 
 use crate::classdb::{fnv1a_lowercase, ClassDb, ClassDef};
 use core::vehicle::hover::{HoverParams, HullBody, HullShape, JumpParams, Spring};
-use core::weapon::HealthType;
+use core::weapon::{floats, HealthType};
 
 /// Engine bases that construct the PS2 hover class (`treaded` IS a hover on
 /// both discs, re-vehicles §2; BF1's commandhover reuses the integrator §3).
@@ -237,15 +237,6 @@ fn scoped(def: &ClassDef) -> Vec<(Scope, u32, &str)> {
         }
     }
     out
-}
-
-fn floats<const N: usize>(v: &str) -> Option<[f32; N]> {
-    let mut out = [0.0; N];
-    let mut it = v.split_whitespace();
-    for slot in &mut out {
-        *slot = it.next()?.parse().ok()?;
-    }
-    Some(out)
 }
 
 /// Fill `out` from as many numbers as the line gives, as the PS2's

@@ -51,33 +51,5 @@ pub fn bake(
 }
 
 pub fn skin_glb(skel: &Skeleton, bank: Option<&AnimBank<'_>>) -> anyhow::Result<Vec<u8>> {
-    let mut clips = Vec::new();
-    for (name, _) in ENTRIES.iter().filter(|(n, _)| !n.is_empty()) {
-        let Some(bank) = bank else { break };
-        let Some(k) = bank
-            .clip_index(name)
-            .or_else(|| bank.clip_index(&format!("{}_{name}", bank.name)))
-        else {
-            continue;
-        };
-        let Ok(d) = bank.decode_clip(k) else { continue };
-        let (tracks, _) = crate::soldier::clip_to_tracks(&d, skel, None);
-        let mut kept: Vec<crate::skin_glb::ClipTrack> = Vec::new();
-        for t in tracks {
-            kept.retain(|k| k.bone != t.bone);
-            kept.push(t);
-        }
-        clips.push(crate::skin_glb::Clip {
-            name: (*name).to_owned(),
-            fps: 30.0,
-            frames: u32::from(d.frames),
-            tracks: kept,
-        });
-    }
-    let model = crate::skin_glb::SkinnedModel {
-        name: skel.name.clone(),
-        bones: crate::soldier::bones_of(skel),
-        segments: Vec::new(),
-    };
-    crate::skin_glb::skinned_to_glb(&model, &clips)
+    crate::walker::skin_glb_of(skel, bank, &ENTRIES, &[""], |_, _| {})
 }

@@ -33,13 +33,21 @@ impl Unit {
         self.droideka.as_ref().map(|d| d.form())
     }
 
+    pub fn droideka_point(&self, local: Vec3) -> Vec3 {
+        local_to_world(self.soldier.pos, self.soldier.yaw, local)
+    }
+
+    pub fn droideka_sphere(&self, local: Sphere) -> Sphere {
+        Sphere {
+            center: self.droideka_point(local.center),
+            radius: local.radius,
+        }
+    }
+
     pub fn droideka_shield(&self) -> Option<Sphere> {
         let d = self.droideka.as_ref()?;
         let c = self.droideka_class()?;
-        d.shield.on.then(|| Sphere {
-            center: local_to_world(self.soldier.pos, self.soldier.yaw, c.shield.sphere.center),
-            radius: c.shield.sphere.radius,
-        })
+        d.shield.on.then(|| self.droideka_sphere(c.shield.sphere))
     }
 
     pub fn droideka_spheres(&self) -> Vec<Sphere> {
@@ -48,21 +56,31 @@ impl Unit {
         };
         c.ordnance_spheres(d.form())
             .into_iter()
-            .map(|s| Sphere {
-                center: local_to_world(self.soldier.pos, self.soldier.yaw, s.center),
-                radius: s.radius,
-            })
+            .map(|s| self.droideka_sphere(s))
             .collect()
     }
 
     pub fn droideka_muzzle(&self) -> Option<Vec3> {
+        self.droideka_gun(0)
+    }
+
+    pub fn droideka_gun(&self, ahead: u8) -> Option<Vec3> {
         let d = self.droideka.as_ref()?;
         let c = self.droideka_class()?;
-        Some(local_to_world(
-            self.soldier.pos,
-            self.soldier.yaw,
-            c.gun(d.barrel),
-        ))
+        Some(self.droideka_point(c.gun(d.barrel.wrapping_add(ahead))))
+    }
+
+    pub(crate) fn lend_droideka_shield<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::weapon::Health) -> R,
+    ) -> R {
+        let Some(d) = self.droideka.as_mut().filter(|d| d.shield.on) else {
+            return f(&mut self.health);
+        };
+        self.health.shield = d.shield.points;
+        let out = f(&mut self.health);
+        d.shield.points = std::mem::take(&mut self.health.shield);
+        out
     }
 
     pub fn separation_radius(&self) -> f32 {
@@ -202,30 +220,9 @@ impl Sim {
         let Some(d) = u.droideka.as_mut() else {
             return;
         };
-        let mut dmg = amount;
-        if d.shield.on && d.shield.points > 0.0 {
-            if dmg <= d.shield.points {
-                d.shield.points -= dmg;
-                dmg = 0.0;
-            } else {
-                dmg -= d.shield.points;
-                d.shield.points = 0.0;
-            }
-        }
-        u.health.cur -= dmg;
+        u.health.cur -= d.shield.absorb(amount, 1.0);
         if !u.health.alive() {
             self.kill_environment(h, cause);
-        }
-    }
-
-    pub(super) fn droideka_bolt_on_shield(
-        &mut self,
-        h: crate::unit::UnitHandle,
-        damage: f32,
-        scale: f32,
-    ) {
-        if let Some(d) = self.unit_mut(h).and_then(|u| u.droideka.as_mut()) {
-            d.shield.absorb_bolt(damage, scale);
         }
     }
 

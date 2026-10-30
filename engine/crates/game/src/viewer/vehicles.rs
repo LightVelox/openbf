@@ -58,9 +58,41 @@ struct Skin {
 }
 
 /// One class's uploaded model.
-struct ClassVis {
+pub(super) struct ClassVis {
     parts: Vec<Part>,
     skin: Option<Skin>,
+}
+
+impl ClassVis {
+    pub(super) fn rig(&self) -> Option<&WalkerRig> {
+        self.skin.as_ref().map(|s| &s.rig)
+    }
+
+    pub(super) fn draws(
+        &self,
+        out: &mut Vec<DrawCmd>,
+        meshes: Option<&[MeshHandle]>,
+        m: Mat4,
+        cull: (Option<f32>, Option<f32>),
+        fade: Option<render::Fade>,
+    ) {
+        for (k, p) in self.parts.iter().enumerate() {
+            let mesh = meshes.map_or(p.mesh, |h| h[k]);
+            if let (Some(t), Some((rgb, power))) = (p.texture, p.spec) {
+                out.push(
+                    DrawCmd::specular(mesh, t, rgb, power, m)
+                        .with_cull(cull.1)
+                        .with_light(p.light)
+                        .with_fade(fade),
+                );
+            }
+            let base = match p.texture {
+                Some(t) => draw_in(p.layer, mesh, t, m),
+                None => DrawCmd::flat(mesh, [0.6, 0.6, 0.6, 1.0], m),
+            };
+            out.push(base.with_cull(cull.0).with_light(p.light).with_fade(fade));
+        }
+    }
 }
 
 /// Every vehicle class's uploaded model, by `Vehicle::class`.
@@ -343,26 +375,13 @@ impl VehicleVisuals {
                 v.rot
             };
             let m = Mat4::from_rotation_translation(rot, v.pos);
-            for (k, p) in class.parts.iter().enumerate() {
-                let mesh = posed.as_ref().map_or(p.mesh, |h| h[k]);
-                if let (Some(t), Some((rgb, power))) = (p.texture, p.spec) {
-                    out.push(
-                        DrawCmd::specular(mesh, t, rgb, power, m)
-                            .with_cull(self.spec_cull)
-                            .with_light(p.light)
-                            .with_fade(fade),
-                    );
-                }
-                let base = match p.texture {
-                    Some(t) => draw_in(p.layer, mesh, t, m),
-                    None => DrawCmd::flat(mesh, [0.6, 0.6, 0.6, 1.0], m),
-                };
-                out.push(
-                    base.with_cull(self.cull)
-                        .with_light(p.light)
-                        .with_fade(fade),
-                );
-            }
+            class.draws(
+                &mut out,
+                posed.as_deref(),
+                m,
+                (self.cull, self.spec_cull),
+                fade,
+            );
         }
         out.extend(self.items.draws(r, sim));
         out
@@ -380,9 +399,42 @@ fn pose_meshes(
     sk: &Skin,
     root_scale: f32,
 ) -> Result<Vec<MeshHandle>> {
-    let palette = sk.rig.aimed_palette(v, root_scale);
-    let (pos, nrm) = skin(&palette, &sk.positions, &sk.normals, &sk.joints);
-    let fresh = posed.get(&slot).is_none_or(|(c, _)| *c != v.class);
+    pose_skinned(
+        r,
+        posed,
+        slot,
+        v.class,
+        class,
+        sk,
+        &sk.rig.aimed_palette(v, root_scale),
+    )
+}
+
+pub(super) fn pose_class<K: Copy + PartialEq>(
+    r: &mut Renderer,
+    posed: &mut HashMap<usize, (K, Vec<MeshHandle>)>,
+    slot: usize,
+    key: K,
+    class: &ClassVis,
+    palette: &[Mat4],
+) -> Result<Vec<MeshHandle>> {
+    let Some(sk) = &class.skin else {
+        anyhow::bail!("not skinned");
+    };
+    pose_skinned(r, posed, slot, key, class, sk, palette)
+}
+
+fn pose_skinned<K: Copy + PartialEq>(
+    r: &mut Renderer,
+    posed: &mut HashMap<usize, (K, Vec<MeshHandle>)>,
+    slot: usize,
+    key: K,
+    class: &ClassVis,
+    sk: &Skin,
+    palette: &[Mat4],
+) -> Result<Vec<MeshHandle>> {
+    let (pos, nrm) = skin(palette, &sk.positions, &sk.normals, &sk.joints);
+    let fresh = posed.get(&slot).is_none_or(|(c, _)| *c != key);
     let mut handles = Vec::with_capacity(class.parts.len());
     for (k, p) in class.parts.iter().enumerate() {
         let Some((verts, indices)) = &p.skin else {
@@ -422,7 +474,7 @@ fn pose_meshes(
         }
     }
     if fresh {
-        posed.insert(slot, (v.class, handles.clone()));
+        posed.insert(slot, (key, handles.clone()));
     }
     Ok(handles)
 }
@@ -500,6 +552,20 @@ fn upload_class(
             (&owned, Some(i))
         }
     };
+    upload_parts(r, scene, sides, textures, cpu, home, rig, joints).map(Some)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn upload_parts(
+    r: &mut Renderer,
+    scene: &Scene,
+    sides: &VehicleSides,
+    textures: &mut HashMap<(Option<TexSource>, String), Option<TextureHandle>>,
+    cpu: &CpuMesh,
+    home: Option<usize>,
+    rig: Option<WalkerRig>,
+    joints: Vec<[u8; 4]>,
+) -> Result<ClassVis> {
     let mut parts = Vec::new();
     for (k, (mesh, mat, layer, _)) in upload_submeshes(r, cpu)?.into_iter().enumerate() {
         let texture = match mat {
@@ -531,7 +597,7 @@ fn upload_class(
         colors: cpu.colors.clone(),
         joints,
     });
-    Ok(Some(ClassVis { parts, skin }))
+    Ok(ClassVis { parts, skin })
 }
 
 /// One submesh's vertices (first-use order) and its triangles over them.
