@@ -26,7 +26,8 @@
 //! again as a fresh, neutral, empty turret at full health.
 
 use super::state::Sim;
-use crate::collision::HullPart;
+use crate::collision::{Aabb, HullPart};
+use crate::vehicle::gun::Rig;
 use crate::vehicle::{VehicleHandle, VehicleSpec};
 use crate::weapon::HealthType;
 use glam::{Mat4, Quat, Vec3};
@@ -62,6 +63,37 @@ pub struct BuildingTurret {
     pub standing_parts: Vec<HullPart>,
     /// Its health while down; `None` while it stands.
     pub down: Option<f32>,
+    /// Its prims on the nodes its gun moves (card TCOL), `None` when it has
+    /// none.
+    pub posed: Option<PosedParts>,
+}
+
+/// A building turret's collision prims that hang on a node its gunner seat
+/// moves (the turret, aimer or a barrel node). The PS2 places every body of
+/// an armed building through the same node table its turret writes the
+/// live gun into (`analysis/re-turret-collision.md` 0.1, 1.1-1.6), so a prim
+/// on the aimer node turns and pitches with the gun: Geonosis's cannon has 3
+/// of its 4 prims on `aimer_x`, its whole gun from 1.6 to 3.2 m.
+/// PROVISIONAL (ours): placed from the seat's gun state of the tick before
+/// (the turret's task runs before the aimer's, re-turret-draw 2.3), barrels
+/// at rest (the recoil slide does not move a barrel's prim).
+#[derive(Clone, Debug)]
+pub struct PosedParts {
+    pub rig: Rig,
+    /// The gunner seat whose `GunState` poses the rig.
+    pub seat: usize,
+    pub bodies: Vec<PosedBody>,
+    /// The (look, aim) bits the bodies stand at now.
+    pub at: Option<[u32; 4]>,
+}
+
+/// One posed body: its index in the collision world, its node, and its
+/// matrix in the instance's space with the rig at its bind pose.
+#[derive(Clone, Copy, Debug)]
+pub struct PosedBody {
+    pub body: usize,
+    pub node: usize,
+    pub rest: Mat4,
 }
 
 impl BuildingTurret {
@@ -119,6 +151,7 @@ impl Sim {
             fallen_parts: fall.1,
             standing_parts,
             down: None,
+            posed: None,
         };
         t.handle = self.stand_turret(&t);
         self.building_turrets.push(t);
@@ -184,6 +217,93 @@ impl Sim {
         let t = &mut self.building_turrets[i];
         t.handle = h;
         t.down = None;
+        self.file_posed(i);
+    }
+
+    /// Give the building turret on `instance` its posed prims ([`PosedParts`]):
+    /// they become movers of the collision world, each filed under the
+    /// box a turn of its node about the building can reach, and are placed
+    /// from the gun at the next tick.
+    pub fn set_turret_posed(&mut self, instance: u32, posed: PosedParts) {
+        let Some(i) = self
+            .building_turrets
+            .iter()
+            .position(|t| t.instance == instance)
+        else {
+            return;
+        };
+        self.building_turrets[i].posed = Some(posed);
+        self.file_posed(i);
+    }
+
+    fn file_posed(&mut self, i: usize) {
+        let t = &mut self.building_turrets[i];
+        let origin = t.spec.pos;
+        let Some(p) = t.posed.as_mut() else {
+            return;
+        };
+        p.at = None;
+        let bodies = self.collision.bodies();
+        let movers: Vec<(usize, Aabb)> = p
+            .bodies
+            .iter()
+            .filter_map(|b| {
+                let a = bodies.get(b.body)?.aabb;
+                // Turned about its node (at most `pivot` from the origin),
+                // a point stays inside `|p| + 2 |pivot|` of it.
+                let pivot = p.rig.binds.get(b.node)?.w_axis.truncate().length();
+                let r = (a.min - origin).abs().max((a.max - origin).abs()).length()
+                    + 2.0 * pivot
+                    + 0.01;
+                Some((
+                    b.body,
+                    Aabb {
+                        min: origin - Vec3::splat(r),
+                        max: origin + Vec3::splat(r),
+                    },
+                ))
+            })
+            .collect();
+        self.collision.add_movers(&movers);
+    }
+
+    /// Step 2b': every standing building turret's posed prims to its gun's
+    /// pose (card TCOL, [`PosedParts`]).
+    pub(super) fn pose_building_turrets(&mut self) {
+        for i in 0..self.building_turrets.len() {
+            let t = &self.building_turrets[i];
+            let Some(p) = t.posed.as_ref().filter(|_| t.down.is_none()) else {
+                continue;
+            };
+            let Some(g) = self
+                .vehicle(t.handle)
+                .and_then(|v| v.guns.get(p.seat))
+                .and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let (look, aim) = (g.look, g.aim);
+            let key = [look.0, look.1, aim.0, aim.1].map(f32::to_bits);
+            if p.at == Some(key) {
+                continue;
+            }
+            let pose = t.pose();
+            let now = p.rig.pose(look, aim, &[]);
+            let moves: Vec<(usize, Mat4)> = p
+                .bodies
+                .iter()
+                .map(|b| {
+                    let m = now[b.node] * p.rig.binds[b.node].inverse();
+                    (b.body, pose * m * b.rest)
+                })
+                .collect();
+            for (body, to) in moves {
+                self.collision.move_body(body, to);
+            }
+            if let Some(p) = self.building_turrets[i].posed.as_mut() {
+                p.at = Some(key);
+            }
+        }
     }
 }
 

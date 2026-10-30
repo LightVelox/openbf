@@ -599,7 +599,7 @@ fn human_seat_charge_keeps_the_human_release_edge() {
 /// (`Sim::bind_building`): a round that meets one strikes the turret, whose
 /// pool takes the ordnance's building scale; a blast beside it measures it
 /// past its own bodies; at 0 it is destroyed with its gunner; and its own
-/// gunner's round leaves it as a wall, not a hit. Unbound (the port before),
+/// gunner's round passes it (card TCOL). Unbound (the port before),
 /// the round stops on a plain wall and the pool keeps its health.
 #[test]
 fn a_bound_building_takes_rounds_and_blasts_and_its_gunner_dies_with_it() {
@@ -646,10 +646,12 @@ fn a_bound_building_takes_rounds_and_blasts_and_its_gunner_dies_with_it() {
             Hit::World
         };
         assert_eq!(b.hit, want, "bound {bound}");
-        // The gunner's own round: a wall either way.
+        // The gunner's own round: it passes his own building (card TCOL,
+        // re-turret-collision 6.2: the PS2's ray skips the owner entity),
+        // and stops on it as a plain wall while it is no turret's.
         assert_eq!(
             fire(&s, gunner, HullFilter::except(Some(v))).hit,
-            Hit::World
+            if bound { Hit::None } else { Hit::World }
         );
         s.bolts.push(b);
         for _ in 0..3 {

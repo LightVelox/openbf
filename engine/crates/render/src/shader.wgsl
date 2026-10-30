@@ -60,7 +60,9 @@ struct Globals {
     light2_color: vec3<f32>, light2_static: f32,
     // The flat water's colour constants (`render::WaterShading`, the PS2's
     // VU1 water overlay's constant block): `fs_water` and `fs_speckle`.
-    water_eye_shift: vec3<f32>, _pad7: f32,
+    // glow_gain: a factor on LIGHT_GLOW / LIGHT_UNSCALED's display gain, 1
+    // but on a map `game::viewer::look` tunes (`render::Lighting::glow_gain`).
+    water_eye_shift: vec3<f32>, glow_gain: f32,
     water_specular: vec4<f32>,
     speckle_ambient: vec4<f32>,
     speckle_specular: vec4<f32>,
@@ -535,12 +537,12 @@ fn shade_unfogged(in: VsOut) -> vec4<f32> {
         // frame buffer clamps. `Glow`'s alpha is the gain's mask, not a
         // coverage: an opaque draw writes it nowhere, so it returns 1.
         case LIGHT_GLOW: {
-            let gain = 1.0 + glow_as(texel.a, in.color.a) / 128.0;
+            let gain = (1.0 + glow_as(texel.a, in.color.a) / 128.0) * globals.glow_gain;
             let d = min(linear_to_srgb(base.rgb * detail) * gain, vec3<f32>(1.0));
             return vec4<f32>(srgb_to_linear(d), 1.0);
         }
         case LIGHT_UNSCALED: {
-            let d = min(linear_to_srgb(base.rgb * detail) * 2.0, vec3<f32>(1.0));
+            let d = min(linear_to_srgb(base.rgb * detail) * 2.0 * globals.glow_gain, vec3<f32>(1.0));
             rgb = srgb_to_linear(d);
         }
         default: {
@@ -1019,7 +1021,8 @@ fn bloom_light(in: VsOut) -> vec4<f32> {
     let uv = material_uv(in.uv);
     let texel = textureSample(t_color, s_color, uv);
     let base = texel * in.color;
-    let gain = select(2.0, 1.0 + glow_as(texel.a, in.color.a) / 128.0, in.light == LIGHT_GLOW);
+    let gain = select(2.0, 1.0 + glow_as(texel.a, in.color.a) / 128.0, in.light == LIGHT_GLOW)
+        * globals.glow_gain;
     let d = min(linear_to_srgb(base.rgb * detail_factor(uv)) * gain, vec3<f32>(2.0));
     let fogged = linear_to_srgb(apply_fog(srgb_to_linear(d), in.fog_depth));
     let coverage = select(base.a, 1.0, in.light == LIGHT_GLOW);

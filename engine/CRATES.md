@@ -313,7 +313,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `game/src/kbm.rs` 459 — keyboard + mouse → `PadState`: the one bindings table, held keys and latched taps, mouse look in `LOOK_UNIT`s, merging with the controller, pointer lock (Locked, else Confined + hidden) and menu keys · `Kbm`, `Bindings`, `Trigger`, `Bind`, `menu_key`, `menu_bits`, `RAD_PER_COUNT`.
 - `game/src/kbm/tests.rs` 386 — every pad bit bound, controller pass-through, WASD, taps, sensitivity/invert, stick takeover and a 144 Hz frame-to-tick replay.
 - `game/src/viewer.rs` 57 — viewer facade and stable re-exports; its module header owns the XFRM transform convention and routes to the parts below.
-- `game/src/viewer/look.rs` 1360 — manifest-derived water, fog, cull/LOWR, far-fade and lighting state · `water_look`, `speckle_look`, `water_shading`, `far_cull`, `lowres_range`, `apply_lighting`.
+- `game/src/viewer/look.rs` 1441 — manifest-derived water, fog, cull/LOWR, far-fade and lighting state, and the per-map look tunes ([ours]) · `water_look`, `speckle_look`, `water_shading`, `far_cull`, `lowres_range`, `apply_lighting`, `LOOK_TUNES`.
 - `game/src/viewer/scene.rs` 1691 — scene GPU upload and draw ranges for terrain, water, foliage, models/LOWD and sky; moving door/turret/station records, texture cache and untextured census · `upload_scene`, `SceneGpu`, `SpeckleAnim`, `sky_wrap_v`, `pose_doors`; posing lives in `turret_pose` / `stations`.
 - `game/src/viewer/scene/terrain.rs` 169 — terrain draw chunks, layer uploads and chunk bounds; the scene’s terrain upload helpers.
 - `game/src/viewer/scene/tests.rs` 441 — scene draw-range regressions for water replacement and the ranges that follow it.

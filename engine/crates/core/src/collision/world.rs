@@ -458,6 +458,30 @@ impl CollisionWorld {
         self.turrets.get(&instance).copied()
     }
 
+    /// The instance whose bodies are building turret `turret`'s building.
+    pub fn turret_instance(&self, turret: VehicleHandle) -> Option<u32> {
+        self.turrets
+            .iter()
+            .find_map(|(i, v)| (*v == turret).then_some(*i))
+    }
+
+    /// Make bodies movers after construction: each `(index, envelope)` as
+    /// [`CollisionWorld::with_movers`] takes them, then the broad phase is
+    /// rebuilt over them.
+    pub fn add_movers(&mut self, movers: &[(usize, Aabb)]) {
+        for &(i, mut e) in movers {
+            let Some(b) = self.bodies.get(i) else {
+                continue;
+            };
+            e.add(b.aabb.min);
+            e.add(b.aabb.max);
+            self.envelopes.retain(|(k, _)| *k as usize != i);
+            self.envelopes.push((i as u32, e));
+        }
+        self.envelopes.sort_by_key(|(i, _)| *i);
+        self.rebuild_broadphase();
+    }
+
     /// Register swept rotation envelopes and return body-local transforms.
     pub fn prepare_rotation(
         &mut self,

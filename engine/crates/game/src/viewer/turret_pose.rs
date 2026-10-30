@@ -41,37 +41,8 @@ pub const RECOIL_DECAY: f32 = 4.0;
 /// both already scaled by their turn factors.
 pub use core::vehicle::gun::turret_node;
 
-/// X = norm(up × dir), Z = norm(dir), Y = Z × X, at `origin`.
-fn look_along(dir: Vec3, up: Vec3, origin: Vec3) -> Mat4 {
-    let z = dir.normalize();
-    let x = up.cross(dir).normalize();
-    let y = z.cross(x);
-    Mat4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        origin.extend(1.0),
-    )
-}
-
-/// The `AimerNodeName` node: `local` is its bind matrix relative to its
-/// parent, `parent` the parent's matrix now, `dir` the aimer's direction in
-/// the building's model space.
-pub fn aimer_node(parent: &Mat4, local: &Mat4, dir: Vec3) -> Mat4 {
-    let carried = *parent * *local;
-    look_along(dir, carried.y_axis.truncate(), carried.w_axis.truncate())
-}
-
-/// A barrel node: `parent` its parent's matrix now, `offset` its bind
-/// origin relative to that parent, `slide` = `state × BarrelRecoil` (the
-/// caller passes 0 while the state is not above 0).
-pub fn barrel_node(parent: &Mat4, offset: Vec3, slide: f32) -> Mat4 {
-    let mut m = *parent;
-    m.w_axis = parent
-        .transform_point3(offset - Vec3::new(0.0, 0.0, slide))
-        .extend(1.0);
-    m
-}
+/// The aimer and barrel nodes (the math is the sim's too, card TCOL).
+pub use core::vehicle::gun::{aimer_node, barrel_node};
 
 /// A rig node's model-space bind matrix.
 pub fn bind_of(rig: &ManifestTurretRig, n: usize) -> Mat4 {
@@ -127,28 +98,24 @@ pub fn pose(
     aim: (f32, f32),
     recoil: &[f32],
 ) -> Vec<Mat4> {
-    let bind: Vec<Mat4> = (0..rig.nodes.len()).map(|n| bind_of(rig, n)).collect();
-    let mut now = bind.clone();
-    let parent = |n: usize| rig.nodes[n].parent.map(|p| p as usize);
-    // A node's bind matrix relative to its parent (a root's is its own).
-    let local = |n: usize| match parent(n) {
-        Some(p) => bind[p].inverse() * bind[n],
-        None => bind[n],
-    };
-    if let Some(t) = spec.turret {
-        now[t] = turret_node(&bind[t], look.0, -look.1 * spec.pitch_factor);
+    core_rig(rig, spec).pose(look, aim, recoil)
+}
+
+/// The rig and the seat's nodes as the sim keeps them
+/// ([`core::vehicle::gun::Rig`]).
+pub fn core_rig(rig: &ManifestTurretRig, spec: &PoseSpec) -> core::vehicle::gun::Rig {
+    core::vehicle::gun::Rig {
+        binds: (0..rig.nodes.len()).map(|n| bind_of(rig, n)).collect(),
+        parents: rig
+            .nodes
+            .iter()
+            .map(|n| n.parent.map(|p| p as usize))
+            .collect(),
+        turret: spec.turret,
+        pitch_factor: spec.pitch_factor,
+        aimer: spec.aimer,
+        barrels: spec.barrels.clone(),
     }
-    if let Some(a) = spec.aimer {
-        let p = parent(a).map_or(Mat4::IDENTITY, |p| now[p]);
-        now[a] = aimer_node(&p, &local(a), core::vehicle::gun::dir(aim.0, aim.1));
-    }
-    for (i, &(b, r)) in spec.barrels.iter().enumerate() {
-        let p = parent(b).map_or(Mat4::IDENTITY, |p| now[p]);
-        let state = recoil.get(i).copied().unwrap_or(0.0);
-        let slide = if state > 0.0 { state * r } else { 0.0 };
-        now[b] = barrel_node(&p, local(b).w_axis.truncate(), slide);
-    }
-    now
 }
 
 /// Per drawn part of the rig's model, what moves it from where it was baked

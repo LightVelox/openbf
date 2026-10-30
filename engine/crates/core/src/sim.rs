@@ -65,7 +65,7 @@ pub use bounds::{
     Level, ReturnPath, BOUND_DROP, KILL_FLOOR_DROP, LEVEL_HUBS, LEVEL_RISE, UNDER_MAP_SPEED,
 };
 pub use buffs::Buffs;
-pub use building_turrets::{BuildingTurret, TurretFall};
+pub use building_turrets::{BuildingTurret, PosedBody, PosedParts, TurretFall};
 pub use droid_death::PUSHED_DEAD_HEALTH;
 pub use guns::SeatLook;
 pub use input::{buttons, AimTarget, InputLog, PadState, LOOK_SCALE, LOOK_UNIT};

@@ -495,6 +495,9 @@ impl Sim {
         //     now, before anyone moves against their boxes (`crate::door`;
         //     the placement in the tick is PROVISIONAL).
         self.tick_doors(dt);
+        // 2b'. Card TCOL: a building turret's prims on its gun's nodes,
+        //     placed at the gun's pose (`BuildingTurret::posed`).
+        self.pose_building_turrets();
 
         // [ours] A FIRE press with a fire lag (`PadState::fire_lag`): the
         // aim before the turn, so phase 4 fires part way into it.

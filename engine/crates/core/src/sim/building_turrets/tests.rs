@@ -208,3 +208,81 @@ fn the_cutter_heals_a_turret_and_builds_a_fallen_one_at_the_disc_rates() {
         }
     }
 }
+
+/// Card TCOL: a prim on the aimer node turns with the gun. The aimer node
+/// bound 2 m up (its parent the turret node, 0.3 m up), a 1 m gun box 1 m
+/// ahead of it: with the look and aim turned 90 deg (+z to +x) and pitched
+/// up 30 deg, the box stands 1 m along the aim from the aimer's origin.
+/// Down, it no longer moves.
+#[test]
+fn a_prim_on_the_aimer_node_turns_with_the_gun() {
+    let (mut s, _) = world(true, TurretFall::Wreck);
+    let mut gun = Body::new(
+        Mat4::from_translation(Vec3::new(0.0, 2.0, 1.0)),
+        Shape::Box {
+            half: Vec3::splat(0.5),
+        },
+    );
+    gun.instance = Some(INSTANCE);
+    s.collision.push_body(gun);
+    s.collision.rebuild_broadphase();
+    let body = s.collision.bodies().len() - 1;
+    let at = |y: f32| Mat4::from_translation(Vec3::new(0.0, y, 0.0));
+    s.set_turret_posed(
+        INSTANCE,
+        PosedParts {
+            rig: Rig {
+                binds: vec![Mat4::IDENTITY, at(0.3), at(2.0)],
+                parents: vec![None, Some(0), Some(1)],
+                turret: Some(1),
+                pitch_factor: 0.0,
+                aimer: Some(2),
+                barrels: Vec::new(),
+            },
+            seat: 0,
+            bodies: vec![PosedBody {
+                body,
+                node: 2,
+                rest: Mat4::from_translation(Vec3::new(0.0, 2.0, 1.0)),
+            }],
+            at: None,
+        },
+    );
+    let h = s.building_turrets[0].handle;
+    let q = std::f32::consts::FRAC_PI_2;
+    let p = 30.0f32.to_radians();
+    s.vehicle_mut(h).unwrap().guns = vec![Some(crate::vehicle::gun::GunState {
+        look: (q, 0.0),
+        aim: (q, p),
+        rate: (0.0, 0.0),
+        rel: (0.0, 0.0),
+        weapons: Vec::new(),
+        zoom: None,
+    })];
+    s.pose_building_turrets();
+    let c = s.collision.bodies()[body].to_world.w_axis.truncate();
+    let want = Vec3::new(0.0, 2.0, 0.0) + crate::vehicle::gun::dir(q, p);
+    assert!(c.abs_diff_eq(want, 1e-4), "{c} vs {want}");
+    // A ray down the old line (along +z at 2 m) now misses; one at the
+    // turned box meets it.
+    let hit = |s: &Sim, from: Vec3, to: Vec3| {
+        s.collision
+            .ray_with(
+                from,
+                (to - from).normalize(),
+                20.0,
+                Layers::ORDNANCE,
+                crate::collision::HullFilter::All,
+            )
+            .is_some_and(|r| r.instance == Some(INSTANCE) && from.distance(to) > r.t)
+    };
+    assert!(hit(&s, Vec3::new(10.0, want.y, 0.0), want));
+    s.building_turrets[0].down = Some(0.0);
+    s.vehicle_mut(h).unwrap().guns[0].as_mut().unwrap().aim = (0.0, 0.0);
+    s.pose_building_turrets();
+    assert!(s.collision.bodies()[body]
+        .to_world
+        .w_axis
+        .truncate()
+        .abs_diff_eq(want, 1e-4));
+}

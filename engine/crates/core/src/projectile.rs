@@ -197,7 +197,17 @@ impl Bolt {
         world: &CollisionWorld,
         hulls: HullFilter,
     ) -> Bolt {
-        let mut b = Bolt::spawn(
+        // A rider's round passes his own building turret's bodies (card
+        // TCOL, `analysis/re-turret-collision.md` 6.2: the PS2's ray skips
+        // the owner entity, as the seat's camera ray does): its gun's prims
+        // stand round the muzzle.
+        let own = match hulls {
+            HullFilter::Except(s) | HullFilter::HullsExcept(s) => {
+                s.map(|v| v.and_then(|v| world.turret_instance(v)))
+            }
+            _ => [None; 2],
+        };
+        let mut b = Bolt::spawn_past(
             origin,
             dir,
             speed,
@@ -207,6 +217,7 @@ impl Bolt {
             water,
             world,
             HullFilter::Static,
+            own,
             std::iter::empty(),
         );
         b.hulls = hulls;
@@ -258,6 +269,27 @@ impl Bolt {
         hulls: HullFilter,
         targets: impl Iterator<Item = (UnitHandle, Capsule)>,
     ) -> Bolt {
+        Bolt::spawn_past(
+            origin, dir, speed, life_span, shooter, hf, water, world, hulls, [None; 2], targets,
+        )
+    }
+
+    /// [`Bolt::spawn`] whose model ray passes the bodies of the map
+    /// instances in `skip` (`CollisionWorld::ray_past`).
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_past(
+        origin: Vec3,
+        dir: Vec3,
+        speed: f32,
+        life_span: f32,
+        shooter: Shooter,
+        hf: Option<&Heightfield>,
+        water: Option<crate::water::Plane<'_>>,
+        world: &CollisionWorld,
+        hulls: HullFilter,
+        skip: [Option<u32>; 2],
+        targets: impl Iterator<Item = (UnitHandle, Capsule)>,
+    ) -> Bolt {
         let dir = dir.normalize();
         let total = speed * life_span;
         let mut best_t = total;
@@ -281,7 +313,7 @@ impl Bolt {
         // The PS2's bolt ray passes the trailing flag, so it tests only the
         // target model's ORDNANCE subset (analysis/re-collision-layers.md §4,
         // `FUN_002764C0`).
-        if let Some(h) = world.ray_with(origin, dir, best_t, Layers::ORDNANCE, hulls) {
+        if let Some(h) = world.ray_past(origin, dir, best_t, Layers::ORDNANCE, hulls, skip) {
             if h.t < best_t {
                 best_t = h.t;
                 hit = match h.owner {

@@ -174,6 +174,11 @@ pub struct Lighting {
     pub water_dim: Option<[f32; 2]>,
     /// The flat water's colour constants ([`WaterShading`]).
     pub water: WaterShading,
+    /// A factor on BF2's self-lit display gain ([`crate::LightPath::Glow`]
+    /// and [`crate::LightPath::Unscaled`], drawn and gathered for bloom
+    /// alike). 1 is the disc's gain; `game::viewer::look`'s per-map tunes
+    /// are the only callers that set another ([ours]).
+    pub glow_gain: f32,
 }
 
 impl Default for Lighting {
@@ -195,6 +200,7 @@ impl Default for Lighting {
             water_lit: 0.0,
             water_dim: None,
             water: WaterShading::default(),
+            glow_gain: 1.0,
         }
     }
 }

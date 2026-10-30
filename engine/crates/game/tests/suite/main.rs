@@ -49,6 +49,7 @@ mod turret_enter;
 mod turret_fall;
 mod turret_gunner;
 mod turret_pose;
+mod turret_track;
 mod turret_views;
 mod unit_calls;
 mod unit_vo;

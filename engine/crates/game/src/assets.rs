@@ -647,6 +647,16 @@ impl Scene {
                 // from the bake already through their bones' bind matrices
                 // (`bake::bind_pose`, card STDOR).
                 let local = crate::viewer::instance_matrix(p.rotation, p.translation);
+                // An armed building's prim stands through its `PRNT` node's
+                // bind matrix (card TCOL, `analysis/re-turret-collision.md`
+                // 1.1, 2: every static node binds at the identity; the gun's
+                // nodes do not - Geonosis's cannon's gun is bound 1.60 m
+                // up). The sim then turns the gun's ones with the gun
+                // (`core::sim::PosedParts`, `vehicle_pads::posed_parts`).
+                let local = match armed_node(class, &p.parent) {
+                    Some((rig, n)) => crate::viewer::turret_pose::bind_of(rig, n) * local,
+                    None => local,
+                };
                 let pm = m * local;
                 // DR2: a prim the door's clip moves gets its world pose per
                 // frame, `instance · D(f) · XFRM`, and an envelope holding
@@ -860,6 +870,23 @@ pub fn load_collision_geom(dir: &Path, e: &ManifestCollision) -> Result<Collisio
         mesh,
         prims: e.prims.clone(),
     })
+}
+
+/// An armed building's rig node named `parent` (a prim's `PRNT`), with
+/// the rig; `None` for any other class or a name the rig lacks (card TCOL).
+pub fn armed_node<'a>(
+    class: &'a manifest::ManifestClass,
+    parent: &str,
+) -> Option<(&'a manifest::ManifestTurretRig, usize)> {
+    if !class.base.eq_ignore_ascii_case("armedbuilding") {
+        return None;
+    }
+    let rig = class.turret_rig.as_ref()?;
+    let n = rig
+        .nodes
+        .iter()
+        .position(|x| x.name.eq_ignore_ascii_case(parent.trim()))?;
+    Some((rig, n))
 }
 
 /// A baked prim as a body shape, `None` for a kind the port does not build.
