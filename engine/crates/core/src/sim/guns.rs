@@ -3,10 +3,6 @@
 //! the seat's weapons fired through the soldier's weapon code
 //! (`WeaponState::update`, `Bolt::spawn`), and the seat switch.
 //!
-//! - **Switch seats** (B1 FUN_0020b5e8, §5): on the SWITCH_WEAPON edge a
-//!   rider walks the ring from its seat to the next seat that boards a
-//!   soldier and is empty; a passenger never moves to another passenger
-//!   seat. Which PS2 button is the switch is [H]; the port's is a feel call.
 //! - **The gun** (§9): the look moves with the right stick; a 512 m ray
 //!   from the eye along the look finds the aim point; the aimer turns
 //!   toward it at its rates, inside its limits; the bolt leaves the fire
@@ -18,6 +14,8 @@
 //! presses FIRE, and the shot is held to the on-foot fairness rule here,
 //! where it is made. A vehicle's gun states are made when anyone first
 //! rides one of its armed seats.
+
+mod seat_switch;
 
 use super::input::{buttons, PadState};
 use super::state::{Event, Sim};
@@ -84,48 +82,6 @@ impl Sim {
             barrel: (rot * gun::dir(aim.0, aim.1)).normalize(),
             gun,
         })
-    }
-
-    /// The seat `u` would switch to (FUN_0020b5e8), or `None`.
-    pub fn next_seat(&self, u: UnitHandle) -> Option<u8> {
-        let m = self.unit(u)?.mount?;
-        let v = self.vehicle(m.vehicle)?;
-        let setup = self.seat_setup.get(v.class as usize)?.as_ref()?;
-        let n = v.seats.len();
-        let from = usize::from(m.seat);
-        let passenger = |k: SeatKind| matches!(k, SeatKind::Passenger(_));
-        (1..n)
-            .map(|k| (from + k) % n)
-            .find(|&j| {
-                setup.boardable.get(j).copied().unwrap_or(false)
-                    && v.seats[j].occupant.is_none()
-                    && !(passenger(v.seats[from].kind) && passenger(v.seats[j].kind))
-            })
-            .map(|j| j as u8)
-    }
-
-    /// Step 1c: every SWITCH_WEAPON edge of a mounted soldier moves it to
-    /// [`Sim::next_seat`] (instant, like enter and exit).
-    pub(super) fn switch_pass(&mut self, unit_pads: &[PadState]) {
-        for i in 0..self.units.len() {
-            let u = &self.units[i];
-            // A bot changes seats through its own requests (card VAI).
-            if !u.alive || u.mount.is_none() || !matches!(u.controller, Controller::Player { .. }) {
-                continue;
-            }
-            let Some(p) = unit_pads.get(i) else { continue };
-            let edge = p.pressed(buttons::SWITCH_WEAPON)
-                && u.soldier.prev_buttons() & buttons::SWITCH_WEAPON == 0;
-            if !edge {
-                continue;
-            }
-            let h = self.handle(i);
-            let (Some(seat), Some(m)) = (self.next_seat(h), self.units[i].mount) else {
-                continue;
-            };
-            self.unseat_unit(h);
-            self.seat_unit(h, m.vehicle, seat);
-        }
     }
 
     /// A building turret's zoom (card VTURZ, `analysis/re-turret-draw.md` 4
@@ -368,6 +324,8 @@ impl Sim {
             let w = if g.framed {
                 let [x, y, z] = gun::frame(st.look);
                 Vec3::new(w.dot(x), w.dot(y), w.dot(z))
+            } else if g.aimer_bind != Quat::IDENTITY {
+                g.aimer_bind.inverse() * w
             } else {
                 w
             };

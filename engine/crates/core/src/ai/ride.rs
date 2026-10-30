@@ -1270,6 +1270,7 @@ mod tests {
                 pilot: false,
                 turn: None,
                 framed: false,
+                aimer_bind: glam::Quat::IDENTITY,
             }),
         ];
     }

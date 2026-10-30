@@ -32,6 +32,7 @@ pub mod turret_fall;
 pub mod turret_pose;
 mod upload;
 mod vehicles;
+mod walker_aim;
 pub mod walker_pose;
 
 pub(crate) use camera::robust_bounds;

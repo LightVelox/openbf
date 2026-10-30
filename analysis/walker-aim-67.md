@@ -1,0 +1,220 @@
+# Walker aim over the walking pose — issue 67
+
+
+
+Implementation on `codex/67-walker-aim`, based on `79275f6`; worktree `E:/Projects/openbf-walker-aim`. Source stays separate from droidekas (#65). No push or PR is authorized.
+
+
+
+## Scope and ownership
+
+
+
+Read AGENTS.md, PLAN.md, analysis/INDEX.md, re-walker-nodes.md, re-turret-draw.md 2.2/2.3, and VPOSW/VPOSE before implementation. The requested `engine/artifacts/loop/STATUS.md` is absent, including in the maintainer checkout; checked-in VPOSW says todo and VPOSE remains blocked. On 2026-10-29, GitHub #67 had no assignee or comments; #65 had LightVelox's claim. Upstream main was `95f7d03`, already included in the starting checkout. Open PR #77 is the effects/destruction work already present at this base. No walker implementation or competing walker worktree was found. Shared files receive narrow changes; no droideka loading or rendering is changed.
+
+
+
+## Demonstrated AT-TE cause
+
+
+
+[O] Local BF2 REP.LVL, animation bank and skeleton, plus baked GLB inspection. The idle clip's untranslated `aimer_maincannon_x` TNJA base is `(0.000057984, 2.6636579, 4.3353004)`. Its skeleton parent is `aimer_maincannon_y`; the model's correct parent-local pivot is `(0.000057984, 1.3075151, 0.7251549)`. The bank rig has the same parent, with rest position `(0.000057984, 1.0580754, 0.7251549)`. The stored track base includes the parent's `(0, 1.6055824, 3.6101456)` offset. Applying it as parent-local adds the mount offset twice. The resulting extra displacement is `(0, 1.3561428, 3.6101456)` in model axes, explaining the floating cannon even at zero aim.
+
+
+
+This is already wrong in the baked walk clip, independently of the absent aim overlay. The original aimer writer replaces this table entry from the skeleton-local bind pivot through its current parent: re-walker-nodes 3, re-turret-draw 2.3. The bake now restores the untranslated, class-authored `aimer_maincannon_x` track to that model-local pivot. The repair is deliberately limited to this demonstrated cannon node. Animated translations, walk tracks and every other node stay unchanged. Both games have this AT-TE track issue. A targeted rebake reproduced byte-identical GLBs for the eleven other walker skins; only BF1/BF2 AT-TE GLBs changed.
+
+
+
+`game/examples/walker_trace.rs` reproduces the source-bank inspection. `walker_rebake` rebakes walker skin GLBs only and preserves original skins in its specified backup directory. The regular `bake vehicles` path applies the same fix.
+
+
+
+## Runtime behavior
+
+
+
+`SeatSpec::aimers` retains every authored aimer, per-node yaw/pitch limits and barrel associations alongside the existing simulation-facing first-aimer fields. No existing simulation values or parsing semantics are replaced. Skeleton names resolve parents, local axes and offsets. The visual rig reads each side's class database.
+
+
+
+`WalkerAim` resolves parents before children, including skeletons whose storage order puts children first. It starts from the existing walk pose, uses the posed parent for aimer pivots and clamp frames, and uses the existing turret/aimer/barrel matrix laws. Turret nodes use seat look, authored limits and PitchTurnFactor; turret-section aimers use the full, unscaled turret aim frame. Body aimers clamp in their bind frame carried through the current walk parent. Body aimers take priority over mounted turret nodes at the same name, implementing BF1 AT-AT's head rule. BODY TurretNodeName is ignored, preserving BF2 one-man AT-ST's walk-posed aimer_y.
+
+
+
+Affected classes: BF1/BF2 `imp_walk_atst` plus jungle/snow variants, `imp_walk_atat`, `cis_walk_spider`, `rep_walk_atte`, and BF2 `rep_walk_oneman_atst`.
+
+
+
+The draw palette, `WalkerRig::node_now`, PilotPosition and AnimatedPilotPosition riders, and walker muzzle frames all consume the same final nodes. Visual bolt starts and muzzle flashes use the posed fire point; projectile simulation and hit endpoints are unchanged. Other vehicle types keep their existing path.
+
+
+
+Zero look/aim, or missing gun state, retains the walking palette exactly. The AT-TE's independently broken baked cannon offset is corrected even at zero aim. There is no turn-rate simulation or recoil-state addition.
+
+
+
+## Limits and original-game evidence
+
+
+
+Steady-state directions use the seat's existing model-space aim, projected 512 m from its bind eye/pivot, then clamped per aimer toward that point. This is the documented provisional per-seat proxy: the original uses per-weapon aim points, collision ray results and rate-limited direction state. This implementation does not add those simulation fields. No gameplay, input, weapon damage, projectile trajectories or core hash code is changed.
+
+
+
+Existing original-game evidence is re-walker-nodes' recorded PS2 node-table fits (BF1 1205/1206, BF2 residual <=0.04) and its BF1 AT-AT priority/one-man inventory, plus the checked-in turret node-law fixtures. The 1798-row `walker_nodes_ps2.txt`, original walker save states and the maintainer's cited screenshot/snapshot are absent locally. No fresh PCSX2 walker capture, independent recheck of those archived RAM claims, or matched PS2/port image comparison is claimed. That acceptance remains open.
+
+
+
+## Checks and local artifacts
+
+
+
+Artifacts are local only under `E:/Projects/openbf/engine/artifacts/walker67/`; copyrighted geometry and captures are not committed or uploaded.
+
+
+
+- `before/rep_walk_atte_rest.png`: original source and bake reproduce the floating cannon.
+
+- `after/rep_walk_atte_rest.png`, `after/rep_walk_atte_aim.png`: corrected mount at rest and while aiming, with a boarded gunner.
+
+- `walk-control/imp_walk_atst_rest.png` and `after/imp_walk_atst_aim.png`: matched camera, walk-only control versus 60-degree aim. Rest outputs are byte-identical; changed RGB pixels are confined to the head/guns rectangle `(441,288)..(535,372)` in the 960x720 image. Synthetic skin tests also prove the animated leg matrices are unchanged.
+
+
+
+Final check results and distribution receipt are appended at handoff.
+
+
+
+### Final results
+
+
+
+- `cargo test -p game --test walker_nodes -- --include-ignored`: 8 passed, including the local real-data test over all nine walker class families. This covers piloted 60-degree AT-ST skinning, animated legs, child-before-parent storage, per-aimer limits in a rotated walk frame, exact zero-aim palettes, driver-over-gunner BF1 AT-AT head priority, parsing, hash stability and the AT-TE mount at rest/aimed.
+
+- `cargo test -p game --test suite vehicle_rider`: 5 passed. The end-to-end rider case now includes BF2 Geonosis AT-TE's boarded gunner at nonzero aim and checks his posed fire point through `SoldierVisuals`.
+
+- Library suites: bake 185 passed; core 1279 passed / 2 ignored; game 530 passed / 5 ignored. The bake regression proves that the static cannon repair leaves ordinary walk and animated translations alone.
+
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed. `git diff --check`: passed. Changed Rust files are formatted and stay below the 1500-line ceiling.
+
+- Full game integration suite: 299 passed, 6 ignored, one unrelated navigation table timing assertion failed at 0.323 seconds while other builds ran. That exact test passed when rerun alone. No navigation code was changed.
+
+- Full `cargo fmt --all -- --check` reports existing formatting in untouched `bake/src/effects.rs`, `mungefs/src/lightbeam.rs` and `render/src/light_beam.rs`; those unrelated files were preserved.
+
+- Headless captures were inspected. `after-close/rep_walk_atte_aim.png` shows the cannon on its mount; capture logging confirms a boarded player at seat 1, a posed rider matrix, and one submitted skinned soldier draw at both rest and aim. There is no manual playtest or new original-game comparison.
+
+
+
+### Distribution
+
+
+
+Release game rebuilt successfully, then its existing `--write-pack` command packed the current `E:/Projects/openbf/engine/assets_baked` and `engine/missions` into `dist/openbf-walker67-ready.exe`. The staged result was checked before replacement: 23,997 entries, 2,755,787,212 bytes; every path and source size matched; all walker skin and mission payloads (77 files) matched byte-for-byte. Executable prefix matched the release game exactly, SHA256 `caf84ad08c28ac945deb4894b6bb41ea4bb998562ed0c498cd9aa06910defdf7`.
+
+
+
+Installed successfully as `E:/Projects/openbf/dist/openbf.exe`. No staged executable remains. `dist/openbf_data` profile/playtest paths, lengths and modification times were unchanged across replacement. Receipt: `E:/Projects/openbf/engine/artifacts/walker67/pack-receipt.json`.
+
+
+
+Source remains uncommitted on the dedicated feature branch/worktree; the maintainer checkout's source stays clean. No push or PR was performed. Original-game row replay and matched PCSX2 pictures remain open acceptance, so VPOSW is not marked complete.
+
+
+
+## Close-range disappearance and animation stepping follow-up, 2026-10-29
+
+
+
+The maintainer reported two screenshots of the AT-TE disappearing when approached, followed by laggy/jittery animation. Read the packed game's black box before editing and preserved `last.json` / `prev1.json` under `engine/artifacts/walker67/close-followup/`. They are BF2 GEO1, seeds 157 / 156, build `79275f6170a8+dirty`, built 2026-10-29 22:02:51 UTC, the previous walker feature build. Checkout HEAD is still that base. In seed 157 at tick 1477, vehicle 12 `rep_walk_atte` is alive at `(9.31,-62.94,305.18)`, health 37324, three riders. In seed 156 at tick 2226 it is alive at `(9.48,-63.05,280.51)`, health 39660.5, three riders. The vehicle was not being despawned.
+
+
+
+The camera's vehicle fade code treated the box enclosing every hull body as filled: entering any space within that aggregate box set the entire vehicle opacity to zero. A reproduced AT-TE has aggregate bounds `(3.786,-62.940,313.261)` through `(15.282,-54.702,333.517)`, including the open space under its belly. The close-camera fixture under the belly changed from opacity zero to fully visible after replacing the broad-box containment test with actual primitive/surface overlap. Real line-of-sight obstruction still uses the existing hull cast. Additionally, a camera intersecting one foot can make a walker translucent, but cannot hide the whole walker outright; other vehicle types retain their previous opacity policy.
+
+
+
+The animation issue is separate: render_blend interpolated the vehicle position/rotation while explicitly leaving the walker animation clock, leg twist, body pitch/roll and leg layers at 30 Hz. It now captures and interpolates those visual fields and walker gun aim along with the existing vehicle pose. Clock interpolation handles forward/reverse clip restarts; switching to a different clip keeps that clip's own clock. Respawns and teleports keep the existing snap rules. Saved tick values are restored exactly before simulation resumes. Riders now resolve their walker attachment at draw time from the same interpolated nodes, since their animation update happens before render interpolation in the windowed loop. Simulation and input remain unchanged.
+
+
+
+`walker_visibility` captures the original bounding-box policy and corrected policy at identical close-camera poses; images and logs are in `close-followup/captures/`. Tests cover empty space between legs, sphere-AABB corners, genuine obstruction, camera-inside-foot visibility, fractional-frame leg vertex movement, angle seams, forward/backward clock wrap, clip changes, rider and muzzle attachment during interpolation, and exact tick/hash restoration. This corrects 30 Hz visual stepping; it does not claim to eliminate the independent GPU/frame-time spikes recorded by the snapshot.
+
+
+
+Final follow-up checks and distribution receipt are recorded below.
+
+
+
+### Follow-up results and installed build
+
+
+
+- Walker regressions: 10 passed, including the real-data class check and new between-tick vertex/hash checks. Close-camera regressions: 2 passed. Render interpolation tests: 9 passed (clock wrap, angle seams, existing input preview and replay/hash checks). Rider integration: 5 passed, including attachment and muzzle checks while the displayed walker pose is interpolated.
+
+- Game library: 533 passed, 5 ignored. Includes the renderer guard preventing a camera inside a foot from hiding an entire walker. Game all-target Clippy passed; the final capture example also passes Clippy. Game formatting, diff whitespace, added-comment and changed-file size checks pass. No new line or block comments were added to Rust.
+
+- Inspected headless before/after close-camera captures. Under-belly old policy: `(vehicle 12, opacity 0)`; corrected policy: no fade. A real foot intersection uses the walker's nonzero translucent floor in the draw path. No fresh manual playtest or live original-game comparison was performed.
+
+- Rebuilt release and packed current assets_baked/missions into a temporary executable, verified archive paths/sizes, its release executable prefix and all 77 walker-skin/mission payloads. Runtime-only follow-up: no additional baked asset change was needed; the previous AT-TE asset repair remains packed.
+
+- Replaced `E:/Projects/openbf/dist/openbf.exe` successfully; profile/playtest file metadata was unchanged. 23,997 embedded files, 2,755,800,524 bytes. Prefix SHA256: `36f9e699e227ecf17cb14b60e7953fa936d7e226ff1bc8efbba30b2f877c1f08`. Receipt: `engine/artifacts/walker67/close-followup/pack-receipt.json`. No staged executable remains.
+
+- Droideka worktree source was not changed; its touched paths do not overlap these follow-up implementation files. Maintainer checkout source remains clean. No commit, push or PR was made.
+
+
+## Riding controls and armed-seat follow-up, 2026-10-29
+
+The maintainer confirmed the visibility repair, then requested original-like walker riding: free horizontal look with the body following slowly, and access to both other AT-TE gun seats. This explicitly expands the earlier visual-only scope to these demonstrated control and gunner issues. Corrected control/gunner cases intentionally change simulation results; the earlier visual-pass hash claim applies to that pass, not to these input corrections. Ground handling already uses the BF2 walker law across source games; this does not add BF1's separate native locomotion model.
+
+Read the current black box first: BF2 GEO1 seed 158, tick 1404, build `79275f6170a8+dirty`, built 2026-10-29 22:24:25 UTC. Human unit 0 occupies vehicle 12 seat 0 throughout 193 stored rows; its occupants are `[0,8,9,-1,-1,-1]`. Both gun seats are held by bots. The snapshot belongs to the previous close-range feature executable, not the new control code. Preserved snapshot/digest: `engine/artifacts/walker67/controls-followup/`. Upstream and issue #67 were checked again before this follow-up: no new comments or competing walker change.
+
+### Original-source findings
+
+Current local corpus line numbers differ from older research references. Rechecked enclosing functions with:
+
+```
+python scripts/re_check.py fn b2 177638 177643 164686 164807 188615 188670 190941 190950 190490 190496
+```
+
+- BF2 `FUN_0025d5e0` (header 177335; rows 177638/177643) uses the yaw limits as a body-follow trigger: outside the window it commands twice the angular excess, limited by the authored turn speed. The yaw helper rotates the body by twice its half-angle, and the aim compensation preserves the world viewing direction. This locomotion already existed. The mouse path incorrectly hard-clamped the view before it could request that following turn.
+- BF2 `FUN_0024b4d0` (header 164595, player-index gate 164686, displaced-occupant handling 164807 onward) permits a human to take an AI-held seat and reseats the displaced occupant in a free boardable seat. Other players are protected; passenger-to-passenger cycling is excluded. BF1 `FUN_0020b5e8` has the same human/AI distinction (rows 120014-120016 and reseating 120102-120118). The port only accepted empty seats, explaining the reported inability to reach either gun.
+- MountedTurret class setter `FUN_00270770` (header 190729, rows 190935-190954) sets byte K+0x844 when yaw min is positive and at most pi, and yaw max is at least pi and below 2pi. Tick `FUN_0026cea0` (header 188053, rows 188615-188629 and 188670-188699) uses that positive-angle domain and clamps it. BF2 AT-TE rear guns author 120-240 degrees; treating those limits as a full circle was wrong. Incremental look clamps directly; absolute signed target directions are mapped into the positive domain before clamping.
+- Unzoomed MountedTurret camera `FUN_00270018` (header 190339, rows 190487-190497) passes the turret aim frame T+0x1c0 to the camera section. That frame's translation is the turret mount, as described by re-turret-draw 2.2. The riding capture demonstrated that our main-cannon camera instead used the vehicle origin, placing it inside the belly.
+
+### Implementation and class data
+
+Mouse pilot yaw can pass the physical gun window; pitch retains the class clamp. The existing original-law locomotion follows at its authored rate and preserves the world view as the hull turns. No new turn integrator or hand-tuned follow speed was introduced. Unconsumed mouse preview uses the same rule.
+
+A human can cycle into friendly AI-held boardable seats in either direction. The displaced bot remains aboard, moves to a free boardable seat, and preserves its bail draw/RNG state. Other players and enemies cannot be displaced. Q / wheel down advances; wheel up reverses. The normal edge gate, zoom reset and passenger rules remain. Seat switching stays in its own module; droideka-owned `sim/seats.rs` is unchanged. Its old hard-clamp assertion in `sim/seats/tests.rs` was updated to the newly authorized rule.
+
+Walker gunner sections now use their authored MountedTurret rates, filters and camera limits, with the aimers retaining their separate limits. The main AT-TE gun is unrestricted in yaw, with turn speed 1.25 and pitch -15..15 degrees. The rear seat uses yaw 120..240, pitch -17..20, rates 1/1 and filters 3.75/3.75. Its aimer has a backward bind frame; retaining that basis fixes its resting aim, chase frame and muzzle direction. Pilot aimer limits now come from the authored pilot aimer rather than the hover-only zero-yaw setup. Hovers and flyers retain their existing setup paths.
+
+The walker main gunner camera receives its turret mount translation instead of starting at the vehicle origin. This is a bounded repair of the demonstrated wrong origin. The existing provisional camera section behavior (including chase FOV and flattened heading) remains; a full replay of the original section formula and animated camera-mount position has not been implemented or claimed. Other vehicles' cameras are unchanged.
+
+### Evidence, checks and remaining acceptance
+
+Headless riding views are in `controls-followup/captures/`: pilot front, pilot looking 115 degrees while the hull is still sideways, the same world view after 180 ticks of hull following, main gun and rear guns. `main_gun_before_mount.png` preserves the demonstrated inside-belly camera. These captures use actual loaded Geonosis class/mission data and real seat switching; they are not original-game captures. The fixture keeps all three riders aboard and fires the actual pilot, main-cannon and rear-gun weapon classes.
+
+No fresh manual playtest or matched PCSX2 ride capture was performed. Original RAM-row node acceptance from VPOSW remains open. The general per-weapon aiming/raycast limitations and camera-section limitations above remain explicit; this follow-up does not claim full original-game equivalence.
+
+Shared-file integration note: `core/src/ai/ride.rs` has only the new identity `GunSetup::aimer_bind` fixture field, while #65 edits its AI implementation. Preserve that contributor's changes when combining branches. `game/src/walk.rs` has only the walker gunner camera-origin fix; #65 also changes that file. The existing ride/walk files exceed the size goal at the base; these narrow additions avoid an unrelated split of contributor-owned files. Code-map changes are additive. A local coordination note is kept under `engine/artifacts/loop/walker67-coordination.md`. No accessible active droideka chat was identified; no message was sent to an unrelated chat and no #65 source was overwritten.
+
+Final check counts and distribution receipt follow below.
+
+### Control follow-up check results
+
+- Core library: 1287 passed / 2 ignored. Covers free mouse yaw plus pitch limits, world-view preservation while the hull follows at the authored rate, original full-circle wrapping, positive-domain rear arc limits and AI tracking across the signed seam, bind-direction/muzzle consistency, AI-seat takeover/reseating without RNG consumption, protected occupants, reverse cycling, passenger exclusion and existing input/replay rules.
+- Game library: 533 passed / 5 ignored. Walker suites: 14 passed (10 node/pose, 2 close-camera, 2 real Geonosis control/weapon cases, including the normally ignored local-data cases). Rider integration: 5 passed. Turret-view integration: 6 passed. Both real gun seats fire their authored weapons with all riders still aboard; rear aim points backward and its mouse view clamps to 120/240 degrees; the main gunner camera is above the hull at its mount.
+- `cargo clippy -p core -p game --all-targets -- -D warnings`, package formatting and diff whitespace checks passed. No new line/block comments were added. The existing oversize exceptions are narrowly changed `ai/ride.rs` (1745 to 1746 lines, one fixture field) and `game/walk.rs` (1669 to 1676, walker gunner camera origin); see coordination note.
+- Full core regression initially caught an obsolete hard-clamp assertion and the previous visual follow-up's standard-math calls in camera overlap/interpolation. Updated the obsolete control assertion, used multiplication/square root for hull overlap and routed interpolation trigonometry through the existing core math wrapper. The final complete core/game runs above pass. No ignore/allowlist was added to bypass these checks.
+- Inspected the final headless riding views. Main gunner before: camera at body height +3 m, inside the belly. After: mount offset raises it to +9.0892 m, with a clear view over the cannon. The 115-degree pilot view is held at world yaw -2.0 radians while the body follows over 180 ticks; all three riders remain aboard through both switches. The images and logs are local artifacts. Original-game manual/row acceptance remains unperformed as stated above.
+- This follow-up changes runtime code only. The previously completed BF1/BF2 AT-TE cannon skin rebake remains current; no additional affected baked asset requires rebaking.
+
+### Control follow-up distribution
+
+Release was rebuilt successfully from the isolated walker branch and copied to `controls-followup/game-unpacked.exe` before packing, protecting the selected build from later shared-target activity. Its `--write-pack` command packed the current main-checkout `engine/assets_baked` and `engine/missions` into a temporary executable. The current source tree contains 24,003 packed files; all paths and sizes match, the executable prefix is byte-identical to this release build, and all 79 walker-skin/mission payloads were checked byte-for-byte. Packed size: 2,757,977,797 bytes. Prefix SHA256: `782ab3b9347b015a783564cdd09655f2d5b9e603ed8bb7ba2054f569a26e03f4`.
+
+Replaced `E:/Projects/openbf/dist/openbf.exe` successfully only after those checks. `dist/openbf_data` profile/playtest file lengths and modification times are unchanged. No staged executable remains. Receipt: `E:/Projects/openbf/engine/artifacts/walker67/controls-followup/pack-receipt.json`.
+
+Source remains uncommitted on `codex/67-walker-aim` in `E:/Projects/openbf-walker-aim`. Droideka #65 remains in its own worktree/branch and is not included in this executable's source. Current shared baked assets were packed as requested. No push or PR was made. This handoff fixes the demonstrated riding controls and camera origin; it does not close the unperformed original-game acceptance or the provisional camera/aiming gaps listed above.

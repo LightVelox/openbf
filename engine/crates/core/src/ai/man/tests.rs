@@ -44,6 +44,7 @@ fn gun_setup(weapon: usize, yaw: Option<[f32; 2]>) -> GunSetup {
             Slew::Linear,
         )),
         framed: true,
+        aimer_bind: glam::Quat::IDENTITY,
     }
 }
 

@@ -59,3 +59,5 @@ pub mod vo;
 pub mod walk;
 pub mod water_anim;
 pub mod weather;
+
+pub mod walker_shots;

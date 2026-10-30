@@ -17,6 +17,8 @@
 //! `FirstPersonFOV`; his own building is left out of his view by the scene
 //! (`SceneGpu::view_draws`).
 
+mod walker_view;
+
 use crate::camera_collide::CameraBlockers;
 use crate::layout::{CommandPostDef, MapLayout};
 use core::cp::CpDef;
@@ -605,6 +607,9 @@ pub struct WalkSim {
     /// `Vehicle::class` (visual only): set with the pads
     /// (`crate::vehicle_pads::PadBuild::seats`), read by [`vehicle_camera`].
     pub vehicle_seats: Vec<Vec<crate::vehicle_class::SeatSpec>>,
+    pub walker_rigs: Vec<Option<std::sync::Arc<crate::viewer::walker_pose::WalkerRig>>>,
+    pub walker_shot_styles: std::collections::HashMap<usize, crate::walker_shots::Style>,
+    pub vehicle_weapon_hud: Vec<Vec<Vec<WeaponHud>>>,
     /// Each vehicle class's seats' rider hangs, parallel to `vehicle_seats`
     /// (visual only, card VRIDE): read by `crate::soldier_vis`.
     pub vehicle_riders: Vec<Vec<crate::vehicle_class::RiderHang>>,
@@ -752,6 +757,9 @@ impl WalkSim {
             camera_blockers: CameraBlockers::default(),
             vehicle_geometry: Vec::new(),
             vehicle_seats: Vec::new(),
+            walker_rigs: Vec::new(),
+            vehicle_weapon_hud: Vec::new(),
+            walker_shot_styles: Default::default(),
             vehicle_riders: Vec::new(),
             vehicle_engines: Vec::new(),
             vehicle_labels: Vec::new(),
@@ -1312,8 +1320,10 @@ impl WalkSim {
     /// A rider's stays on the centre (the seat cameras are PROVISIONAL).
     pub fn reticle_y(&self) -> f32 {
         let me = &self.sim.units[self.player.index as usize];
-        if me.mount.is_some() {
-            return 0.5;
+        if let Some(look) = self.sim.seat_look(self.player) {
+            let point = look.eye + look.view * 1024.0;
+            let clip = self.camera().view_proj(1.0) * point.extend(1.0);
+            return 0.5 - 0.5 * clip.y / clip.w;
         }
         let (a, d) = if let Some(r) = self.sim.controlled_guided(self.player) {
             (r.pos, r.forward())
@@ -1361,7 +1371,9 @@ impl WalkSim {
         } else {
             gun_look
         };
-        let (target, cam) = vehicle_camera(v, seat, look, self.fov_y());
+        let (target, cam) = self
+            .walker_seat_camera(v, seat, look)
+            .unwrap_or_else(|| vehicle_camera(v, seat, look, self.fov_y()));
         // A building turret's camera passes its own building, as its aim
         // ray does (`Sim::aim_point`); a rider's, his own vehicle's hull.
         let (position, track) = self.settle_camera(
@@ -1453,7 +1465,10 @@ impl WalkSim {
     /// The seat cameras take it too (card VSEAT, PROVISIONAL).
     pub fn fov_y(&self) -> f32 {
         let k = self.fov_scale.clamp(FOV_SCALE_RANGE.0, FOV_SCALE_RANGE.1);
-        let mut fov = chase_fov_y();
+        let mut fov = self.walker_fovs().map_or_else(chase_fov_y, |(third, _)| {
+            let (s, c) = core::fmath::sin_cos(third.to_radians() * 0.5);
+            2.0 * core::fmath::atan2(0.7666 * s / c, 1.0)
+        });
         if self.zoom_s != 1.0 || self.zoom_fov_mix != 0.0 {
             let (third, first) = self.zoom_fovs();
             let half = |rad: f32| {
@@ -1474,6 +1489,9 @@ impl WalkSim {
     /// authored - `tur_bldg_recoilless_lg`'s 12.98 deg at zoom 3 against
     /// 13.0-13.5 fitted to the PS2's frame, `lead_tmp/vturz/fit_fov.py`).
     fn zoom_fovs(&self) -> (f32, f32) {
+        if let Some(fovs) = self.walker_fovs() {
+            return fovs;
+        }
         let soldier = chase_fovs();
         let Some(m) = self.sim.unit(self.player).and_then(|u| u.mount) else {
             return soldier;

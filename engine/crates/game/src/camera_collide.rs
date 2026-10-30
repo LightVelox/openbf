@@ -568,6 +568,37 @@ impl Blocker {
     }
 }
 
+fn camera_meets_hull(body: &core::collision::Body, eye: Vec3) -> bool {
+    use core::collision::Shape;
+    let p = body.to_local.transform_point3(eye);
+    let radius = CAMERA_RADIUS
+        * [Vec3::X, Vec3::Y, Vec3::Z]
+            .map(|a| body.to_local.transform_vector3(a).length())
+            .into_iter()
+            .fold(0.0f32, f32::max);
+    match &body.shape {
+        Shape::Sphere { radius: r } => p.length_squared() <= ((r + radius) * (r + radius)),
+        Shape::Cylinder {
+            radius: r,
+            half_height,
+        } => {
+            let radial = ((p.x * p.x + p.z * p.z).sqrt() - r).max(0.0);
+            let vertical = (p.y.abs() - half_height).max(0.0);
+            radial * radial + vertical * vertical <= radius * radius
+        }
+        Shape::Box { half } => {
+            (p.abs() - *half).max(Vec3::ZERO).length_squared() <= radius * radius
+        }
+        Shape::Mesh(mesh) => mesh.indices().iter().any(|t| {
+            let [a, b, c] = t.map(|i| {
+                let p = mesh.vertices()[i as usize];
+                Vec3::new(p.x, p.y, p.z)
+            });
+            closest_on_triangle(p, a, b, c).distance_squared(p) <= radius * radius
+        }),
+    }
+}
+
 /// The vehicles to draw see-through for a camera at `eye` filming `sights`
 /// (ours: no vehicle pulls the camera in): [`CameraBlockers::see_through`]'s
 /// rule against each vehicle's collision hull, `own` (the rider's) excepted.
@@ -589,7 +620,9 @@ pub fn see_through_vehicles(
             near.add(b.aabb.min);
             near.add(b.aabb.max);
         }
-        if near.grown(CAMERA_RADIUS).contains(eye) {
+        if near.grown(CAMERA_RADIUS).contains(eye)
+            && bodies.iter().any(|b| camera_meets_hull(b, eye))
+        {
             out.push((h, 0.0));
             continue;
         }

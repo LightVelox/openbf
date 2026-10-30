@@ -38,8 +38,11 @@ pub fn scope_view(walk: &crate::walk::WalkSim) -> Option<ui::hud_scope::ScopeVie
 pub fn weapon_rows(walk: &crate::walk::WalkSim) -> [Option<HudWeapon>; 2] {
     let sim = &walk.sim;
     let me = &sim.units[walk.player.index as usize];
-    if !me.alive || me.mount.is_some() || sim.controlled_guided(walk.player).is_some() {
+    if !me.alive || sim.controlled_guided(walk.player).is_some() {
         return [None, None];
+    }
+    if me.mount.is_some() {
+        return seat_weapon_rows(walk);
     }
     let visual = walk.teams[usize::from(me.team.min(1))].class(me.spec.class);
     let fill = |clip: u32, rounds: u32| {
@@ -106,6 +109,66 @@ pub fn weapon_rows(walk: &crate::walk::WalkSim) -> [Option<HudWeapon>; 2] {
             ))
         });
     [primary, secondary]
+}
+
+pub fn armed_seat(walk: &crate::walk::WalkSim) -> bool {
+    walk.sim
+        .unit(walk.player)
+        .is_some_and(|u| u.alive && u.mount.is_some())
+        && seat_weapon_rows(walk).iter().any(Option::is_some)
+}
+
+fn seat_weapon_rows(walk: &crate::walk::WalkSim) -> [Option<HudWeapon>; 2] {
+    let sim = &walk.sim;
+    let Some(m) = sim.unit(walk.player).and_then(|u| u.mount) else {
+        return [None, None];
+    };
+    let Some(v) = sim.vehicle(m.vehicle) else {
+        return [None, None];
+    };
+    let class = v.class as usize;
+    let seat = m.seat as usize;
+    let Some(gun) = sim
+        .seat_setup
+        .get(class)
+        .and_then(Option::as_ref)
+        .and_then(|s| s.guns.get(seat))
+        .and_then(Option::as_ref)
+    else {
+        return [None, None];
+    };
+    std::array::from_fn(|channel| {
+        let weapon = gun.weapons.get(channel)?;
+        let c = sim.weapon_classes.get(weapon.class)?;
+        let visual = walk
+            .vehicle_weapon_hud
+            .get(class)?
+            .get(seat)?
+            .get(channel)?;
+        let state = v
+            .guns
+            .get(seat)
+            .and_then(Option::as_ref)
+            .and_then(|s| s.weapons.get(channel));
+        Some(HudWeapon {
+            key: visual.key.clone(),
+            class: visual.class.clone(),
+            icon: visual.icon.clone(),
+            name: String::new(),
+            total: if weapon.infinite {
+                None
+            } else {
+                state.and_then(|s| s.rounds(c))
+            },
+            clip_fraction: state.map_or(1.0, |s| {
+                if c.rounds_per_clip > 0 {
+                    s.clip as f32 / c.rounds_per_clip as f32
+                } else {
+                    1.0
+                }
+            }),
+        })
+    })
 }
 
 /// How long a first frame lets the fades run before it is drawn: a capture

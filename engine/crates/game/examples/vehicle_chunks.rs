@@ -129,6 +129,7 @@ fn main() -> Result<()> {
     let eye = pos + side * distance + Vec3::Y * distance * 0.35;
     let look = (pos + Vec3::Y * 2.0 - eye).normalize();
     let cam = Camera {
+        roll: 0.0,
         position: eye,
         yaw: (-look.x).atan2(-look.z),
         pitch: look.y.asin(),
