@@ -253,8 +253,10 @@ pub struct WeaponHud {
     /// `[V][O]`): the weapon class's `HUDTag`, else its own `GeometryName`,
     /// else its name. `hudtransforms` turns it into a mesh.
     pub key: String,
-    /// The weapon class's own name (`ui::hud::HudWeapon::class`).
+    /// The weapon class's own name.
     pub class: String,
+    /// The class is a BF2 disc's (`ui::hud::HudWeapon::bf2`).
+    pub bf2: bool,
     /// The class's `IconTexture` (BF1's HUD sheet), for a weapon with no BF2
     /// mesh to show.
     pub icon: Option<String>,

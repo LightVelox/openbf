@@ -33,6 +33,11 @@ struct Scene {
 }
 
 fn scene(map: &str, kind: VehicleKind) -> Scene {
+    scene_in(map, "con", kind, None)
+}
+
+/// `scene` on mission `{map}_{mission}`, optionally only vehicles of `only` class.
+fn scene_in(map: &str, mission: &str, kind: VehicleKind, only: Option<&str>) -> Scene {
     let root = game::assets::baked_root();
     let dir = root.join(map);
     let (loaded, _) =
@@ -41,7 +46,7 @@ fn scene(map: &str, kind: VehicleKind) -> Scene {
         &root
             .parent()
             .unwrap()
-            .join(format!("missions/{map}_con.ron")),
+            .join(format!("missions/{map}_{mission}.ron")),
     )
     .expect("real mission");
     let factions = mission.factions();
@@ -105,6 +110,7 @@ fn scene(map: &str, kind: VehicleKind) -> Scene {
         .find_map(|(i, v)| {
             let setup = walk.sim.seat_setup.get(v.class as usize)?.as_ref()?;
             if !v.alive
+                || only.is_some_and(|c| installed.classes[v.class as usize] != c)
                 || v.kind != kind
                 || v.team.is_some_and(|t| t != 0)
                 || v.seats.len() < 2
@@ -113,11 +119,26 @@ fn scene(map: &str, kind: VehicleKind) -> Scene {
                 return None;
             }
             let pos = v.pos;
-            (0..16).find_map(|k| {
-                let angle = k as f32 * std::f32::consts::TAU / 16.0;
-                let p = pos + Vec3::new(angle.sin(), 0.0, angle.cos()) * (setup.radius + 9.0);
-                let p = Vec3::new(p.x, walk.sim.spawn_ground(p), p.z);
-                (p.y > -299.0 && (p.y - pos.y).abs() < 3.0 && walk.sim.floor_line(p, pos))
+            // 9 m outside its radius first; a class-picked scene also takes
+            // other rings and the PILEIN report's 8 m ring round the centre.
+            let rings: &[f32] = if only.is_some() {
+                &[
+                    setup.radius + 9.0,
+                    setup.radius + 6.0,
+                    setup.radius + 12.0,
+                    8.0,
+                ]
+            } else {
+                &[setup.radius + 9.0]
+            };
+            rings.iter().find_map(|&ring| {
+                (0..16).find_map(|k| {
+                    let angle = k as f32 * std::f32::consts::TAU / 16.0;
+                    let p = pos + Vec3::new(angle.sin(), 0.0, angle.cos()) * ring;
+                    let p = Vec3::new(p.x, walk.sim.spawn_ground(p), p.z);
+                    (p.y > -299.0
+                        && (p.y - pos.y).abs() < 3.0
+                        && (ring == 8.0 || walk.sim.floor_line(p, pos)))
                     .then_some((
                         VehicleHandle {
                             index: i as u32,
@@ -125,7 +146,24 @@ fn scene(map: &str, kind: VehicleKind) -> Scene {
                         },
                         p,
                     ))
+                })
             })
+        })
+        .or_else(|| {
+            for v in &walk.sim.vehicles {
+                let p = v.pos + Vec3::X * 8.0;
+                eprintln!(
+                    "candidate {} kind={:?} team={:?} seats={} alive={} pos={:?} ground8={}",
+                    installed.classes[v.class as usize],
+                    v.kind,
+                    v.team,
+                    v.seats.len(),
+                    v.alive,
+                    v.pos,
+                    walk.sim.spawn_ground(p)
+                );
+            }
+            None
         })
         .expect("fielded friendly ground vehicle with a clear approach and secondary seat");
     let class = installed.classes[walk.sim.vehicle(vehicle).unwrap().class as usize].clone();
@@ -440,10 +478,10 @@ fn move_out_and_at_ease_reach_real_waiting_pilots_once_per_press() {
     }
     for (map, kind) in MAPS {
         for bit in [buttons::SQUAD_MOVE_OUT, buttons::SQUAD_AT_EASE] {
-            for distance in [8.0, 90.0, 136.0] {
+            for distance in [8.0, 90.0, 140.0] {
                 let (mut s, pilot) = waiting(map, kind, distance);
-                let bf1 = s.walk.sim.ground_rules == core::soldier::GroundRules::Bf1;
-                let eligible = bf1 && distance < 135.0;
+                // Both games since issue #7 (BF1's rule on BF2 too).
+                let eligible = distance < 135.0;
                 let sent = s.walk.sim.tick;
                 let start = s.walk.sim.vehicle(s.vehicle).unwrap().pos;
                 let start_forward = s.walk.sim.vehicle(s.vehicle).unwrap().rot * Vec3::Z;
@@ -524,8 +562,7 @@ fn pending_release_does_not_cross_real_pilot_or_vehicle_lifetimes() {
                 // Keep the receiver delayed until after the lifecycle transition.
                 s.walk.sim.unit_mut(pilot).unwrap().ai.next_think = s.walk.sim.tick + 20;
                 s.step(bit);
-                let eligible = s.walk.sim.ground_rules == core::soldier::GroundRules::Bf1;
-                assert_eq!(s.walk.sim.unit(pilot).unwrap().order.is_some(), eligible);
+                assert!(s.walk.sim.unit(pilot).unwrap().order.is_some());
                 match end {
                     "pilot" => s
                         .walk
@@ -693,5 +730,290 @@ fn a_poked_pilot_keeps_a_naturally_approaching_boarders_seat() {
             assert!(entry.is_some_and(|t| t > ack.unwrap()));
             assert!(walked > 0.5, "real walking before the boarding teleport");
         }
+    }
+}
+
+/// Issue #4's real AATs: CIS hover tanks with one free seat once the human pilots.
+const AATS: [&str; 2] = ["bf1_nab1", "bf2_nab2"];
+
+/// A CIS AAT with `n` receivers on Hold (or Follow) beside it, an autonomous
+/// claimant 32-39 m out (outside the order reach) that claimed it first, and
+/// the human in the pilot seat.
+fn contested(map: &str, n: usize, follow: bool) -> (Scene, Vec<UnitHandle>, UnitHandle) {
+    let mut s = scene_in(map, "con_cw", VehicleKind::Hover, Some("cis_hover_aat"));
+    let pos = s.walk.sim.vehicle(s.vehicle).unwrap().pos;
+    let receivers: Vec<_> = (0..n)
+        .map(|k| {
+            let p = s.approach + Vec3::X * (k as f32 * 1.5);
+            let p = Vec3::new(p.x, s.walk.sim.spawn_ground(p), p.z);
+            s.bot(p)
+        })
+        .collect();
+    let order = if follow {
+        CommandKind::Follow(s.walk.player)
+    } else {
+        CommandKind::Hold(s.approach)
+    };
+    assert_eq!(s.walk.sim.issue_command(0, order), n as u8);
+    let spot = [32.0f32, 35.0, 38.0]
+        .into_iter()
+        .flat_map(|d| (0..32).map(move |k| (d, k)))
+        .find_map(|(d, k)| {
+            let angle = k as f32 * std::f32::consts::TAU / 32.0;
+            let p = pos + Vec3::new(angle.sin(), 0.0, angle.cos()) * d;
+            let p = Vec3::new(p.x, s.walk.sim.spawn_ground(p), p.z);
+            (p.y > -299.0
+                && (p.y - pos.y).abs() < 4.0
+                && !s.walk.sim.level_at(p).is_off()
+                && !s
+                    .walk
+                    .sim
+                    .death_regions
+                    .iter()
+                    .any(|r| r.contains(p + Vec3::Y))
+                && s.walk.sim.collision.enclosing(p + Vec3::Y).is_none())
+            .then_some(p)
+        })
+        .expect("a claimant spot 32-39 m from the real AAT");
+    // Only this AAT within the claimant's search: no other vehicle near.
+    let others: Vec<_> = s
+        .walk
+        .sim
+        .alive_vehicles()
+        .filter(|(h, v)| *h != s.vehicle && v.pos.distance(pos) < 120.0)
+        .map(|(h, _)| h)
+        .collect();
+    for h in others {
+        s.walk.sim.remove_vehicle(h);
+    }
+    let claimant = s.bot(spot);
+    let target = s
+        .walk
+        .sim
+        .cps
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| {
+            a.def
+                .pos
+                .distance_squared(pos)
+                .total_cmp(&b.def.pos.distance_squared(pos))
+        })
+        .map(|(i, _)| i as u32)
+        .unwrap();
+    s.walk.sim.unit_mut(claimant).unwrap().ai.target_cp = Some(target);
+    s.walk.sim.unit_mut(claimant).unwrap().ai.next_think = s.walk.sim.tick;
+    // The claimant takes the empty vehicle by its own search.
+    for _ in 0..30 {
+        s.step(0);
+        if s.walk
+            .sim
+            .unit(claimant)
+            .unwrap()
+            .ai
+            .ride
+            .is_some_and(|r| r.board == Some(s.vehicle))
+        {
+            break;
+        }
+    }
+    let u = s.walk.sim.unit(claimant).unwrap();
+    let r = u.ai.ride.unwrap_or_default();
+    if r.board != Some(s.vehicle) {
+        let cps: Vec<_> = s
+            .walk
+            .sim
+            .cps
+            .iter()
+            .map(|c| (c.def.name.clone(), c.def.pos.distance(u.soldier.pos)))
+            .collect();
+        eprintln!(
+            "NOCLAIM {map} pos={:?} target={:?} cps={cps:?} ride={:?} behaviour={:?} next_think={} tick={}",
+            u.soldier.pos, u.ai.target_cp, u.ai.ride, u.ai.behaviour, u.ai.next_think, s.walk.sim.tick
+        );
+    }
+    assert_eq!(r.board, Some(s.vehicle), "{map}: autonomous claim");
+    assert!(r.called_board.is_none() && r.player_board.is_none());
+    assert!(s.walk.sim.enter_vehicle(s.walk.player, s.vehicle, 0));
+    eprintln!(
+        "CLAIMANT {map} since={} distance={:.1}",
+        r.since,
+        spot.distance(pos)
+    );
+    (s, receivers, claimant)
+}
+
+#[test]
+fn pile_in_outranks_an_older_autonomous_claim_on_real_aats() {
+    if !maps_available() {
+        return;
+    }
+    for map in AATS {
+        let (mut s, receivers, claimant) = contested(map, 1, false);
+        let bot = receivers[0];
+        let mut entry = None;
+        for tick in 0..60 {
+            s.step(if tick == 0 { buttons::SQUAD_FOLLOW } else { 0 });
+            if tick == 0 {
+                // The older claim is still live when the order lands.
+                let r = s.walk.sim.unit(claimant).unwrap().ai.ride;
+                assert!(r.is_some_and(|r| r.board == Some(s.vehicle)), "{map}");
+            }
+            if let Some(m) = s.walk.sim.unit(bot).unwrap().mount {
+                assert_eq!((m.vehicle, m.seat), (s.vehicle, 1));
+                entry = Some(tick + 1);
+                break;
+            }
+        }
+        eprintln!("PILEIN {map} entry={entry:?}");
+        assert!(entry.is_some(), "{map}: receiver boards within 2 s");
+        assert!(s.walk.sim.unit(claimant).unwrap().mount.is_none());
+    }
+}
+
+#[test]
+fn pile_in_with_one_free_seat_boards_exactly_one_receiver() {
+    if !maps_available() {
+        return;
+    }
+    for map in AATS {
+        for follow in [false, true] {
+            // FOLLOW ME takes two followers (FOLLOW_CAP).
+            for n in if follow { vec![2] } else { vec![2, 3] } {
+                let (mut s, receivers, claimant) = contested(map, n, follow);
+                let original: Vec<_> = receivers
+                    .iter()
+                    .map(|&h| s.walk.sim.unit(h).unwrap().command)
+                    .collect();
+                let mut entry = None;
+                for tick in 0..90 {
+                    s.step(if tick == 0 { buttons::SQUAD_FOLLOW } else { 0 });
+                    let mounted = receivers
+                        .iter()
+                        .filter(|&&h| s.walk.sim.unit(h).unwrap().mount.is_some())
+                        .count();
+                    assert!(mounted <= 1, "{map} n={n}: one free seat");
+                    if mounted == 1 {
+                        entry.get_or_insert(tick + 1);
+                    }
+                    // A boarder may give up its Follow inside its leader's vehicle.
+                    for (h, c) in receivers.iter().zip(&original) {
+                        if s.walk.sim.unit(*h).unwrap().mount.is_some() {
+                            continue;
+                        }
+                        assert_eq!(
+                            s.walk.sim.unit(*h).unwrap().command,
+                            *c,
+                            "{map} n={n} follow={follow}: retained order"
+                        );
+                    }
+                }
+                eprintln!("PILEIN1 {map} follow={follow} n={n} entry={entry:?}");
+                assert!(
+                    entry.is_some_and(|t| t <= 60),
+                    "{map} n={n}: one boards in 2 s"
+                );
+                assert!(s.walk.sim.unit(claimant).unwrap().mount.is_none());
+                for h in &receivers {
+                    let u = s.walk.sim.unit(*h).unwrap();
+                    if u.mount.is_none() {
+                        assert!(
+                            u.ai.ride.is_none_or(|r| r.player_board.is_none()),
+                            "{map}: no stale PILE IN claim"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Issue #35: a player's fusion cutter slices a real enemy AAT on NAB1 and
+/// NAB2: its meter fills by ShotDelay a shot (10 s for BF2's AAT, its
+/// `TimeRequiredToEject`; BF1's hover default 3 s), both riders are put out,
+/// only the slicer may board for SLICE_RESERVE, and it boards.
+#[test]
+fn a_player_slices_a_real_enemy_aat() {
+    if !maps_available() {
+        return;
+    }
+    for map in AATS {
+        let mut s = scene_in(map, "con_cw", VehicleKind::Hover, Some("cis_hover_aat"));
+        let class = s.walk.sim.vehicle(s.vehicle).unwrap().class as usize;
+        let time = s.walk.sim.slice_time[class];
+        assert_eq!(time, if map == "bf2_nab2" { 10.0 } else { 3.0 }, "{map}");
+        // Two enemy riders: idle players, so nobody drives off.
+        let riders: Vec<_> = (0..2u8)
+            .map(|k| {
+                let h = s
+                    .walk
+                    .sim
+                    .spawn(&core::unit::UnitSpec::player_in_slot(k + 1, 1, s.approach))
+                    .unwrap();
+                assert!(s.walk.sim.seat_unit(h, s.vehicle, k));
+                h
+            })
+            .collect();
+        assert_eq!(s.walk.sim.vehicle(s.vehicle).unwrap().team, Some(1));
+        let cutter = s
+            .walk
+            .sim
+            .weapon_classes
+            .iter()
+            .position(|w| w.repair.is_some())
+            .expect("the side's cutter is loaded");
+        let (centre, radius) = s.walk.sim.vehicle_sphere(s.vehicle).unwrap();
+        let mut away = s.approach - centre;
+        away.y = 0.0;
+        let mut at = centre + away.normalize() * (radius + 1.0);
+        at.y = s.walk.sim.spawn_ground(at);
+        s.walk.sim.cheats.infinite_stamina = true;
+        let player = s.walk.player;
+        let health = s.walk.sim.vehicle(s.vehicle).unwrap().health.cur;
+        let mut ejected = None;
+        for tick in 0..20 * 30 {
+            {
+                let u = s.walk.sim.unit_mut(player).unwrap();
+                u.weapon_class = cutter;
+                u.soldier.pos = at;
+                u.soldier.vel = Vec3::ZERO;
+            }
+            let eye = s.walk.sim.unit(player).unwrap().muzzle();
+            let dir = (centre - eye).normalize();
+            {
+                let u = s.walk.sim.unit_mut(player).unwrap();
+                u.soldier.yaw = (-dir.x).atan2(-dir.z);
+                u.soldier.pitch = dir.y.clamp(-1.0, 1.0).asin();
+            }
+            s.step(buttons::FIRE);
+            if riders
+                .iter()
+                .all(|&r| s.walk.sim.unit(r).unwrap().mount.is_none())
+            {
+                ejected = Some(tick);
+                break;
+            }
+        }
+        eprintln!("SLICE {map} time={time} ejected={ejected:?}");
+        let shots = (time / 0.5).floor() as u64 + 1;
+        assert_eq!(
+            ejected,
+            Some((shots - 1) * 15),
+            "{map}: shot {shots} ejects"
+        );
+        let v = s.walk.sim.vehicle(s.vehicle).unwrap();
+        assert_eq!(v.health.cur, health, "{map}: slicing does not repair");
+        assert_eq!(v.slice_hold.map(|(h, _)| h), Some(player));
+        for &r in &riders {
+            let u = s.walk.sim.unit(r).unwrap();
+            assert!(u.alive);
+            assert!(!s.walk.sim.enter_vehicle(r, s.vehicle, 0), "{map}: held");
+        }
+        let mate = s.bot(at);
+        assert!(!s.walk.sim.enter_vehicle(mate, s.vehicle, 1), "{map}: held");
+        assert!(
+            s.walk.sim.enter_vehicle(player, s.vehicle, 0),
+            "{map}: the slicer boards"
+        );
     }
 }

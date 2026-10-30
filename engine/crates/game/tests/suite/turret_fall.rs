@@ -474,7 +474,11 @@ fn engineer(w: &mut World, c: &Case, i: usize, d: f32, from: usize) -> UnitHandl
 fn fixers(w: &World, i: usize) -> Vec<UnitHandle> {
     w.sim
         .alive_units()
-        .filter(|(_, u)| u.ai.fix.cur.is_some_and(|f| usize::from(f.turret) == i))
+        .filter(|(_, u)| {
+            u.ai.fix
+                .cur
+                .is_some_and(|f| f.target == core::ai::fix::FixTarget::Turret(i as u16))
+        })
         .map(|(h, _)| h)
         .collect()
 }

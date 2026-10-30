@@ -104,16 +104,28 @@ fn the_flag_survives_a_respawn() {
 #[test]
 fn the_targets_are_the_maintainers_and_fall_by_tier() {
     assert_eq!(target(Difficulty::Easy), (0.90, 1.0));
-    assert_eq!(target(Difficulty::Normal), (0.65, 0.80));
+    assert_eq!(target(Difficulty::Normal), (0.77, 0.90));
     assert_eq!(target(Difficulty::Hard), (0.45, 0.60));
     assert_eq!(target(Difficulty::Elite), (0.25, 0.40));
     for w in TARGETS.windows(2) {
         assert!(w[1].1 < w[0].1 && w[1].2 <= w[0].2);
     }
-    assert!(passes(Difficulty::Normal, 23, 32));
-    assert!(!passes(Difficulty::Normal, 27, 32));
+    assert!(passes(Difficulty::Normal, 28, 32));
+    assert!(!passes(Difficulty::Normal, 24, 32));
+    assert!(!passes(Difficulty::Normal, 30, 32));
+    assert!(!passes(Difficulty::Normal, 32, 32));
     assert!(passes(Difficulty::Easy, 32, 32));
     assert!(!passes(Difficulty::Elite, 0, 0));
+    for (d, lo, hi) in [
+        (Difficulty::Easy, 90, 100),
+        (Difficulty::Normal, 77, 90),
+        (Difficulty::Hard, 45, 60),
+        (Difficulty::Elite, 25, 40),
+    ] {
+        assert!(passes(d, lo, 100) && passes(d, hi, 100), "{d:?}");
+        assert!(!passes(d, lo - 1, 100) && !passes(d, hi + 1, 100), "{d:?}");
+    }
+
     assert_eq!(Strength::parse("AVG"), Some(Strength::Average));
     assert_eq!(Strength::parse("good").map(Strength::label), Some("good"));
 }
@@ -202,8 +214,8 @@ fn post(sim: &mut Sim, name: &str, at: Vec3, owner: Option<u8>) {
 }
 
 /// A hunting proxy attacks the nearest post its team does not hold (its
-/// own nearer post is not one), then hunts when it holds them all; a bot
-/// and a proxy that does not hunt keep the commander's plan.
+/// own nearer post is not one), then hunts when it holds them all; a Normal
+/// bot and a proxy that does not hunt keep the commander's plan.
 #[test]
 fn a_hunting_proxy_goes_to_the_nearest_post_it_does_not_hold() {
     use crate::commander::Objective;
@@ -239,7 +251,7 @@ fn a_hunting_proxy_goes_to_the_nearest_post_it_does_not_hold() {
 
 /// A mending proxy under its share goes to the nearest standing health
 /// droid in reach, stays there until nearly whole, and never goes to one
-/// out of reach or destroyed; a bot never mends.
+/// out of reach or destroyed; a bot whose tier has no `mend` never mends.
 #[test]
 fn a_hurt_proxy_goes_to_a_health_droid_and_stays_until_whole() {
     let (mut sim, a, _) = field(Difficulty::Normal);
@@ -320,7 +332,7 @@ fn a_proxy_respawns_as_its_class() {
 
 /// A picking proxy takes the enemy aiming at it over a nearer one, a hurt
 /// one over a slightly nearer whole one, and only enemies it sees now; a
-/// proxy that does not pick, and a bot, get nothing from it.
+/// proxy that does not pick, and a Normal bot, get nothing from it.
 #[test]
 fn a_picking_proxy_takes_the_threat_then_the_hurt_then_the_nearest() {
     use crate::perception::{Contact, Foe};
@@ -386,4 +398,118 @@ fn the_good_proxy_carries_the_fitted_features() {
     let a = Strength::Average.profile();
     assert!(a.hand.is_none() && !a.headshots && !a.hunts && !a.picks);
     assert_eq!((a.class, a.mend), (None, 0.0));
+}
+
+// [ours] Tier features use each team's row, including split-tier rounds.
+#[test]
+fn tier_bots_attack_the_nearest_unheld_post() {
+    use crate::commander::Objective;
+    let (mut sim, a, _) = field(Difficulty::Easy);
+    for c in &mut sim.cps {
+        c.owner = Some(0);
+    }
+    let n = sim.cps.len() as u32;
+    post(&mut sim, "near", Vec3::new(0.0, 0.0, 30.0), None);
+    post(&mut sim, "far", Vec3::new(0.0, 0.0, 60.0), Some(1));
+    sim.team_difficulty[0] = Some(Difficulty::Elite);
+    assert_eq!(
+        front(&sim, sim.unit(a).unwrap()),
+        Some(Objective::Attack(n))
+    );
+    sim.cps[n as usize].owner = Some(0);
+    assert_eq!(
+        front(&sim, sim.unit(a).unwrap()),
+        Some(Objective::Attack(n + 1))
+    );
+    sim.cps[n as usize + 1].owner = Some(0);
+    assert_eq!(front(&sim, sim.unit(a).unwrap()), Some(Objective::Hunt));
+    sim.difficulty = Difficulty::Elite;
+    for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+        sim.team_difficulty[0] = Some(d);
+        assert_eq!(front(&sim, sim.unit(a).unwrap()), None, "{d:?}");
+    }
+}
+
+#[test]
+fn tier_hurt_bots_seek_a_working_health_droid() {
+    let (mut sim, a, _) = field(Difficulty::Easy);
+    let c = sim.add_station_class(crate::sim::StationClass::soldier("health", 0.5, 20.0, 0));
+    let at = Vec3::new(30.0, 0.0, 0.0);
+    sim.stations.push(crate::sim::Station::new(c, at, 2.0));
+    for d in [Difficulty::Hard, Difficulty::Elite] {
+        sim.team_difficulty[0] = Some(d);
+        let u = sim.unit_mut(a).unwrap();
+        u.soldier.pos = Vec3::ZERO;
+        u.health.cur = u.health.max * 0.34;
+        assert_eq!(mend(&sim, sim.unit(a).unwrap()), Some(at), "{d:?}");
+        let u = sim.unit_mut(a).unwrap();
+        u.health.cur = u.health.max * 0.35;
+        assert_eq!(mend(&sim, sim.unit(a).unwrap()), None, "threshold");
+        sim.unit_mut(a).unwrap().soldier.pos = at;
+        assert_eq!(mend(&sim, sim.unit(a).unwrap()), Some(at), "stay to heal");
+        let u = sim.unit_mut(a).unwrap();
+        u.health.cur = u.health.max * 0.95;
+        assert_eq!(mend(&sim, sim.unit(a).unwrap()), None, "healed");
+    }
+    sim.difficulty = Difficulty::Elite;
+    for d in [Difficulty::Easy, Difficulty::Normal] {
+        sim.team_difficulty[0] = Some(d);
+        let u = sim.unit_mut(a).unwrap();
+        u.health.cur = u.health.max * 0.1;
+        assert_eq!(mend(&sim, sim.unit(a).unwrap()), None, "{d:?}");
+    }
+    sim.team_difficulty[0] = Some(Difficulty::Hard);
+    sim.stations[0].destroyed = true;
+    assert_eq!(mend(&sim, sim.unit(a).unwrap()), None, "destroyed");
+    sim.stations[0].destroyed = false;
+    sim.unit_mut(a).unwrap().soldier.pos = at + Vec3::X * 81.0;
+    assert_eq!(mend(&sim, sim.unit(a).unwrap()), None, "too far");
+}
+
+#[test]
+fn tier_elite_bots_prioritize_visible_threats() {
+    use crate::perception::{Contact, Foe};
+    let (mut sim, a, near) = field(Difficulty::Easy);
+    let far = bot(&mut sim, 1, Vec3::new(0.0, 0.0, -22.0));
+    let mut st = crate::ai::state::AiState::default();
+    for (i, h) in [near, far].into_iter().enumerate() {
+        st.contacts[i] = Some(Contact {
+            handle: Foe::Unit(h),
+            first_seen: 0,
+            last_seen: 0,
+            last_pos: Vec3::ZERO,
+            seen_now: true,
+            heard: false,
+            told: false,
+        });
+    }
+    sim.team_difficulty[0] = Some(Difficulty::Elite);
+    assert_eq!(pick(&sim, a, &st), Some(near));
+    sim.unit_mut(far).unwrap().ai.target = Some(a.into());
+    assert_eq!(pick(&sim, a, &st), Some(far), "shoot the threat");
+    st.contacts[1].as_mut().unwrap().seen_now = false;
+    assert_eq!(pick(&sim, a, &st), Some(near), "only seen enemies");
+    sim.difficulty = Difficulty::Elite;
+    for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+        sim.team_difficulty[0] = Some(d);
+        assert_eq!(pick(&sim, a, &st), None, "{d:?}");
+    }
+    let u = sim.unit(a).unwrap();
+    assert!(u.proxy_human.is_none() && !u.weapon.human && u.skill <= 20);
+}
+
+#[test]
+fn proxy_features_do_not_inherit_the_hosts_bot_columns() {
+    for d in Difficulty::ALL {
+        let (mut sim, a, _) = field(d);
+        for p in [Strength::Average.profile(), Strength::Good.profile()] {
+            sim.set_proxy(a, Some(p));
+            let t = sim.unit_tier(sim.unit(a).unwrap());
+            assert_eq!(
+                (t.picks, t.mend, t.hunts),
+                (p.picks, p.mend, p.hunts),
+                "{d:?}"
+            );
+        }
+    }
 }

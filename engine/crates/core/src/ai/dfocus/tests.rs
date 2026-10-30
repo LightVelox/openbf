@@ -343,3 +343,29 @@ fn in_play_hard_turns_to_the_human_but_not_through_a_wall() {
     assert_eq!(run(Difficulty::Hard, false), (true, true));
     assert_eq!(run(Difficulty::Hard, true), (false, false), "a wall");
 }
+
+#[test]
+fn a_proxy_gets_the_same_focus_grace_as_a_player() {
+    let (mut sim, _) = crate::ai::tests::l_sim();
+    sim.units.clear();
+    sim.players.clear();
+    sim.difficulty = Difficulty::Hard;
+    let human = sim
+        .spawn(&UnitSpec {
+            controller: Controller::Ai,
+            ..UnitSpec::trooper(0, Vec3::ZERO)
+        })
+        .unwrap();
+    sim.set_proxy(human, Some(crate::ai::proxy::Strength::Good.profile()));
+    let b = bot(&mut sim, 10.0, 0);
+    sees(&mut sim, b, human);
+    deal(&mut sim);
+    assert!(sim.tokens.is_empty(), "spawn grace");
+    sim.tick += GRACE;
+    sees(&mut sim, b, human);
+    deal(&mut sim);
+    assert_eq!(holders(&sim), vec![b], "proxy can be focused after grace");
+    sim.unit_mut(human).unwrap().alive = false;
+    upkeep(&mut sim);
+    assert!(sim.focus_born.is_empty(), "dead handles expire");
+}

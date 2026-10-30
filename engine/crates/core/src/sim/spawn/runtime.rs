@@ -761,8 +761,9 @@ impl Sim {
     /// ([`CLASS_FLOOR`] of an EVEN share, the same for every class): each one
     /// alive takes one unit off its class's weight; a class at or past its
     /// share keeps only the floor, so sixteen riflemen or sixteen droidekas
-    /// can happen and almost never do. A class at its authored `max` (BF2
-    /// `SetupTeams`) has weight 0 — the disc's own cap.
+    /// can happen and almost never do. [ours] (the maintainer 2026-10-29) a
+    /// class's authored `max` (BF2 `SetupTeams`, the droideka's 4) does not
+    /// cap the roll: it only refuses a human (`class_refusal`).
     pub fn ai_class_weights(&self, team: u8) -> Vec<f32> {
         let table = &self.classes[usize::from(team.min(1))];
         let cap = self.ai_alive_cap.max(1) as f32;
@@ -777,12 +778,8 @@ impl Sim {
                         u.alive && !u.is_player && u.team == team && usize::from(u.spec.class) == c
                     })
                     .count() as u32;
-                if table[c].max.is_some_and(|m| alive >= m) {
-                    0.0
-                } else {
-                    let share = cap * class_share(c) / parts;
-                    (share - alive as f32).max(0.0) + floor
-                }
+                let share = cap * class_share(c) / parts;
+                (share - alive as f32).max(0.0) + floor
             })
             .collect()
     }

@@ -235,7 +235,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/stall.rs` 802 — last-resort stalled-bot recovery/recycling (OURS, PROVISIONAL) and its regressions · `watch`, `send_off`; net-progress/failed-window rules and the once-per-place floor-walk escape are specified in its header/source docs; off-level recovery belongs to `LostState`/bounds.
 - `core/src/ai/command.rs` 358 — squad-order AI scratch state and cleanup, with follow/hold/release regressions · `CmdState`, `AiState::cmd_clear`; execution belongs to `squad::steer`.
 - `core/src/ai/draw.rs` 427 — deterministic per-unit hash randomness, named salts and stance draws; includes stance regressions · `unit_rand`, `unit_unit`, `unit_dir`, `route_rand`, `stance_hold`; header specifies its separation from the sim LCG.
-- `core/src/ai/route.rs` 1618 — bot objectives, graph legs, same-storey hub/waypoint/post selection and route advancement · `plan_leg`, `start_hub`, `level_hub`, `mover`, `post_hub`, `advance_route`, `hub_point`, `post_point`, `aim_last_leg`; `first_leg` / `floor_walked` serve SPNC's census. Rules are in the module/method docs; regressions are in `core/src/ai/route/tests.rs`.
+- `core/src/ai/route.rs` 1620 — bot objectives, graph legs, same-storey hub/waypoint/post selection and route advancement · `plan_leg`, `start_hub`, `level_hub`, `mover`, `post_hub`, `advance_route`, `hub_point`, `post_point`, `aim_last_leg`; `first_leg` / `floor_walked` serve SPNC's census. Rules are in the module/method docs; regressions are in `core/src/ai/route/tests.rs`.
 - `core/src/ai/route/tests.rs` 1158 — AI route, same-storey/arrival, post/hub waypoint and barrier/corner-detour regressions, including deck spawn, per-unit hub points and progress-window continuation (DAGS/HUBP/MOUTH).
 - `core/src/ai/avoid.rs` 1230 — foot-bot obstacle avoidance and parked-vehicle footprints (OURS, PROVISIONAL) · `pick`, `clear`, `footprint`, `foot_ahead`, `at_foot_of`; side commitment, leave/corner/rim rules and traversal regressions live here; see `analysis/bot-design.md` 4.7. Probe ownership is `steer.rs`.
 - `core/src/ai/steer.rs` 1366 — AI wall/hull, barrier, floor/steep-band/ramp and opening-door probes; includes walking regressions · `rotate_xz`, `way_ahead`, `Stop`, `StopKind`; `way_ahead` is diagnostic only. Probe rules are specified in the header/source docs; heading selection belongs to `avoid.rs`.
@@ -244,7 +244,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/team.rs` 557 — derived think-window unit grid, follow spacing and team Cover/Flank roles · `UnitGrid`, `Sim::units_within`, `follow_ease`, `board`, `flank_cap`; shared perception stays in `perception::tell`. Grid lifetime/order, role rules and constants are specified in the header and `analysis/bot-design.md` 4.1/4.3/6.2; derived grid is not hashed.
 - `core/src/ai/team/tests.rs` 471 — unit-grid equivalence/lifetime, follow spacing and Cover/Flank role regressions, including diamond-route behavior.
 - `core/src/ai/behave.rs` 77 — foot-bot behavior facade, shared `Tick`, and the `think` / `lost_jump` exports; see `analysis/bot-design.md` 3.
-- `core/src/ai/behave/brain.rs` 946 — foot-bot tick priority chain, next-think call delivery and explicit human boarding over retained commands, valid boarding maintenance, guard goal, failed-walk recovery and hub arrival; hands one aim request to the gunner and one move request to the mover, writing no sticks.
+- `core/src/ai/behave/brain.rs` 963 — foot-bot tick priority chain, next-think call delivery and explicit human boarding over retained commands, valid boarding maintenance, guard goal, failed-walk recovery and hub arrival; hands one aim request to the gunner and one move request to the mover, writing no sticks.
 - `core/src/ai/behave/position.rs` 590 — fight and hold positions, hit reactions, grenade escape and lost-bot jump probes.
 - `core/src/ai/behave/position/tests.rs` 1153 — the 24 behavior regressions spanning tick dispatch, fight positions, reactions, grenades and return to the level.
 - `core/src/ai/abilities.rs` 183 — pure officer support, remote-droid and auto-turret (the BF2 cluster rule) selection through secondary fire and switch inputs · `input` (re-exported as `ai::ability_input` in `ai.rs`).
@@ -280,7 +280,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/gunner.rs` 239 — seated-bot aim/fire requests, shared foot-gunner charge release/fire gates and barrel-cone checks · `aim`, `Look`; `Sim::seat_gun` executes them. Rules and PROVISIONAL AI-gunner limitations are in the module header; building-turret aim state belongs to `ManState::aim`.
 - `core/src/ai/arcm.rs` 221 — failed-link memory, team arc exclusions and back-and-forth detection · `ArcmState`, `Osc`, `ArcFails`; OURS, `analysis/bot-design.md` §9 D20.
 - `core/src/ai/dfocus.rs` 249 — Card DFOCUS (D25, OURS): focus fire on HUMAN players at Hard and Elite. The holders of a human's hit tokens (`super::tokn`) are his focusers: at
-- `core/src/ai/proxy.rs` 226 — Card DPRX (OURS, a measuring tool): the HUMAN PROXY - a bot the sim treats as a human player for every human-only rule, so the sweep and the arena
+- `core/src/ai/proxy.rs` 451 — fixed human proxy profiles and shared tier targeting, health-droid and post choices · `Profile`, `Strength`, `front`, `mend`, `pick`, `TARGETS`.
 - `core/src/ai/tokn.rs` 263 — Card TOKN (D24, OURS): damage pacing against HUMAN players - hit tokens. Each human has a budget of tokens per difficulty ([`budget`]); a bot's
 - `core/src/ai/unseen.rs` 170 — Card UNSN (D23, OURS): a bot the stall watch gives up is moved on, not killed, when no human can see it happen. The recycle of card RCYC
 - `core/src/ai/wake.rs` 135 — early bot think on hits, near misses and newly seen enemies, with wake cooldown · `HIT`, `NEAR`, `SEEN`; OURS, `analysis/bot-design.md` §9 D21.
@@ -288,12 +288,13 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/wake/tests.rs` 153 — Card HYST: the early think's tests.
 - `core/src/ai/unseen/tests.rs` 179 — tests for `core/src/ai/unseen`
 - `core/src/ai/tokn/tests.rs` 251 — tests for `core/src/ai/tokn`
-- `core/src/ai/proxy/tests.rs` 119 — tests for `core/src/ai/proxy`
-- `core/src/ai/dfocus/tests.rs` 345 — tests for `core/src/ai/dfocus`
+- `core/src/ai/proxy/hand.rs` 136 — proxy-only player aim and held-trigger model · `Hand`, `aim`, `tolerance`, `holds`, `tap`.
+- `core/src/ai/proxy/tests.rs` 515 — tests for `core/src/ai/proxy`
+- `core/src/ai/dfocus/tests.rs` 371 — tests for `core/src/ai/dfocus`
 - `core/src/ai/arcm/tests.rs` 290 — Card ARCM: the back-and-forth detector, the bot's closed arcs, the team's count and the route draw round them.
 - `core/src/commander.rs` 2339 — persistent per-bot Conquest post goals and defend-hint allocation · `TeamPlan`, `plan`, `draw_post`, `defend_cap`, `post_threatened`; per-game redraw rules and port defender limits are specified in the header and `analysis/re-conquest-goal.md`.
 - `core/src/perception.rs` 1405 — contact memory, view/LOS, target acquisition and teammate contact sharing · `scan` (enemy remote droids are candidates too: `Foe`, `alive`, `foe_motion`, `droid_view_distance`), `tell`, `choose_target`, `choose_target_with`, `los_seat`, `past_buildings`; turret muzzle/own-building/arc behavior is specified with the helpers (TURR). Fairness requires a held perception contact; see module header.
-- `core/src/skill.rs` 942 — the four difficulty tiers (Easy, Normal, Hard, Elite; the maintainer 2026-10-28), skill vector, tier-dependent grenade/reaction choices and the per-team human-surplus rule (card DTEAM) · `Difficulty`, `Skill`, `Tier`, `Tier::react`, `team_skill`, `TeamSkill`; provisional tier values and provenance are specified in the module header.
+- `core/src/skill.rs` 994 — the four difficulty tiers (Easy, Normal, Hard, Elite; the maintainer, 2026-10-28), skill vector, tier-dependent grenade/reaction choices and the per-team human-surplus rule (card DTEAM) · `Difficulty`, `Skill`, `Tier`, `Tier::react`, `team_skill`, `TeamSkill`; provisional tier values and provenance are specified in the module header.
 - `core/src/squad.rs` 1306 — BF1 squad orders, pending-call cancellation on actual player orders, tenure-bound mounted release delivery, pending acknowledgments and follow/hold/release execution, generation-bound ground-pilot PILE IN/EVERYONE OUT, own-search suppression and follower vehicle goals · `Order`, `Pending`, `BoardIssuer`, `Command`, `steer`; rules and replay regressions live here and in `analysis/re-squad-orders.md` (SQACK).
 
 ## game — the binary and its library

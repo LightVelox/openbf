@@ -531,7 +531,7 @@ impl Sim {
     pub fn enter_seat(&self, u: UnitHandle, vh: VehicleHandle) -> Option<u8> {
         let unit = self.unit(u)?;
         let v = self.vehicle(vh)?;
-        if v.team.is_some_and(|t| t != unit.team) {
+        if v.team.is_some_and(|t| t != unit.team) || v.held_against(u, self.tick) {
             return None;
         }
         let setup = self.seat_setup.get(v.class as usize)?.as_ref()?;
@@ -561,6 +561,9 @@ impl Sim {
         let Some(target) = v.seats.get(usize::from(seat)) else {
             return false;
         };
+        if v.held_against(u, self.tick) {
+            return false;
+        }
         let held = target.occupant;
         if held.is_some_and(|occupant| {
             !unit.is_player || self.unit(occupant).is_none_or(|rider| rider.is_player)

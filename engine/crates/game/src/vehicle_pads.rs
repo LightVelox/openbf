@@ -524,6 +524,12 @@ pub fn install(
         setups.push(Some(blast_setup(&db, c, sphr)));
     }
     sim.blast_setup = setups;
+    // Issue #35: each class's slice time.
+    sim.slice_time = b
+        .classes
+        .iter()
+        .map(|c| vehicle_class::slice_time(&db, c))
+        .collect();
     // Each class's hull (card VHULL), before anything spawns from a pad; a
     // building turret has none — its building is the world's own body.
     sim.hull_parts = hull_parts_from(

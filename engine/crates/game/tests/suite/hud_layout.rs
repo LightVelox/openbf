@@ -42,6 +42,7 @@ fn hot1_post_a() -> ui::hud::HudModel {
             name: String::new(),
             total: Some(250),
             clip_fraction: 1.0,
+            bf2: true,
         }),
         reticle: Some(0),
         reticle_y: game::walk::ps2_reticle_y("bf2"),
@@ -539,6 +540,7 @@ fn weapon(key: &str, class: &str, icon: Option<&str>, total: Option<u32>) -> ui:
         name: String::new(),
         total,
         clip_fraction: 1.0,
+        bf2: false,
     }
 }
 
@@ -767,4 +769,155 @@ fn the_domination_countdown_shows_victory_in_or_defeat_in() {
         !shown(&hud, win) && !shown(&hud, lose),
         "both hidden when it ends"
     );
+}
+
+/// Every `<game>_*.ron` side file of the bake in one class db.
+fn side_db(game: &str) -> game::classdb::ClassDb {
+    let mut files: Vec<_> = std::fs::read_dir(baked().join("classes"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(&format!("{game}_")))
+        })
+        .collect();
+    files.sort();
+    let mut db = game::classdb::ClassDb::default();
+    for f in &files {
+        db.load(f).unwrap();
+    }
+    db
+}
+
+/// The HUD row a soldier's weapon class sends (`game::roster::weapon_hud`).
+fn hud_row(db: &game::classdb::ClassDb, class: &str) -> ui::hud::HudWeapon {
+    game::hud_feed::hud_weapon(&game::roster::weapon_hud(db, class), Some(1), 1.0)
+}
+
+/// The maintainer's report (2026-10-29): the Republic engineer's detpack
+/// showed the time bomb's model. BF2 sends the detpack's `HUDTag`
+/// `com_weap_inf_detpack` (`re-hud.md` §3 [V][O]); `hudtransforms` has no
+/// entry for it, so the PS2 falls back to the model of that name, which
+/// 1playerhud places in `player1weapon2mesh`. The table's
+/// `rep_weap_inf_detpack -> com_weap_inf_seismic_mine` row keys a class
+/// name the PS2 never sends for this class. The time bombs (`HUDTag`
+/// `com_weap_inf_seismic_mine`) keep the seismic mine.
+#[test]
+fn the_detpack_shows_its_own_model_and_the_time_bomb_the_seismic_mine() {
+    let Some(mut v) = view([640, 480]) else {
+        return;
+    };
+    let db = side_db("bf2");
+    for side in ["rep", "cis", "imp", "all"] {
+        for (weapon, want) in [
+            ("detpack", "com_weap_inf_detpack"),
+            ("timebomb", "com_weap_inf_seismic_mine"),
+        ] {
+            let class = format!("{side}_weap_inf_{weapon}");
+            if db.get(&class).is_none() {
+                continue;
+            }
+            let row = hud_row(&db, &class);
+            let (key, mesh) = v.weapon_mesh(2, &row);
+            println!(
+                "{class}: sends {:?}, table key {key}, model {mesh:?}",
+                row.key
+            );
+            assert_eq!(mesh.as_deref(), Some(want), "{class}");
+            let model = ui::hud::HudModel {
+                weapon2: Some(row),
+                ..hot1_post_a()
+            };
+            shown(&mut v, &model);
+            assert!(v.bounds("player1weapon2mesh").is_some(), "{class} drawn");
+        }
+    }
+    // The same rule elsewhere: the TIE bomber's torpedo sends
+    // `hud_vehicle_recoiless` (a model), not its class's table row; the
+    // officer's defense buff sends `hud_rep_defense_buff`, a REP.LVL model
+    // the bake lacks, so it keeps its class's row (`[ours]`).
+    for (row, class, want) in [
+        (
+            1,
+            "imp_weap_fly_tiebomber_ptorpedo",
+            "hud_vehicle_recoiless",
+        ),
+        (
+            2,
+            "rep_weap_inf_buff_defense",
+            "hud_rep_weap_defense_buff_icon",
+        ),
+    ] {
+        let mesh = v.weapon_mesh(row, &hud_row(&db, class)).1;
+        assert_eq!(mesh.as_deref(), Some(want), "{class}");
+    }
+    // BF1's one bomb, the rebels' remote charge: its own geometry, the
+    // seismic mine, which BF2's layout places.
+    let bf1 = side_db("bf1");
+    let row = hud_row(&bf1, "all_weap_inf_remote_charge_dispenser");
+    assert_eq!(
+        v.weapon_mesh(2, &row).1.as_deref(),
+        Some("com_weap_inf_seismic_mine")
+    );
+}
+
+/// Census (run by hand, `--ignored --nocapture`): for every weapon class
+/// of each game's side files and both HUD rows, the model the port shows
+/// against the PS2's rule on the class's own key (`hudtransforms[key]`,
+/// else the model named `key`; `re-hud.md` §2.5, §3), and against the old
+/// rule that read the table with the class name whenever the key had no
+/// entry. A BF2 weapon the port shows another weapon's model for is a bug;
+/// a BF1 one is the `[ours]` class key, listed to be read.
+#[test]
+#[ignore]
+fn census_weapons_shown_with_another_weapons_hud_model() {
+    let Some(v) = view([640, 480]) else {
+        return;
+    };
+    for game in ["bf2", "bf1"] {
+        let db = side_db(game);
+        let mut names: Vec<_> = db
+            .names()
+            .filter(|n| db.get(n).is_some_and(|d| d.kind == "wpnc"))
+            .map(str::to_owned)
+            .collect();
+        names.sort();
+        let (mut old_off, mut now_off) = (0, 0);
+        for row in [1u8, 2] {
+            for n in &names {
+                let w = hud_row(&db, n);
+                let own = ui::hud::HudWeapon {
+                    class: String::new(),
+                    bf2: true,
+                    icon: None,
+                    ..w.clone()
+                };
+                let old = ui::hud::HudWeapon {
+                    class: n.clone(),
+                    bf2: false,
+                    ..w.clone()
+                };
+                let ps2 = v.weapon_mesh(row, &own).1;
+                let (now_key, now) = v.weapon_mesh(row, &w);
+                let was = v.weapon_mesh(row, &old).1;
+                if was != ps2 && was.is_some() {
+                    old_off += 1;
+                    println!(
+                        "{game} row{row} {n}: sends {}, own model {ps2:?}, old rule {was:?}",
+                        w.key
+                    );
+                }
+                if now != ps2 && now.is_some() {
+                    now_off += 1;
+                    println!(
+                        "{game} row{row} {n}: sends {}, own model {ps2:?}, NOW {now:?} (table key {now_key})",
+                        w.key
+                    );
+                }
+            }
+        }
+        println!("{game}: {old_off} rows off under the old rule, {now_off} now");
+    }
 }

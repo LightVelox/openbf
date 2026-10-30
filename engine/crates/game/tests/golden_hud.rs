@@ -31,6 +31,7 @@ fn model() -> ui::hud::HudModel {
             name: String::new(),
             total: Some(281),
             clip_fraction: 31.0 / 50.0,
+            bf2: true,
         }),
         weapon2: None,
         // An enemy at 60 % under the reticle: the target readout (card HTGT).

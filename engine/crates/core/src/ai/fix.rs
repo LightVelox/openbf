@@ -23,11 +23,24 @@
 //! 1.6 m, the 20 s and 8 s give-ups) is the model; the reach, the weight
 //! over the bot's other picks and the claim per turret (not per team) are
 //! ours. Every constant is OURS and PROVISIONAL.
+//!
+//! **Aid** (issue #35, the maintainer 2026-10-29: "don't make it a huge
+//! priority, so bot engineers aren't just running around everywhere healing
+//! rather than battling and fighting and being strategic"): with no broken
+//! turret in reach, a fixer also takes a damaged friendly or neutral vehicle
+//! or droid (the PS2's search takes any friendly thing lacking health,
+//! `re-build-zones.md` §3), but only when it knows of no enemy at all, stands
+//! in no post that is not safely its team's, and the target is within
+//! [`AID_REACH`] (not the PS2's 75 m: a bot never walks off for it). A seen
+//! enemy ends an aid claim, and one with no health gained for [`AID_GIVE_UP`]
+//! is given up. A moving vehicle with no human aboard is not served (the
+//! PS2's rest rule). One fixer a target, as for turrets.
 
 use super::state::AiState;
 use crate::fmath;
 use crate::sim::{buttons, PadState, Sim};
 use crate::unit::{Unit, UnitHandle};
+use crate::vehicle::{VehicleHandle, VehicleKind};
 use crate::TICK_HZ;
 use glam::Vec3;
 
@@ -39,12 +52,52 @@ pub const FIX_GIVE_UP: u64 = 20 * TICK_HZ as u64;
 pub const RETRY: u64 = 15 * TICK_HZ as u64;
 /// The bot stands this far outside the turret's sphere, m.
 const STAND_OFF: f32 = 1.0;
+/// Issue #35: how far a fixer looks for a vehicle or droid to aid, m.
+pub const AID_REACH: f32 = 20.0;
+/// Issue #35: an aid claim with no health gained for this long is given up
+/// (the PS2 builder's 8 s no-rise give-up), ticks.
+pub const AID_GIVE_UP: u64 = 8 * TICK_HZ as u64;
+/// Issue #35: a vehicle moving faster than this with no human aboard is not
+/// served (the PS2's rest rule, `re-build-zones.md` §3), m/s.
+const AID_REST: f32 = 0.5;
 
-/// One bot's turret objective ([`super::fix`]).
+/// What a fixer works on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FixTarget {
+    /// `Sim::building_turrets` index.
+    Turret(u16),
+    /// `Sim::stations` index (issue #35).
+    Station(u16),
+    /// A vehicle (issue #35).
+    Vehicle(VehicleHandle),
+}
+
+impl FixTarget {
+    /// A turret hashes as it did before the aid targets existed.
+    fn hash_into(&self, eat: &mut impl FnMut(&[u8])) {
+        match *self {
+            FixTarget::Turret(t) => eat(&t.to_le_bytes()),
+            FixTarget::Station(s) => {
+                eat(b"S");
+                eat(&s.to_le_bytes());
+            }
+            FixTarget::Vehicle(v) => {
+                eat(b"V");
+                eat(&v.index.to_le_bytes());
+                eat(&v.gen.to_le_bytes());
+            }
+        }
+    }
+
+    fn aid(&self) -> bool {
+        !matches!(self, FixTarget::Turret(_))
+    }
+}
+
+/// One bot's fix objective ([`super::fix`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FixClaim {
-    /// `Sim::building_turrets` index.
-    pub turret: u16,
+    pub target: FixTarget,
     /// The tick it was claimed.
     pub since: u64,
     /// The turret's health when last it rose, and that tick.
@@ -57,7 +110,7 @@ pub struct FixClaim {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct FixState {
     pub cur: Option<FixClaim>,
-    pub left: Option<(u16, u64)>,
+    pub left: Option<(FixTarget, u64)>,
     pub next: u64,
 }
 
@@ -65,13 +118,13 @@ impl FixState {
     pub fn hash_into(&self, eat: &mut impl FnMut(&[u8])) {
         eat(b"FIX");
         if let Some(c) = self.cur {
-            eat(&c.turret.to_le_bytes());
+            c.target.hash_into(eat);
             eat(&c.since.to_le_bytes());
             eat(&c.best.to_bits().to_le_bytes());
             eat(&c.progress_at.to_le_bytes());
         }
         if let Some((t, at)) = self.left {
-            eat(&t.to_le_bytes());
+            t.hash_into(eat);
             eat(&at.to_le_bytes());
         }
         eat(&self.next.to_le_bytes());
@@ -92,6 +145,58 @@ pub fn cutter(sim: &Sim, u: &Unit) -> Option<(usize, u8)> {
         .iter()
         .find(|w| tool(w.class))
         .map(|w| (w.class, w.channel))
+}
+
+/// The target's health now, when `u` may fix it.
+fn need_of(sim: &Sim, u: &Unit, class: usize, t: FixTarget) -> Option<f32> {
+    let repair = sim.weapon_classes[class].repair?;
+    let ours = |team: Option<u8>| team.is_none_or(|x| x == u.team);
+    match t {
+        FixTarget::Turret(i) => need(sim, u, class, usize::from(i)),
+        FixTarget::Station(i) => {
+            let s = sim.stations.get(usize::from(i))?;
+            (ours(s.team)
+                && repair.health[s.repair_kind() as usize] > 0.0
+                && s.health.cur < s.health.max)
+                .then_some(s.health.cur)
+        }
+        FixTarget::Vehicle(vh) => {
+            let v = sim.vehicle(vh).filter(|v| v.alive)?;
+            let human = v.seats.iter().any(|s| {
+                s.occupant
+                    .and_then(|h| sim.unit(h))
+                    .is_some_and(|o| o.controller != crate::unit::Controller::Ai)
+            });
+            (v.kind != VehicleKind::Turret
+                && ours(v.team)
+                && repair.health[v.health.health_type as usize] > 0.0
+                && v.health.cur < v.health.max
+                && (human || v.vel.length() < AID_REST))
+                .then_some(v.health.cur)
+        }
+    }
+}
+
+/// The target's sphere: centre and radius.
+fn sphere_of(sim: &Sim, t: FixTarget) -> Option<(Vec3, f32)> {
+    match t {
+        FixTarget::Turret(i) => sim.building_turrets.get(usize::from(i)).map(|t| t.sphere()),
+        FixTarget::Station(i) => sim
+            .stations
+            .get(usize::from(i))
+            .map(|s| (s.sphere_centre, s.sphere_radius)),
+        FixTarget::Vehicle(vh) => sim.vehicle_sphere(vh),
+    }
+}
+
+/// May `u` look for a vehicle or droid to aid: no enemy known, and not in
+/// a post its team does not hold safely (it is fighting for that post).
+fn aid_ok(sim: &Sim, u: &Unit, st: &AiState) -> bool {
+    st.contacts.iter().all(Option::is_none)
+        && !sim.cps.iter().any(|cp| {
+            cp.def.capture.contains(u.soldier.pos)
+                && (cp.owner != Some(u.team) || cp.capture_team.is_some_and(|t| t != u.team))
+        })
 }
 
 /// Turret `i`'s health now (down or standing) and whether `u` may fix it
@@ -129,24 +234,29 @@ pub(super) fn upkeep(sim: &Sim, me: UnitHandle, u: &Unit, st: &mut AiState) {
         return;
     }
     if let Some(mut c) = st.fix.cur {
-        let i = usize::from(c.turret);
-        // Another bot's older claim (then the lower index) keeps the turret.
+        // Another bot's older claim (then the lower index) keeps the target.
         let taken = sim.alive_units().any(|(h, o)| {
             h != me
                 && o.ai.fix.cur.is_some_and(|x| {
-                    x.turret == c.turret
+                    x.target == c.target
                         && (x.since < c.since || x.since == c.since && h.index < me.index)
                 })
         });
-        match need(sim, u, class, i) {
+        let give_up = if c.target.aid() {
+            AID_GIVE_UP
+        } else {
+            FIX_GIVE_UP
+        };
+        match need_of(sim, u, class, c.target) {
             _ if taken => st.fix.cur = None,
             None => {
                 st.fix.cur = None;
                 st.fix.next = sim.tick;
             }
-            Some(_) if sim.tick >= c.progress_at + FIX_GIVE_UP => {
+            // Issue #35: an enemy seen ends an aid claim.
+            Some(_) if sim.tick >= c.progress_at + give_up || (c.target.aid() && fighting(st)) => {
                 st.fix.cur = None;
-                st.fix.left = Some((c.turret, sim.tick));
+                st.fix.left = Some((c.target, sim.tick));
             }
             Some(h) => {
                 if h > c.best {
@@ -166,27 +276,42 @@ pub(super) fn upkeep(sim: &Sim, me: UnitHandle, u: &Unit, st: &mut AiState) {
         .left
         .filter(|(_, at)| sim.tick < at + RETRY)
         .map(|(t, _)| t);
-    let mut best: Option<(f32, usize, f32)> = None;
-    for (i, t) in sim.building_turrets.iter().enumerate() {
-        if left == Some(i as u16) {
-            continue;
+    let claimed = |t: FixTarget| {
+        sim.alive_units()
+            .any(|(o, x)| o != me && x.ai.fix.cur.is_some_and(|c| c.target == t))
+    };
+    type Best = Option<(f32, FixTarget, f32)>;
+    let consider = |best: &mut Best, t: FixTarget, reach: f32| {
+        if left == Some(t) {
+            return;
         }
-        let Some(h) = need(sim, u, class, i) else {
-            continue;
+        let Some(h) = need_of(sim, u, class, t) else {
+            return;
         };
-        let d2 = (t.sphere().0 - pos).length_squared();
-        if d2 > FIX_REACH * FIX_REACH || best.is_some_and(|(b, _, _)| d2 >= b) {
-            continue;
+        let Some((centre, _)) = sphere_of(sim, t) else {
+            return;
+        };
+        let d2 = (centre - pos).length_squared();
+        if d2 > reach * reach || best.is_some_and(|(b, _, _)| d2 >= b) || claimed(t) {
+            return;
         }
-        let claimed = sim
-            .alive_units()
-            .any(|(o, x)| o != me && x.ai.fix.cur.is_some_and(|c| usize::from(c.turret) == i));
-        if !claimed {
-            best = Some((d2, i, h));
+        *best = Some((d2, t, h));
+    };
+    let mut best: Best = None;
+    for i in 0..sim.building_turrets.len() {
+        consider(&mut best, FixTarget::Turret(i as u16), FIX_REACH);
+    }
+    // Issue #35: vehicles and droids only with no turret to fix, and idle.
+    if best.is_none() && aid_ok(sim, u, st) {
+        for i in 0..sim.stations.len() {
+            consider(&mut best, FixTarget::Station(i as u16), AID_REACH);
+        }
+        for (vh, _) in sim.alive_vehicles() {
+            consider(&mut best, FixTarget::Vehicle(vh), AID_REACH);
         }
     }
-    st.fix.cur = best.map(|(_, i, h)| FixClaim {
-        turret: i as u16,
+    st.fix.cur = best.map(|(_, t, h)| FixClaim {
+        target: t,
         since: sim.tick,
         best: h,
         progress_at: sim.tick,
@@ -196,11 +321,10 @@ pub(super) fn upkeep(sim: &Sim, me: UnitHandle, u: &Unit, st: &mut AiState) {
     }
 }
 
-/// Where the claimed turret's fixer stands: on the ground outside its
+/// Where the claimed target's fixer stands: on the ground outside its
 /// sphere, on the bot's side.
-fn stand(sim: &Sim, u: &Unit, turret: u16) -> Option<(Vec3, Vec3, f32)> {
-    let t = sim.building_turrets.get(usize::from(turret))?;
-    let (centre, radius) = t.sphere();
+fn stand(sim: &Sim, u: &Unit, target: FixTarget) -> Option<(Vec3, Vec3, f32)> {
+    let (centre, radius) = sphere_of(sim, target)?;
     let mut away = u.soldier.pos - centre;
     away.y = 0.0;
     let away = away.try_normalize().unwrap_or(Vec3::Z);
@@ -219,13 +343,13 @@ fn fighting(st: &AiState) -> bool {
 pub(super) fn walk(sim: &Sim, me: UnitHandle, st: &AiState) -> Option<Vec3> {
     let c = st.fix.cur.filter(|_| !fighting(st))?;
     let u = sim.unit(me)?;
-    stand(sim, u, c.turret).map(|(p, _, _)| p)
+    stand(sim, u, c.target).map(|(p, _, _)| p)
 }
 
 /// The walk to the turret failed: give it up for [`RETRY`].
 pub(super) fn walk_failed(sim: &Sim, st: &mut AiState) {
     if let Some(c) = st.fix.cur.take() {
-        st.fix.left = Some((c.turret, sim.tick));
+        st.fix.left = Some((c.target, sim.tick));
     }
 }
 
@@ -236,7 +360,7 @@ pub(super) fn serve(sim: &Sim, me: UnitHandle, st: &AiState) -> Option<PadState>
     let c = st.fix.cur.filter(|_| !fighting(st))?;
     let u = sim.unit(me)?;
     let (class, channel) = cutter(sim, u)?;
-    let (_, centre, radius) = stand(sim, u, c.turret)?;
+    let (_, centre, radius) = stand(sim, u, c.target)?;
     let wc = &sim.weapon_classes[class];
     let eye = u.muzzle();
     let mut flat = centre - eye;
@@ -281,3 +405,6 @@ pub(super) fn serve(sim: &Sim, me: UnitHandle, st: &AiState) -> Option<PadState>
     };
     Some(pad)
 }
+
+#[cfg(test)]
+mod tests;

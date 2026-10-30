@@ -5,7 +5,8 @@
 use super::{Event, Sim};
 use crate::collision::{HullFilter, Layers};
 use crate::projectile::Target;
-use crate::unit::Unit;
+use crate::unit::{Controller, Unit};
+use crate::vehicle::{VehicleHandle, VehicleKind, SLICE_RESERVE};
 use crate::weapon::WeaponClass;
 use glam::Vec3;
 
@@ -91,6 +92,24 @@ impl Sim {
         Some(score)
     }
 
+    /// What unit `i`'s cutter in hand would take now (either channel's
+    /// current weapon); `None` with no cutter up. The HUD's wreck readout.
+    pub fn cutter_target(&self, i: usize) -> Option<Target> {
+        let u = self.units.get(i)?;
+        let tool = |c: usize| {
+            self.weapon_classes
+                .get(c)
+                .is_some_and(|w| w.repair.is_some())
+        };
+        let class = if tool(u.weapon_class) {
+            u.weapon_class
+        } else {
+            let c = u.held.get(usize::from(u.cur1?))?.class;
+            tool(c).then_some(c)?
+        };
+        self.repair_target(i, class)
+    }
+
     fn repair_target(&self, i: usize, class: usize) -> Option<Target> {
         let u = &self.units[i];
         let wc = &self.weapon_classes[class];
@@ -113,19 +132,27 @@ impl Sim {
             }
         }
         for (vh, v) in self.alive_vehicles() {
-            if v.team.is_some_and(|t| t != u.team)
-                || repair.health[v.health.health_type as usize] <= 0.0
+            // Issue #35: a player's cutter slices an enemy vehicle with riders.
+            let enemy = v.team.is_some_and(|t| t != u.team);
+            if enemy {
+                if u.controller == Controller::Ai || !self.sliceable(vh) {
+                    continue;
+                }
+            } else if repair.health[v.health.health_type as usize] <= 0.0
                 || v.health.cur >= v.health.max
             {
                 continue;
             }
-            let (centre, radius) = v.aim_sphere.unwrap_or((Vec3::ZERO, 0.0));
-            let centre = v.pos + v.rot * centre;
+            let Some((centre, radius)) = self.vehicle_sphere(vh) else {
+                continue;
+            };
+            // A slice passes the team mask on both games (BF2's rule on BF1).
+            let team = if enemy { Some(u.team) } else { v.team };
             if let Some(score) = self.repair_candidate(
                 u,
                 wc,
                 (centre, radius),
-                (v.team, v.instance, HullFilter::except(Some(vh))),
+                (team, v.instance, HullFilter::except(Some(vh))),
             ) {
                 if best.is_none_or(|(old, _)| score < old) {
                     best = Some((score, Target::Vehicle(vh)));
@@ -169,6 +196,15 @@ impl Sim {
                 (pos, self.stations[usize::from(si)].health.cur - before)
             }
             Target::Vehicle(vh) => {
+                let team = self.units[i].team;
+                if self
+                    .vehicle(vh)
+                    .is_some_and(|v| v.team.is_some_and(|t| t != team))
+                {
+                    let step = self.weapon_classes[class].shot_delay[0];
+                    self.slice_vehicle(i, vh, step);
+                    return;
+                }
                 let Some(v) = self.vehicle_mut(vh) else {
                     return;
                 };
@@ -198,6 +234,65 @@ impl Sim {
                 pos,
                 amount,
             });
+        }
+    }
+
+    /// A vehicle's cutter sphere in the world: its aim sphere, else its
+    /// class's blast sphere (`Vehicle::aim_sphere`), else its origin.
+    pub fn vehicle_sphere(&self, vh: VehicleHandle) -> Option<(Vec3, f32)> {
+        let v = self.vehicle(vh)?;
+        let (c, r) = v.aim_sphere.unwrap_or_else(|| {
+            self.blast_setup
+                .get(v.class as usize)
+                .and_then(|b| b.as_ref())
+                .map_or((Vec3::ZERO, 0.0), |b| (b.sphere_centre, b.sphere_radius))
+        });
+        Some((v.pos + v.rot * c, r))
+    }
+
+    /// Issue #35: the class's slice time, s; 0 = never sliced.
+    pub fn slice_time_of(&self, vh: VehicleHandle) -> f32 {
+        self.vehicle(vh)
+            .and_then(|v| self.slice_time.get(v.class as usize))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Can a cutter slice `vh`: not a turret, a class with a slice time,
+    /// and a soldier aboard (B2 `FUN_00346fa0`, re-build-zones §11).
+    pub fn sliceable(&self, vh: VehicleHandle) -> bool {
+        self.vehicle(vh).is_some_and(|v| {
+            v.kind != VehicleKind::Turret
+                && self.slice_time_of(vh) > 0.0
+                && v.seats.iter().any(|s| {
+                    s.occupant
+                        .and_then(|h| self.unit(h))
+                        .is_some_and(|o| o.alive)
+                })
+        })
+    }
+
+    /// Issue #35: one cutter shot on an enemy vehicle adds the cutter's
+    /// ShotDelay to its meter; past the class's slice time every rider is
+    /// put out and only the slicer may board for [`SLICE_RESERVE`].
+    fn slice_vehicle(&mut self, i: usize, vh: VehicleHandle, step: f32) {
+        let time = self.slice_time_of(vh);
+        let Some(v) = self.vehicle_mut(vh) else {
+            return;
+        };
+        v.slice += step;
+        if v.slice <= time {
+            return;
+        }
+        v.slice = 0.0;
+        let riders: Vec<_> = v.seats.iter().filter_map(|s| s.occupant).collect();
+        for r in riders {
+            self.exit_vehicle(r);
+        }
+        let until = self.tick + (SLICE_RESERVE * crate::TICK_HZ as f32) as u64;
+        let slicer = self.handle(i);
+        if let Some(v) = self.vehicle_mut(vh) {
+            v.slice_hold = Some((slicer, until));
         }
     }
 

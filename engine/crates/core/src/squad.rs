@@ -324,12 +324,10 @@ impl crate::sim::Sim {
     }
 
     /// WPOKE's narrow mounted receiver; ordinary in_reach remains on foot.
+    /// Both games (BF1's rule on BF2 too, a named deviation, issue #7).
     fn pickup_receiver(&self, i: usize) -> Option<(crate::vehicle::VehicleHandle, u64)> {
         let u = &self.units[i];
-        if self.ground_rules != crate::soldier::GroundRules::Bf1
-            || !u.alive
-            || u.controller != crate::unit::Controller::Ai
-        {
+        if !u.alive || u.controller != crate::unit::Controller::Ai {
             return None;
         }
         let m = u.mount?;

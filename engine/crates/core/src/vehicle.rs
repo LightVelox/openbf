@@ -212,7 +212,18 @@ pub struct Vehicle {
     /// picks the building by its bounds); `None` = the class's blast sphere.
     /// SETUP data, not hashed.
     pub aim_sphere: Option<(Vec3, f32)>,
+    /// Issue #35: the slice meter, s (`analysis/re-build-zones.md` §11).
+    /// Hashed only when non-zero.
+    pub slice: f32,
+    /// Issue #35 [ours]: after a slice only this unit may board, until the
+    /// tick ([`SLICE_RESERVE`]). Hashed only when set.
+    pub slice_hold: Option<(crate::unit::UnitHandle, u64)>,
 }
+
+/// Issue #35 [ours, the maintainer 2026-10-29]: after a slice only the
+/// slicer may board for this long, s. The PS2 locks everyone out for the
+/// class's `TimeTilReboard` (5 s) instead.
+pub const SLICE_RESERVE: f32 = 3.0;
 
 /// Card VMESH (ours): how far (m, in XZ) a vehicle given up as stuck must
 /// have moved before a bot claims it again. A walker wedged on BF1 Endor's
@@ -285,6 +296,22 @@ impl Vehicle {
             eat(&u.gen.to_le_bytes());
             eat(&t.to_le_bytes());
         }
+        if self.slice != 0.0 {
+            eat(&[0x5c]);
+            eat(&self.slice.to_bits().to_le_bytes());
+        }
+        if let Some((u, t)) = self.slice_hold {
+            eat(&[0x5d]);
+            eat(&u.index.to_le_bytes());
+            eat(&u.gen.to_le_bytes());
+            eat(&t.to_le_bytes());
+        }
+    }
+
+    /// Issue #35: is boarding shut to `u` by another unit's slice hold?
+    pub fn held_against(&self, u: crate::unit::UnitHandle, tick: u64) -> bool {
+        self.slice_hold
+            .is_some_and(|(who, until)| who != u && tick < until)
     }
 }
 
@@ -411,6 +438,8 @@ impl VehicleSpec {
             last_hit: None,
             instance: None,
             aim_sphere: None,
+            slice: 0.0,
+            slice_hold: None,
         }
     }
 }

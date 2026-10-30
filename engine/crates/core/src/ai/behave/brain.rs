@@ -99,7 +99,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         if let Some(h) = crate::ai::dfocus::pick(sim, me, st) {
             nt.acquired |= u8::from(perception::take_target(st, h, sim.tick));
         }
-        // [ours] A picking proxy chooses as a player does (`proxy::pick`).
+        // [ours] A picking unit prefers threats (`proxy::pick`).
         if let Some(h) = crate::ai::proxy::pick(sim, me, st) {
             nt.acquired |= u8::from(perception::take_target(st, h, sim.tick));
         }
@@ -138,7 +138,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         // Card TBLD: a cutter carrier's broken turret (`fix::upkeep`).
         crate::ai::fix::upkeep(sim, me, u, st);
         let fixing = crate::ai::fix::walk(sim, me, st);
-        // [ours] A hurt proxy breaks off to a health droid (`proxy::mend`).
+        // [ours] A hurt unit breaks off to a health droid (`proxy::mend`).
         let mend = crate::ai::proxy::mend(sim, u);
         match (u.command, ring_walk(sim, st), super::snipe::walk(st)) {
             (Some(c), _, _) => crate::squad::steer(sim, me, st, &c, &mut nt),

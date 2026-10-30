@@ -88,8 +88,8 @@ fn wpoke_actual_edges_eight_repairs_forty_controls() {
                         }
                         assert!(s.unit(pilot).unwrap().mount.is_some());
                     }
-                    let should_depart =
-                        rules == GroundRules::Bf1 && matches!(case, "near" | "extended");
+                    // Both games since issue #7.
+                    let should_depart = matches!(case, "near" | "extended");
                     let pass = if should_depart {
                         departure.is_some_and(|t| t <= sent + crate::ai::THINK_PERIOD + 2)
                             && answers == 1
@@ -164,7 +164,6 @@ fn wpoke_mounted_reach_and_receiver_exclusions() {
                 "enemy",
                 "dead",
                 "non-ai",
-                "bf2",
                 "wrong-wait",
                 "wrong-seat",
                 "wrong-occupant",
@@ -184,7 +183,6 @@ fn wpoke_mounted_reach_and_receiver_exclusions() {
                     "enemy" => s.unit_mut(b).unwrap().team = 1,
                     "dead" => s.kill_environment(b, crate::sim::DeathCause::Fall),
                     "non-ai" => s.unit_mut(b).unwrap().controller = Controller::Player { slot: 1 },
-                    "bf2" => s.ground_rules = GroundRules::Bf2,
                     "wrong-seat" => s.unit_mut(b).unwrap().mount.as_mut().unwrap().seat = 1,
                     "wrong-occupant" => s.vehicle_mut(v).unwrap().seats[0].occupant = Some(p),
                     "wrong-wait" => {
@@ -635,7 +633,7 @@ fn wpoke_consumption_changes_only_release_state_and_one_answer() {
 fn wpoke_queued_release_rechecks_receiver_and_issuer_at_think() {
     for kind in [VehicleKind::Hover, VehicleKind::Walker] {
         for bit in [buttons::SQUAD_MOVE_OUT, buttons::SQUAD_AT_EASE] {
-            for changed in ["rules", "controller", "kind", "team", "issuer-death"] {
+            for changed in ["controller", "kind", "team", "issuer-death"] {
                 let (mut s, pilot, vehicle, player) = ready(kind);
                 let scheduled = s.tick + 7;
                 s.unit_mut(pilot).unwrap().ai.next_think = scheduled;
@@ -643,7 +641,6 @@ fn wpoke_queued_release_rechecks_receiver_and_issuer_at_think() {
                 assert!(s.unit(pilot).unwrap().order.is_some());
                 assert_eq!(wait(&s, pilot).released, None);
                 match changed {
-                    "rules" => s.ground_rules = GroundRules::Bf2,
                     "controller" => {
                         s.unit_mut(pilot).unwrap().controller = Controller::Player { slot: 1 };
                     }

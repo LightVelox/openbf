@@ -13,8 +13,7 @@
 //! - the aim error against him: BF2's whole error against a human, 0.3 of it
 //!   against a bot (`gunner_foot::error_vector`), and his error block updated
 //!   every tick (`Sim::aim_blocks`);
-//! - the D12 human-damage multiplier on a bot's hit into him, and a bot's
-//!   friendly fire not hurting him (`resolve_bolt`, `blast_unit`);
+//! - a bot's friendly fire not hurting him (`resolve_bolt`, `blast_unit`);
 //! - the bleed handicap's "team with a human" (`Sim::apply_team_handicap`);
 //! - card DTEAM's per-team human count: [`humans_on`].
 //!
@@ -26,8 +25,7 @@
 //!
 //! [ours] The stronger stand-in (2026-10-29, the maintainer: "a little bit
 //! worse than how I played"): a proxy may also play by a player's rules
-//! where a bot's would hold it back - each a [`Profile`] field, off for
-//! every bot:
+//! where a bot's would hold it back - each a [`Profile`] field:
 //! - `hand`: aims and fires as a pad does ([`hand`]): the lead point with a
 //!   settling error, followed straight (the assist's rate match), the
 //!   trigger held while on him, out to the round's reach, a player's
@@ -39,6 +37,9 @@
 //! - `picks`: shoots who shoots at it first ([`pick`]);
 //! - `skill` over 20 ([`skill_over`]): the curves carried on (measured; not
 //!   in a strength).
+//!
+//! [ours] PROVISIONAL: `hunts`, `mend` and `picks` also serve the tier
+//! columns for ordinary bots. The other player rules remain proxy-only.
 //!
 //! The profile is a fixed "human" row, the same on every tier (a human does
 //! not get better when the host picks Elite): its aim skill, its reaction,
@@ -173,6 +174,9 @@ pub struct Profile {
 impl Profile {
     /// `tier` with this profile's columns in place of the tier's.
     pub fn over(&self, mut tier: Tier, map_view: f32) -> Tier {
+        tier.picks = self.picks;
+        tier.mend = self.mend;
+        tier.hunts = self.hunts;
         tier.reaction_ticks = self.reaction_ticks;
         tier.react = self.react;
         tier.grenade = self.grenade;
@@ -278,11 +282,11 @@ pub fn hand_weapons(u: &mut Unit) {
     }
 }
 
-/// [ours] A hunting proxy's objective: the nearest post (straight line)
+/// [ours] A hunting unit's objective: the nearest post (straight line)
 /// its team does not hold and may take, else the nearest enemy. `None` for
-/// every unit that is not a hunting proxy (the commander's plan stands).
+/// every unit that is not a hunter (the commander's plan stands).
 pub fn front(sim: &Sim, u: &Unit) -> Option<crate::commander::Objective> {
-    if !u.proxy_human.is_some_and(|p| p.hunts) {
+    if !sim.unit_tier(u).hunts {
         return None;
     }
     let at = u.soldier.pos;
@@ -299,17 +303,17 @@ pub fn front(sim: &Sim, u: &Unit) -> Option<crate::commander::Objective> {
     }))
 }
 
-/// The farthest (m) a mending proxy goes for a health droid.
+/// The farthest (m) a mending unit goes for a health droid.
 pub const MEND_REACH: f32 = 80.0;
-/// The share of its health a mending proxy stays at the droid for.
+/// The share of its health a mending unit stays at the droid for.
 pub const MEND_FULL: f32 = 0.95;
 
-/// [ours] Where a hurt proxy goes to heal: the nearest standing health droid
-/// within [`MEND_REACH`] while its health is under its profile's `mend`
+/// [ours] Where a hurt unit goes to heal: the nearest standing health droid
+/// within [`MEND_REACH`] while its health is under its tier's `mend`
 /// share, and on until [`MEND_FULL`] once it is at the droid. `None` for
 /// every other unit and moment.
 pub fn mend(sim: &Sim, u: &Unit) -> Option<Vec3> {
-    let low = u.proxy_human.map_or(0.0, |p| p.mend);
+    let low = sim.unit_tier(u).mend;
     if low <= 0.0 || u.mount.is_some() || u.health.max <= 0.0 {
         return None;
     }
@@ -335,7 +339,7 @@ pub fn mend(sim: &Sim, u: &Unit) -> Option<Vec3> {
     (share < low || there).then_some(pos)
 }
 
-/// [`pick`]'s weights, in metres of range: an enemy aiming at the proxy
+/// [`pick`]'s weights, in metres of range: an enemy aiming at the unit
 /// counts as this much nearer...
 pub const PICK_THREAT: f32 = 15.0;
 /// ...one it has hurt (under 70 % health) this much...
@@ -343,7 +347,7 @@ pub const PICK_HURT: f32 = 10.0;
 /// ...and the target it already has this much (no flicking between two).
 pub const PICK_KEEP: f32 = 5.0;
 
-/// [ours] A picking proxy's target out of the enemies it SEES now: the
+/// [ours] A picking unit's target out of the enemies it SEES now: the
 /// nearest after [`PICK_THREAT`], [`PICK_HURT`] and [`PICK_KEEP`]. `None`
 /// for every other unit, or with nobody seen.
 pub fn pick(
@@ -352,7 +356,7 @@ pub fn pick(
     st: &crate::ai::state::AiState,
 ) -> Option<crate::unit::UnitHandle> {
     let u = sim.unit(me)?;
-    if !u.proxy_human.is_some_and(|p| p.picks) {
+    if !sim.unit_tier(u).picks {
         return None;
     }
     let eye = u.capsule().center();
@@ -414,12 +418,11 @@ impl Sim {
 }
 
 /// Card DPRX's difficulty targets: the proxy team's win rate with a GOOD
-/// proxy, averaged over both sides of each map (the maintainer, 2026-10-28;
-/// PROVISIONAL until he confirms them after DBASE). `(tier, low, high)` as
-/// fractions; `high` 1.0 = no ceiling.
+/// proxy, averaged over both sides of each map (the maintainer, 2026-10-29).
+/// `(tier, low, high)` as fractions; `high` 1.0 = no ceiling.
 pub const TARGETS: [(Difficulty, f32, f32); 4] = [
     (Difficulty::Easy, 0.90, 1.0),
-    (Difficulty::Normal, 0.65, 0.80),
+    (Difficulty::Normal, 0.77, 0.90),
     (Difficulty::Hard, 0.45, 0.60),
     (Difficulty::Elite, 0.25, 0.40),
 ];

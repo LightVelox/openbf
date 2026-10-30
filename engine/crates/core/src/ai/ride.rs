@@ -737,9 +737,16 @@ fn pickup_wait(sim: &Sim, m: Mount, st: &mut AiState, thinking: bool) -> bool {
     } else {
         w.started
     };
+    // Signed widening models now-minus-two even during the first two seconds.
+    // MOVE OUT / AT EASE release on both games (BF1's rule, issue #7).
+    let released = w
+        .released
+        .is_some_and(|t| i128::from(sim.tick) > i128::from(t) - 2 * i128::from(crate::TICK_HZ));
     // BF2 tests humans before occupancy (re-driver-wait.md §5). Reuse the
     // first-think clock: neither a later arrival nor a full seat restarts it.
+    // A release ends the human hold.
     if sim.ground_rules == GroundRules::Bf2
+        && !released
         && w.started
             .is_none_or(|t| sim.tick < t + 15 * u64::from(crate::TICK_HZ))
         && human_approaching(sim, m)
@@ -749,10 +756,6 @@ fn pickup_wait(sim: &Sim, m: Mount, st: &mut AiState, thinking: bool) -> bool {
     if !full && maintained_boarder(sim, m) {
         return true;
     }
-    // Signed widening models now-minus-two even during the first two seconds.
-    let released = sim.ground_rules == GroundRules::Bf1
-        && w.released
-            .is_some_and(|t| i128::from(sim.tick) > i128::from(t) - 2 * i128::from(crate::TICK_HZ));
     if full || released || start.is_some_and(|t| sim.tick > t + 4 * u64::from(crate::TICK_HZ)) {
         w.complete = true;
         return false;

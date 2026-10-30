@@ -21,6 +21,11 @@ pub struct HudWeapon {
     /// it when `key` (its own `GeometryName`) has no entry there: BF2's
     /// classes of the same name carry no geometry and send their name.
     pub class: String,
+    /// The class is a BF2 disc's: the table is read with `key`, else the
+    /// model named `key` is shown, as the PS2 does (`re-hud.md` §2.5); only
+    /// a key naming no model the bake has falls back to `class` (`[ours]`:
+    /// `hud_rep_defense_buff` lives in the side LVL, not in the bake).
+    pub bf2: bool,
     /// `[ours]` a weapon with no BF2 mesh: its `IconTexture` sheet, drawn in
     /// the mesh's place.
     pub icon: Option<String>,

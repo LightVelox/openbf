@@ -293,6 +293,7 @@ fn sbd_hud_models_keep_vertex_colors_and_draw_in_both_rows() {
                 Some(3)
             },
             clip_fraction: 1.0,
+            bf2: true,
         };
         let base = ui::hud::HudModel {
             hp: 300.0,
