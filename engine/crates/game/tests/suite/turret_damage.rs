@@ -25,7 +25,7 @@ use glam::Vec3;
 
 pub(super) struct World {
     pub(super) sim: Sim,
-    classes: Vec<String>,
+    pub(super) classes: Vec<String>,
     db: game::classdb::ClassDb,
     names: Vec<(String, usize)>,
 }

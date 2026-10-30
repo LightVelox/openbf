@@ -795,7 +795,7 @@ pub(super) fn seen_aim(
     if sim.ground_rules != crate::soldier::GroundRules::Bf2 {
         let vis = e.cloak.visibility();
         let r = radius(1.0, 1.0, st.err, moving, vis, cap);
-        return aim + unit_dir(me.index, sim.tick / THINK_PERIOD, me.gen, SALT_ERR_DIR) * r;
+        return aim + bf1_error_dir(sim, me) * r;
     }
     let r = radius(
         e.consts.aim_size,
@@ -805,7 +805,62 @@ pub(super) fn seen_aim(
         e.cloak.visibility(),
         cap,
     );
-    aim + error_vector(sim, me, e, u.aim.dir * r, (aim - eye).length(), wc)
+    aim + error_vector(
+        sim,
+        me,
+        e,
+        error_dir(sim, me, u) * r,
+        (aim - eye).length(),
+        wc,
+    )
+}
+
+/// The way `me`'s own aim error points this tick (BF2, [`crate::unit::AimBlock`]).
+/// [ours] A bot's block turns its direction once a think (every 5th tick),
+/// and the aim point, with every gun that follows it in one tick, jumped
+/// with it: 0.3-2 deg each 5th tick on the Geonosis cannon from 5 m
+/// (playtest 2026-10-29, "small and fast like a vibration"). Here the
+/// direction turns from the last think's to this one's a fifth a tick, so
+/// it reaches each think's `dir` on the tick before the next think: the
+/// same directions, one think later, with no step. A human's block thinks
+/// every tick.
+pub(super) fn error_dir(sim: &Sim, me: UnitHandle, u: &Unit) -> Vec3 {
+    let b = &u.aim;
+    if u.is_human() || b.from == Vec3::ZERO {
+        return b.dir;
+    }
+    let p = crate::unit::AimBlock::PERIOD;
+    let f = ((sim.tick + u64::from(me.index)) % p + 1) as f32 / p as f32;
+    turn_toward(b.from, b.dir, f)
+}
+
+/// BF1's error direction this tick (D10): [ours] turned from this think's
+/// drawn direction to the next one's over the think's ticks, as
+/// [`error_dir`], in place of a new direction in one tick every think.
+fn bf1_error_dir(sim: &Sim, me: UnitHandle) -> Vec3 {
+    let k = sim.tick / THINK_PERIOD;
+    let f = (sim.tick % THINK_PERIOD + 1) as f32 / THINK_PERIOD as f32;
+    let at = |k: u64| unit_dir(me.index, k, me.gen, SALT_ERR_DIR);
+    turn_toward(at(k), at(k + 1), f)
+}
+
+/// The unit vector `f` of the way round from unit `a` to unit `b`.
+fn turn_toward(a: Vec3, b: Vec3, f: f32) -> Vec3 {
+    let n = a.cross(b);
+    let s = n.length();
+    let c = a.dot(b);
+    if s < 1e-4 {
+        // The same way, or opposite: turn about any axis across `a`.
+        if c > 0.0 {
+            return b;
+        }
+        let k = a.any_orthonormal_vector();
+        let (si, co) = fmath::sin_cos(std::f32::consts::PI * f);
+        return a * co + k * si;
+    }
+    let (si, co) = fmath::sin_cos(fmath::atan2(s, c) * f);
+    let k = n / s;
+    a * co + k.cross(a) * si
 }
 
 /// BF2's size term of the aim error at a remote droid: 0.17, read live as
@@ -834,13 +889,20 @@ pub(super) fn droid_aim(
     let moving = d.vel.length() / c.max_speed.max(0.1);
     if sim.ground_rules != crate::soldier::GroundRules::Bf2 {
         let r = radius(1.0, 1.0, st.err, moving, 1.0, cap);
-        return aim + unit_dir(me.index, sim.tick / THINK_PERIOD, me.gen, SALT_ERR_DIR) * r;
+        return aim + bf1_error_dir(sim, me) * r;
     }
     let owner = sim.unit(d.owner);
     let err = owner.map_or(0.0, |o| o.aim.err);
     let r = radius(DROID_AIM_SIZE, 1.0, err, moving, 1.0, cap);
     let human = d.controlled && owner.is_some_and(|o| o.is_human());
-    aim + bubble(sim, me, human, u.aim.dir * r, (aim - eye).length(), wc)
+    aim + bubble(
+        sim,
+        me,
+        human,
+        error_dir(sim, me, u) * r,
+        (aim - eye).length(),
+        wc,
+    )
 }
 
 /// BF2's error radius at a target (B2 `FUN_002ae4d0`, 18.2 and 18.3; 80 rows

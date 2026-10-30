@@ -7,8 +7,8 @@
 //!
 //! What is blended (the drawn state the frame's builders read): each unit's
 //! feet, yaw and pitch (the chase camera hangs off them, so the camera blends
-//! too), each vehicle's place and turn, its guns' looks and a walker's aim,
-//! and the camera's zoom ease (`zoom_s`, `zoom_fov_mix`) and its collision's
+//! too), each vehicle's place and turn, its guns' looks (and their aimers) and a walker's
+//! aim, and the camera's zoom ease (`zoom_s`, `zoom_fov_mix`) and its collision's
 //! stored pull-in (`cam_pull`). Not blended: a
 //! walker's posed legs and the door / station animations (they step with
 //! their ticks), the bolts (their own blend, `BoltVis::draws`), effects and
@@ -55,8 +55,9 @@ pub struct VehiclePose {
     pub alive: bool,
     pub pos: Vec3,
     pub rot: Quat,
-    /// `GunState::look` per seat (None = an unarmed seat).
-    pub looks: Vec<Option<(f32, f32)>>,
+    /// `GunState::look` and `GunState::aim` per seat (None = an unarmed
+    /// seat): the aimer is what a building turret's gun draws along.
+    pub looks: Vec<Option<[(f32, f32); 2]>>,
     /// `WalkerState::aim_yaw` / `aim_pitch`.
     pub aim: (f32, f32),
 }
@@ -106,15 +107,20 @@ impl Pose {
             pitch: u.soldier.pitch,
         }));
         self.vehicles.clear();
-        self.vehicles
-            .extend(walk.sim.vehicles.iter().map(|v| VehiclePose {
+        self.vehicles.extend(walk.sim.vehicles.iter().map(|v| {
+            VehiclePose {
                 gen: v.gen,
                 alive: v.alive,
                 pos: v.pos,
                 rot: v.rot,
-                looks: v.guns.iter().map(|g| g.as_ref().map(|g| g.look)).collect(),
+                looks: v
+                    .guns
+                    .iter()
+                    .map(|g| g.as_ref().map(|g| [g.look, g.aim]))
+                    .collect(),
                 aim: (v.walker.aim_yaw, v.walker.aim_pitch),
-            }));
+            }
+        }));
         self.droids.clear();
         self.droids.extend(walk.sim.droids.iter().map(|d| ItemPose {
             id: d.id,
@@ -152,8 +158,8 @@ impl Pose {
             v.pos = p.pos;
             v.rot = p.rot;
             for (g, l) in v.guns.iter_mut().zip(&p.looks) {
-                if let (Some(g), Some(l)) = (g.as_mut(), l) {
-                    g.look = *l;
+                if let (Some(g), Some([l, a])) = (g.as_mut(), l) {
+                    (g.look, g.aim) = (*l, *a);
                 }
             }
             (v.walker.aim_yaw, v.walker.aim_pitch) = p.aim;
@@ -253,7 +259,7 @@ pub fn blend(prev: &Pose, cur: &Pose, t: f32) -> Pose {
         }
         for (l, pl) in o.looks.iter_mut().zip(&p.looks) {
             if let (Some(l), Some(pl)) = (l.as_mut(), pl) {
-                *l = lerp_look(*pl, *l, t);
+                *l = [lerp_look(pl[0], l[0], t), lerp_look(pl[1], l[1], t)];
             }
         }
         o.aim = lerp_look(p.aim, o.aim, t);
@@ -593,6 +599,32 @@ mod tests {
             (t.pos, t.yaw, t.pitch),
             (from + Vec3::new(1.0, -1.0, 0.0), 0.7, 0.2)
         );
+    }
+
+    /// A seat's aimer is blended with its look: a building turret's gun
+    /// draws along `GunState::aim`, and a 60 Hz frame of a bot's gun
+    /// turning 0.3 deg a tick drew it in 30 Hz steps.
+    #[test]
+    fn a_guns_aimer_is_drawn_between_its_ticks() {
+        let pose = |look: f32, aim: f32| Pose {
+            vehicles: vec![VehiclePose {
+                gen: 1,
+                alive: true,
+                pos: Vec3::ZERO,
+                rot: Quat::IDENTITY,
+                looks: vec![None, Some([(look, 0.0), (aim, 0.2)])],
+                aim: (0.0, 0.0),
+            }],
+            ..Pose::default()
+        };
+        let mid = blend(&pose(0.0, 0.1), &pose(0.2, 0.3), 0.5);
+        let [l, a] = mid.vehicles[0].looks[1].unwrap();
+        assert!((l.0 - 0.1).abs() < 1e-6, "{l:?}");
+        assert!(
+            (a.0 - 0.2).abs() < 1e-6 && (a.1 - 0.2).abs() < 1e-6,
+            "{a:?}"
+        );
+        assert_eq!(mid.vehicles[0].looks[0], None);
     }
 
     /// A respawned unit (a new generation in its slot) and one that moved

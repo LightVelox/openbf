@@ -21,6 +21,7 @@ mod event_messages;
 mod glb_material;
 mod global_sound;
 mod guided_rockets;
+mod gun_smooth;
 mod gunner_snipe;
 mod hud_layout;
 mod load_scene;
