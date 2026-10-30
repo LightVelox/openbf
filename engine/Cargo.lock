@@ -478,9 +478,11 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "libm",
+ "manifest",
  "parry3d",
  "ron",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

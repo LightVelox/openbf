@@ -58,15 +58,15 @@ this branch [V there].
 
 ## 3. The disc [V]
 
-`engine/assets_baked/classes/*.ron` (both discs' SIDE and COMMON LVLs), through BASE inheritance:
+The native `engine/assets_baked/classes/bf1_*.ron` and `bf2_*.ron` (SIDE and COMMON LVLs), through BASE inheritance:
 - BF1 `cis_inf_*` droids: ChunkFrequency 0.6, `CHUNKSECTION CHUNK1-5` (`sbdroid_chunk1-5` on the super battle droid,
   `bdroid_chunk1-5` on the rest), ExplosionName `com_inf_droid_exp`, DeathSound `droid_death`.
 - BF2 `cis_inf_default`: ChunkFrequency 0.6, `bdroid_chunk1-5`, ExplosionName `cis_inf_droid_exp`, DeathSound
   `droid_death`; `cis_inf_default_officer` re-authors the same ExplosionName. Every fielded CIS soldier class inherits it.
 - `com_inf_droid_exp` / `cis_inf_droid_exp`: one row each, `Effect`. Baked: `droid_explosion` in
   `common_bf1/effects.ron`, `cis_sfx_droid_explosion` in `side_bf2/effects/cis/effects.ron`.
-- **Not baked**: the chunk models (`bdroid_chunk1-5`, `sbdroid_chunk1-5`): `find engine/assets_baked -iname
-  '*droid_chunk*'` is empty.
+- The initial 2026-10-28 bake lacked the chunk models. `scripts/rebake.sh side` now emits the original droid
+  chunks; the targeted `bake droid-chunks` step below also prepares the cross-game SBD and Magnaguard overlay.
 
 ## 4. The port (card DROIDDEATH, built)
 
@@ -83,9 +83,22 @@ this branch [V there].
   battle without droids keeps its LCG stream.
 - game: `Fx` spawns the explosion's effect at the event; `event_sounds` plays its SoundProperty (none on the disc);
   `soldier_vis` never draws a burst body. The DeathSound already played at the kill (card UCRY).
-- **Not built**: the chunks (needs the soldier bake to emit `bdroid_chunk1-5` / `sbdroid_chunk1-5` as models from the
-  CIS side LVLs, then VDTH's chunk launch at `scale`); the droideka (not fielded); the death of a soldier the world
-  kills (the port's `kill_environment` leaves no body, so such a droid never bursts; the PS2's death block would run).
+- `game::fx::chunks` launches rigid pieces at the event's `scale` (`re-chunks.md`). The SBD bake records its
+  authored collision spheres. Windowed battles and headless replays launch at the last drawn soldier bone frames;
+  callers without soldier visuals use baked bind nodes.
+- `[ours]` (2026-10-29, issue #80): BF1's SBD chunk section, frequency and explosion on both games' maps.
+  The Magnaguard gets five deterministic cuts of its own mesh (torso/head, both arms, both legs), each in its
+  launch bone's frame, with bounds-centred collision spheres and the SBD's section. Separate effect/sheet names
+  keep the borrowed BF1 data from replacing unrelated effects or the living BF2 SBD's texture.
+- Bake: `bake droid-chunks <bf1-CIS.LVL> <bf2-CIS.LVL> <bf1-COMMON.LVL> <assets-root> [pc-CIS.LVL]` (part of
+  `scripts/rebake.sh side`): `classes/droid_chunks.ron`, `side_<game>/droid_chunks/` and `droid_effects/`.
+  Every droid chunk model is baked here, the battle droid's `bdroid_chunk1-5` from each game's own CIS.LVL too:
+  each sheet a chunk writes is renamed `openbf_droid_<name>`, so no living soldier's sheet is replaced (a chunk's
+  `bake weapon` made the living battle droid's sheet opaque, 2026-10-30). The Magnaguard cuts draw its living
+  sheets from `side_bf2/textures`, both tiers. Guard: `bake/tests/suite/side_steps.rs` (ignored, real data).
+  The class reader applies the generated profiles by inherited soldier geometry. Source class files stay native.
+- Still unbuilt: the droideka (not fielded); the death of a soldier the world kills (the port's `kill_environment`
+  leaves no body, so such a droid never bursts; the PS2's death block would run).
 
 ## 5. Open [H]
 

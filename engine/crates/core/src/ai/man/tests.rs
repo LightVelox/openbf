@@ -111,6 +111,7 @@ fn scene_classes(bot: Vec3, enemy: Vec3, g: GunSetup, more: &[WeaponClass]) -> S
     }
     s.seat_setup = vec![Some(SeatSetup {
         radius: 3.0,
+        body_active: vec![],
         boardable: vec![true],
         exit_drop: 15.0,
         ai_size: 1,
@@ -1478,4 +1479,34 @@ fn seat_charge_lost_target_uses_foot_release_policy() {
     );
     assert_eq!(st.charge_until, 0);
     assert_eq!(pad.buttons & crate::sim::buttons::FIRE, 0);
+}
+
+#[test]
+fn audit_elite_preferences_keep_the_turret_arc() {
+    let mut sc = scene(
+        Vec3::new(3.0, 0.0, -3.0),
+        Vec3::new(2.0, 0.0, 35.0),
+        0,
+        Some([-20.0, 20.0]),
+    );
+    sc.s.team_difficulty[0] = Some(crate::skill::Difficulty::Elite);
+    sit(&mut sc);
+    let outside =
+        sc.s.spawn(&UnitSpec::trooper(1, Vec3::new(15.0, 0.0, 20.0)))
+            .unwrap();
+    sc.s.unit_mut(outside).unwrap().ai.target = Some(sc.bot.into());
+    let mut st = crate::ai::AiState::default();
+    crate::ai::think(&sc.s, sc.bot, &mut st);
+    assert!(
+        st.contacts
+            .iter()
+            .flatten()
+            .any(|c| c.handle == outside && c.seen_now),
+        "positive control: outside-arc threat is perceived"
+    );
+    assert_eq!(
+        st.target,
+        Some(sc.enemy.into()),
+        "preference must not restore an out-of-arc threat"
+    );
 }

@@ -62,13 +62,13 @@
 - **Playable heroes (BF2) AND AI-controlled heroes (BF1 presence), both on all content.**
 - Heroes are **killable, always** — no BF1 invincibility ("you see a hero and you just run
   away — no fun").
-- Health (the maintainer, 2026-09-23 — **reverses the earlier "flat pool, drop the drain/kill-to-heal"
-  call**): use **BF2's standard hero health pool, the disc's own values** (`RE:` them, do not
-  guess), with one change — it shrinks **only from damage taken, never with the passage of
-  time**, and it still **regenerates for killing enemies**. This is the default for now; the maintainer
-  will add options and tinker with it later, so keep the pool, the kill-heal amount and the
-  no-time-drain rule as data. `RE:` hero spawn/possession flow (BF2), NPC hero behavior (BF1),
-  the disc's hero health and kill-heal values.
+- Health (maintainer, 2026-10-30 — supersedes the September no-time-drain rule):
+  regular BF2 conquest uses **BF2's standard hero health pool and saber-shaped health bar**.
+  Health shrinks **with time and damage**, and **regenerates for killing enemies**. Use the
+  disc's authored health and verified drain/kill-heal values. Keep the rate and gains as
+  data so the maintainer can change them later; zero drain remains a valid option. This
+  decision does not set Hero Assault's rules. `RE:` hero spawn/possession flow (BF2),
+  NPC hero behavior (BF1), and the disc's hero health and kill-heal values.
 
 ### AI
 - Infantry AI base: **RESOLVED 2026-09-01 (the maintainer, Fable session 8): openbf's OWN
@@ -109,12 +109,19 @@
   kill floor every soldier dies, the invincibility cheat included. Built: KFLR 5b12384, BNDS (`core/src/sim/bounds.rs`,
   `core/src/ai`). "On the level" is ours and PROVISIONAL: the hubs' floors walked from the posts, the barriers, the
   collision.
-- Unit counts: **default = PS2-authentic (16/team)**, settings slider to raise on modern
-  hardware. `RE:` verify BF2's existing unit-count option + what actually bounds it.
-  **RE DONE 2026-08-30** (re-tickets-spawn.md): the "16" is BF2's default alive-AI cap
-  (NumBots, DAT_006004fc=16) over SetUnitCount=20 member pools; BF1 PS2 actually runs
-  25–32/team. openbf defaults: per-source-game authentic caps (BF2 16 bots / BF1
-  25–32), slider raises both.
+- **Unit counts (the maintainer, 2026-10-29):** Instant Action defaults to each map/era's
+  16–32 combatants per main team, preserving its side ratio; a human occupies one
+  combatant slot. Team size and Reinforcements are percentages of that map's
+  defaults (100%), with resolved counts and an equal-map average shown. The opening
+  roster and respawn target agree; the menu's ceiling is 32 per side, subject to
+  frame-rate validation. Calibrate each map's reinforcements independently for a
+  typical Normal round with the Good human stand-in to last **6–9 minutes, aim 7**.
+  Difficulty tiers were tuned at 16v16; this decision does not retune them, and
+  `round_to_outcome --difficulty-check` still plays 16 per side on the missions' tickets.
+  Historical reference (**RE DONE 2026-08-30**, re-tickets-spawn.md): BF2's "16"
+  is its default alive-AI cap (NumBots, DAT_006004fc=16) over SetUnitCount=20 member
+  pools; BF1 PS2 runs 25–32/team. Generated missions retain those original values;
+  the approved Instant Action defaults are a named deviation.
 
 ### Vehicles & space
 - Ground vehicle handling: **BF2** (verify BF1/BF2 similarity during RE; revisit if they

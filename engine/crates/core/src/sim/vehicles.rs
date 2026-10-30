@@ -1083,6 +1083,7 @@ mod tests {
     /// into vehicle `v`, landing at age 0.
     fn bolt_into(s: &Sim, owner: UnitHandle, wc: usize, v: VehicleHandle) -> Bolt {
         Bolt {
+            visual_shot: None,
             pos: Vec3::ZERO,
             vel: Vec3::X,
             remaining: 0.0,

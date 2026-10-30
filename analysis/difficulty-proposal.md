@@ -46,7 +46,9 @@ Normal/Hard/Elite number below is that tier. Only `main`'s Easy differs: it is s
 
 The sweep tool (`engine/crates/game/examples/round_to_outcome.rs`) plays bot-only conquest rounds. Every run was
 16 v 16 (slot 0 vacated and **not** refilled; the sweep's default refills it, which makes team 0 field 17 against
-16). The missions were the Clone Wars ones (`*_con_cw.ron`; Geonosis has only `_con`). Each round ran to its end
+16). Since 2026-10-30 (teamsize2) the sweep's default is each map's own team sizes and calibrated tickets, with no
+filler; this 16 v 16 setup on the missions' tickets is now `SWEEP_COMBATANTS=16 SWEEP_MISSION_TICKETS=1`, and
+`--difficulty-check` plays it by default. The missions were the Clone Wars ones (`*_con_cw.ron`; Geonosis has only `_con`). Each round ran to its end
 (60,000-tick limit, never reached). Eight maps × 8 seeds (1-8) per configuration, 64 rounds each. A round takes
 about 8 s of wall time, and one invocation runs 8 maps in parallel.
 
@@ -55,7 +57,7 @@ about 8 s of wall time, and one invocation runs 8 maps in parallel.
 CARGO_TARGET_DIR=<scratch target> systemd-run --user --scope -q -p MemoryMax=16G \
   cargo build --release -p game --example round_to_outcome --example arena
 # one configuration, per seed:
-SWEEP_ERA=cw SWEEP_NOFILL=1 SWEEP_DEATHS=1 SWEEP_THREADS=8 SWEEP_DIFFICULTY=<tier> \
+SWEEP_ERA=cw SWEEP_COMBATANTS=16 SWEEP_MISSION_TICKETS=1 SWEEP_DEATHS=1 SWEEP_THREADS=8 SWEEP_DIFFICULTY=<tier> \
   [SWEEP_TEAMS=<t0>:<t1>] [SWEEP_PROXY=1,<dealt>,<taken>] \
   timeout 900 systemd-run --user --scope -q -p MemoryMax=16G \
   target/release/examples/round_to_outcome 60000 <seed> \
@@ -395,7 +397,8 @@ In `round_to_outcome.rs` only:
 - `SWEEP_MISSION_DIR=<dir>` reads missions from another directory. Used for the faction-swap copies: a Python
   script swapped the two `teams` entries in copies under `/tmp`.
 - `SWEEP_TEAMS=<t0>:<t1>` sets `sim.team_difficulty`.
-- `SWEEP_NOFILL=1` vacates slot 0 without the filler bot (16 v 16).
+- `SWEEP_NOFILL=1` vacated slot 0 without the filler bot (16 v 16). Obsolete since 2026-10-30: the sweep has no
+  filler and plays the map's own sizes; `SWEEP_COMBATANTS=16 SWEEP_MISSION_TICKETS=1` is this setup.
 - `SWEEP_PROXY=<team>,<dealt>,<taken>[,<skill>]` picks the first alive AI of `<team>` after the opening wave and
   sets `buffs.offense = (1, dealt)` and `buffs.defense = (1, taken)` every tick while it is alive. Respawns reuse
   the unit index, which was checked: the generation count equals deaths + 1. It also prints `PROXY ... kills K

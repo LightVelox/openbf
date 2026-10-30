@@ -165,16 +165,44 @@ pub enum Event {
         weapon_class: u32,
         end: crate::autoturret::TurretEnd,
     },
+    /// An immediate emitter contact, using its actual chain origin.
+    ForceHit {
+        owner: UnitHandle,
+        target: crate::projectile::Target,
+        from: Vec3,
+        pos: Vec3,
+        weapon_class: u32,
+        blocked: bool,
+        charge: f32,
+    },
+    /// A weapon-owned explosion; damage has already run through Sim::explode.
+    WeaponBlast {
+        pos: Vec3,
+        weapon_class: u32,
+    },
+    /// A round or blast hurt an auto-turret: what the attacker's hit flash
+    /// reads (B2 `FUN_001e0580`'s `FUN_0035fd50`, any victim of enemy relation).
+    TurretHit {
+        shooter: UnitHandle,
+        turret: u64,
+        team: u8,
+        damage: f32,
+        health_left: f32,
+    },
     Ability {
         unit: UnitHandle,
         weapon_class: u32,
         pos: Vec3,
+        charge: f32,
     },
+    /// A paid cutter pulse for presentation. Slicing has amount=0: it
+    /// changes the slice meter, never health or repair-score credit.
     Repair {
         unit: UnitHandle,
         weapon_class: u32,
         target: crate::projectile::Target,
         pos: Vec3,
+        /// Health actually restored, zero for a slice pulse.
         amount: f32,
     },
     Shot {
@@ -278,10 +306,6 @@ pub enum Event {
         surface: crate::impact::Surface,
         vehicle: Option<crate::vehicle::VehicleHandle>,
     },
-    Blast {
-        pos: Vec3,
-        weapon_class: u32,
-    },
     /// AI shed by the no-overspawn rule when a player took the last slots
     /// (or bleed dropped the pool below the live count).
     Despawn {
@@ -351,6 +375,30 @@ pub enum Event {
     Call {
         unit: crate::unit::UnitHandle,
         call: Call,
+    },
+    /// An authored saber combo, hit or deflect sound at its unit.
+    ComboSound {
+        unit: UnitHandle,
+        weapon_class: u32,
+        sound_hash: u32,
+    },
+    /// A saber blade touched something at `pos`: the fx layer spawns the
+    /// saber class's `HitEffect`, or its `DeflectEffect` for a block. The sim
+    /// never reads it.
+    SaberContact {
+        pos: Vec3,
+        weapon_class: u32,
+        deflect: bool,
+    },
+    /// The thrown saber's `HitSound`, which the PS2 plays at the first victim
+    /// of the update (B2 FUN_0031d688), not at the thrower.
+    SaberThrowHit {
+        pos: Vec3,
+        weapon_class: u32,
+    },
+    HeroOffered {
+        unit: UnitHandle,
+        class: u8,
     },
     Captured {
         cp: u32,
@@ -559,6 +607,8 @@ pub enum DeathCause {
     Stalled,
     /// Confirmed pause-menu Respawn (analysis/re-spawn-flow §7).
     Suicide,
+    /// A BF2 hero's time drain exhausted its health without a credited attacker.
+    HeroExhausted,
     Water,
 }
 
@@ -614,6 +664,12 @@ pub struct Sim {
     pub team_handicap_on: bool,
     pub rng: SimRng,
     pub lcg: GameLcg,
+    /// Native DAT_0073d868, separate from weapon-spread DAT_0073d870.
+    pub melee_lcg: GameLcg,
+    pub melee_lcg_active: bool,
+    /// Immutable BF2 seat-pose input for physical hero queries. Ordinary
+    /// soldier movement/collision does not read it; vehicle state is hashed.
+    pub hero_rider_frames: Option<std::sync::Arc<dyn super::HeroRiderFrames>>,
     pub heightfield: Option<Heightfield>,
     /// The map's baked model collision (`coll` meshes, `prim` primitives,
     /// terrain cutters). Empty = heightfield-only, as before. An INPUT like the
@@ -637,6 +693,8 @@ pub struct Sim {
     /// the state. Empty (the `Sim::empty` default) = no class system: every
     /// spawn comes from the caller's own `UnitSpec`, exactly as before.
     pub classes: [Vec<crate::unit::UnitClass>; 2],
+    /// BF2 mission hero classes and offer lifecycle; absent on other content.
+    pub heroes: Option<super::heroes::Heroes>,
     /// Per player SLOT, the class index that slot's NEXT respawn takes
     /// (`buttons::SPAWN_CLASS_NEXT`/`PREV` while dead). Parallel to
     /// `players`, grown by `sync_slot_tables`, and HASHED — a player who has
@@ -802,6 +860,10 @@ pub struct Sim {
     /// NOT hashed while nothing in the sim reads it.
     pub reticle_pick: Vec<Option<(super::input::AimTarget, i8)>>,
     pub events: Vec<Event>,
+    /// Birth-step post-flight endpoints, including rounds already removed.
+    /// Item rounds born after flight keep provenance on their live Bolt instead.
+    /// Like events/reticle_pick, these never drive physics or enter the hash.
+    pub shot_flights: Vec<crate::projectile::ShotFlight>,
     /// The unit driven by each pad passed to [`Sim::step`], indexed by player
     /// slot: slot `s` is driven by `pads[s]`. A slot whose entry is `None` has
     /// no unit; a slot past the end of the `pads` slice idles that tick.
@@ -825,9 +887,12 @@ pub struct Sim {
     pub respawn_delay: f32,
     /// Per-team spawn waves (teams 0/1).
     pub waves: [SpawnWaves; 2],
-    /// BF2 alive-AI cap per team (NumBots DAT_006004fc default 16; the
-    /// PLAN unit-count slider raises it).
+    /// Legacy/explicit CLI alive-AI cap per team (NumBots default 16).
+    /// Main teams can instead use map-relative combatant limits below.
     pub ai_alive_cap: u32,
+    /// Optional combatant limits, including reserved human slots (Instant Action).
+    /// Menu input like ai_alive_cap; spawning carries its effects into the hash.
+    pub team_combatants: Option<[u32; 2]>,
     /// Volumes that kill any living unit standing in them — the mission's
     /// `AddDeathRegion` list, resolved by
     /// `game::layout::MapLayout::apply_mission`. An INPUT like the
@@ -877,6 +942,16 @@ pub struct Sim {
     /// Card TEAM: the unit grid, live only inside the think loop
     /// (`ai::team`). DERIVED, not hashed.
     pub unit_grid: crate::ai::team::UnitGrid,
+    /// Deferred AI write-backs, drained after each think pass. Owned by this
+    /// sim and reused between ticks; derived scratch, never hashed.
+    pub(super) ai_updates: Vec<(
+        usize,
+        u32,
+        Option<crate::vehicle::Mount>,
+        crate::ai::AiState,
+        super::input::PadState,
+        crate::ai::NavTick,
+    )>,
     /// The map's authored planning graph (`core::nav`), when it ships one.
     /// An INPUT like the heightfield and the collision world: immutable during
     /// the round and NOT part of [`Sim::hash`]. `None` = the AI walks straight
@@ -1261,11 +1336,16 @@ impl Sim {
             // Independent generator; decorrelated seed so the two streams
             // don't start on the same word.
             lcg: GameLcg::new(seed ^ 0xA5A5_5A5A),
+            // [ours] Round seed maps the native global to a replay stream.
+            melee_lcg: GameLcg::new(seed ^ 0x5341_4252),
+            melee_lcg_active: false,
+            hero_rider_frames: None,
             heightfield: None,
             collision: CollisionWorld::default(),
             doors: Vec::new(),
             weapon_classes: vec![WeaponClass::bf1_rifle()],
             classes: [Vec::new(), Vec::new()],
+            heroes: None,
             spawn_choice: Vec::new(),
             spawn_post_choice: Vec::new(),
             prev_spawn_bits: Vec::new(),
@@ -1319,6 +1399,7 @@ impl Sim {
             magnet_hidden: Vec::new(),
             reticle_pick: Vec::new(),
             events: Vec::new(),
+            shot_flights: Vec::new(),
             players: Vec::new(),
             cps: Vec::new(),
             domination: None,
@@ -1327,6 +1408,7 @@ impl Sim {
             respawn_delay: 4.0,
             waves: [SpawnWaves::mission_default(), SpawnWaves::mission_default()],
             ai_alive_cap: 16,
+            team_combatants: None,
             death_regions: Vec::new(),
             fly_ceiling: crate::soldier::DEFAULT_FLY_CEILING,
             water_level: None,
@@ -1340,6 +1422,7 @@ impl Sim {
             nav_trapped: Vec::new(),
             positions: Default::default(),
             unit_grid: Default::default(),
+            ai_updates: Vec::new(),
             nav: None,
             flank: Default::default(),
             nav_stats: NavStats::default(),
@@ -1717,6 +1800,13 @@ impl Sim {
         }
         eat(&self.rng.state().to_le_bytes());
         eat(&self.lcg.state().to_le_bytes());
+        if self.melee_lcg_active {
+            eat(b"SABER_RNG");
+            eat(&self.melee_lcg.state().to_le_bytes());
+        }
+        if let Some(heroes) = &self.heroes {
+            heroes.hash_into(&mut eat);
+        }
         for u in &self.units {
             u.hash_into(&mut eat);
         }
@@ -1726,6 +1816,13 @@ impl Sim {
             eat(&(self.vehicles.len() as u32).to_le_bytes());
             for v in &self.vehicles {
                 v.hash_into(&mut eat);
+                if self.hero_rider_frames.is_some() && v.kind == crate::vehicle::VehicleKind::Walker
+                {
+                    eat(b"RIDER_LAYERS");
+                    for blend in v.walker.layer_blend {
+                        eat(&blend.to_bits().to_le_bytes());
+                    }
+                }
             }
         }
         // HASH: a live bolt carries its predictive hit and historical shooter.
@@ -1810,6 +1907,10 @@ impl Sim {
                 Some(super::input::AimTarget::Vehicle(h)) => {
                     eat(&[0x56]);
                     (h.index, h.gen)
+                }
+                Some(super::input::AimTarget::Turret(id)) => {
+                    eat(&[0x54]);
+                    (id as u32, (id >> 32) as u32)
                 }
                 m => handle_or_none(m.and_then(super::input::AimTarget::unit)),
             };

@@ -43,6 +43,7 @@
 use super::behave::Tick;
 use super::draw::{unit_unit, SALT_ARM, SALT_NUMBER};
 use super::state::{AiState, ArmState};
+use crate::autoturret::Turret;
 use crate::remote::{Droid, DroidClass};
 use crate::sim::{buttons, Sim};
 use crate::soldier::GroundRules;
@@ -175,6 +176,10 @@ pub(super) struct Ask {
 /// flyer, hover, walker or building (22.1 step 5, B1 151700-151716), and a
 /// droid is none of them.
 pub(super) fn against_droid(c: &Cand, max_health: f32, kind: u32, bf2: bool) -> Option<f32> {
+    // `fire_emitter` never hits a droid or a turret: a cone is no answer to one.
+    if c.class.force.is_none() && c.class.emitter.as_ref().is_some_and(|e| e.is_cone()) {
+        return None;
+    }
     if bf2 && c.class.ai_target_kind >> kind.min(31) & 1 == 0 {
         return None;
     }
@@ -241,6 +246,10 @@ pub(super) fn against_vehicle(c: &Cand, v: &VehAsk, kind: u32, bf2: bool) -> Opt
 /// salvo's damage over the shot delay); a grenade weapon: a clip's damage
 /// over ShotDelay + ReloadTime.
 pub(super) fn score(wc: &WeaponClass, kind: u32) -> f32 {
+    // PS2 FUN002aaba0 gives the melee class a fixed desirability.
+    if wc.saber.is_some() {
+        return 1000.0;
+    }
     let dmg = shot(wc, kind);
     let rounds = wc.rounds_per_clip as f32;
     if wc.thrown.is_some() {
@@ -303,7 +312,9 @@ pub(super) fn choose<'a>(cands: impl Iterator<Item = Cand<'a>>, ask: &Ask) -> Op
         // Card HVYW: a heavy weapon in a crowd is taken as a forced grenade
         // is; at any other soldier it is passed over (OURS).
         let heavy = c.heavy && ask.vehicle.is_none();
-        let s = if let Some(v) = ask.vehicle {
+        let s = if ask.bf2 && c.class.saber.is_some() {
+            1000.0
+        } else if let Some(v) = ask.vehicle {
             match against_vehicle(&c, &v, ask.kind, ask.bf2) {
                 Some(s) => s,
                 None => continue,
@@ -338,12 +349,17 @@ pub(super) fn choose<'a>(cands: impl Iterator<Item = Cand<'a>>, ask: &Ask) -> Op
         } else {
             plenty || higher
         };
-        let [min, _, max] = c.class.ai_range;
+        let [min, _, _] = c.class.ai_range;
+        let max = reach(c.class);
         let take = if min * min < ask.d2 && ask.d2 < max * max {
             !in_range || by_rule || (grenade && ask.forced) || heavy
         } else {
-            let reach = max.max(c.class.ordnance.max_range());
-            !in_range && ask.d2 < reach * reach && by_rule
+            let fallback = if c.class.force.is_some() || c.class.saber_throw.is_some() {
+                max
+            } else {
+                max.max(c.class.ordnance.max_range())
+            };
+            !in_range && ask.d2 < fallback * fallback && by_rule
         };
         if take {
             in_range |= min * min < ask.d2 && ask.d2 < max * max;
@@ -720,10 +736,16 @@ pub(super) fn think(sim: &Sim, tk: &Tick, st: &mut AiState, enemy: Option<&Unit>
 }
 
 /// The [`Ask`] for the droid `d` of class `c`, seen by `u` from `eye`.
-fn droid_ask(sim: &Sim, me: UnitHandle, eye: Vec3, d: &Droid, c: &DroidClass, forced: bool) -> Ask {
+fn item_ask(
+    sim: &Sim,
+    me: UnitHandle,
+    eye: Vec3,
+    (pos, max_health, kind): (Vec3, f32, u32),
+    forced: bool,
+) -> Ask {
     Ask {
-        kind: c.health_type as u32,
-        d2: (d.pos - eye).length_squared(),
+        kind,
+        d2: (pos - eye).length_squared(),
         bf2: sim.ground_rules == GroundRules::Bf2,
         group: false,
         barred: false,
@@ -731,7 +753,7 @@ fn droid_ask(sim: &Sim, me: UnitHandle, eye: Vec3, d: &Droid, c: &DroidClass, fo
         coin: unit_unit(me.index, sim.tick, me.gen, SALT_ARM) < 0.5,
         vehicle: None,
         crowd: false,
-        droid: Some(c.max_health),
+        droid: Some(max_health),
     }
 }
 
@@ -739,23 +761,43 @@ fn droid_ask(sim: &Sim, me: UnitHandle, eye: Vec3, d: &Droid, c: &DroidClass, fo
 /// the PS2's scan admits a candidate only through the weapon choice
 /// (B2 `FUN_002e3aa0` -> `FUN_002ac8f8`, `analysis/re-remote-droid.md` 6).
 pub fn droid_suited(sim: &Sim, u: &Unit, c: &DroidClass) -> bool {
+    item_suited(sim, u, c.max_health, c.health_type as u32)
+}
+
+/// [`droid_suited`] for any bot-less item of `max_health` and health type
+/// `kind`: a droid, or an auto-turret. The PS2's rule for a building adds a
+/// weak weapon's ordnance test (22.1 steps 5-6), which no weapon that clears
+/// half of the turret's 50 health in 10 s reaches.
+pub fn item_suited(sim: &Sim, u: &Unit, max_health: f32, kind: u32) -> bool {
     let bf2 = sim.ground_rules == GroundRules::Bf2;
-    let kind = c.health_type as u32;
     slots(sim, u)
         .into_iter()
         .flatten()
-        .any(|w| !w.idle() && against_droid(&w, c.max_health, kind, bf2).is_some())
+        .any(|w| !w.idle() && against_droid(&w, max_health, kind, bf2).is_some())
 }
 
 /// [`think`] for a seen droid: the weapon the PS2's choice takes for it.
 pub(super) fn think_droid(sim: &Sim, tk: &Tick, st: &mut AiState, d: &Droid) {
+    let Some(c) = sim.droid_class(d) else {
+        return;
+    };
+    think_item(sim, tk, st, (d.pos, c.max_health, c.health_type as u32));
+}
+
+/// [`think`] for a seen auto-turret, as for a droid.
+pub(super) fn think_turret(sim: &Sim, tk: &Tick, st: &mut AiState, t: &Turret) {
+    let Some(c) = sim.turret_class(t) else {
+        return;
+    };
+    let item = (t.centre(), c.body.max_health, c.health_type as u32);
+    think_item(sim, tk, st, item);
+}
+
+fn think_item(sim: &Sim, tk: &Tick, st: &mut AiState, item: (Vec3, f32, u32)) {
     let Tick { me, u, eye, .. } = *tk;
     if u.held.is_empty() || throwing(sim, u).is_some() {
         return;
     }
-    let Some(c) = sim.droid_class(d) else {
-        return;
-    };
     let forced = grenade_forced(
         sim.ground_rules,
         number(me),
@@ -766,7 +808,7 @@ pub(super) fn think_droid(sim: &Sim, tk: &Tick, st: &mut AiState, d: &Droid) {
     let cands = slots(sim, u);
     let pick = choose(
         cands.into_iter().flatten(),
-        &droid_ask(sim, me, eye, d, c, forced),
+        &item_ask(sim, me, eye, item, forced),
     );
     st.arm.pick = pick.map(|p| p.0);
     st.arm.in_range = pick.is_some_and(|p| p.1);
@@ -776,6 +818,7 @@ pub(super) fn think_droid(sim: &Sim, tk: &Tick, st: &mut AiState, d: &Droid) {
 }
 
 /// What the choice means for the pad this tick.
+#[derive(Clone, Copy)]
 pub(super) enum Armed<'a> {
     /// The weapon in the hands: the gunner's own rules.
     Hand,
@@ -792,6 +835,8 @@ pub(super) enum Armed<'a> {
     /// is the think's pick (`true`; `false` = only the throw under way), tap
     /// SECONDARY_FIRE.
     Thrown(&'a WeaponClass, bool),
+    /// A chosen hero power uses the same offhand channel as human input.
+    Secondary(&'a WeaponClass, &'a crate::weapon::WeaponState),
 }
 
 /// The weapon in the hands: a shell-firing class is aimed on its arc.
@@ -803,7 +848,17 @@ fn in_hand<'a>(sim: &'a Sim, u: &Unit) -> Armed<'a> {
     }
 }
 
-pub(super) fn armed<'a>(sim: &'a Sim, u: &Unit, st: &AiState) -> Armed<'a> {
+pub(super) fn reach(class: &WeaponClass) -> f32 {
+    let physical = class.force.as_ref().map(|p| p.range).or_else(|| {
+        class
+            .saber_throw
+            .as_ref()
+            .map(|p| p.velocity * p.outbound_seconds)
+    });
+    physical.map_or(class.ai_range[2], |r| r.min(class.ai_range[2]))
+}
+
+pub(super) fn armed<'a>(sim: &'a Sim, u: &'a Unit, st: &AiState) -> Armed<'a> {
     // A throw under way keeps the grenade's aim until its fire state ends.
     if let Some(c) = throwing(sim, u) {
         return Armed::Thrown(c, false);
@@ -821,6 +876,9 @@ pub(super) fn armed<'a>(sim: &'a Sim, u: &Unit, st: &AiState) -> Armed<'a> {
         0 => Armed::Draw(buttons::SWITCH_WEAPON),
         _ if u.cur1 != Some(k as u8) => Armed::Draw(buttons::SWITCH_SECONDARY),
         _ if class.thrown.is_some() => Armed::Thrown(class, true),
+        _ if class.force.is_some() || class.saber_throw.is_some() => {
+            Armed::Secondary(class, &u.held[k].state)
+        }
         _ => Armed::Hand,
     }
 }

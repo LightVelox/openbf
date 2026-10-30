@@ -73,6 +73,9 @@ pub mod buttons {
     pub const RESPAWN: u32 = 1 << 22;
     /// The pad is aimed by the mouse (`mx`/`my`): aim assist leaves it alone.
     pub const MOUSE_AIM: u32 = 1 << 23;
+    /// The current hero offer; mapped separately from movement/navigation.
+    pub const HERO_ACCEPT: u32 = 1 << 24;
+    pub const HERO_DECLINE: u32 = 1 << 25;
 }
 
 pub const LOOK_UNIT: f32 = 1.0 / 65536.0;
@@ -224,6 +227,13 @@ impl InputLog {
 pub enum AimTarget {
     Unit(UnitHandle),
     Vehicle(VehicleHandle),
+    /// A dispensed auto-turret by its id: a building to the PS2's acquisition
+    /// (`re-portable-turret.md` 10).
+    Turret(u64),
+    /// A remote droid by its id. Only ever the reticle's pick (its name,
+    /// health and colour; the maintainer: "don't aim assist remote droids"):
+    /// it has no [`Candidate`], so no magnet can hold it.
+    Droid(u64),
 }
 
 impl AimTarget {
@@ -231,7 +241,7 @@ impl AimTarget {
     pub fn unit(self) -> Option<UnitHandle> {
         match self {
             AimTarget::Unit(h) => Some(h),
-            AimTarget::Vehicle(_) => None,
+            AimTarget::Vehicle(_) | AimTarget::Turret(_) | AimTarget::Droid(_) => None,
         }
     }
 
@@ -239,7 +249,7 @@ impl AimTarget {
     pub fn vehicle(self) -> Option<VehicleHandle> {
         match self {
             AimTarget::Vehicle(h) => Some(h),
-            AimTarget::Unit(_) => None,
+            AimTarget::Unit(_) | AimTarget::Turret(_) | AimTarget::Droid(_) => None,
         }
     }
 
@@ -247,6 +257,8 @@ impl AimTarget {
         let (tag, i, g) = match self {
             AimTarget::Unit(h) => (0x55, h.index, h.gen),
             AimTarget::Vehicle(h) => (0x56, h.index, h.gen),
+            AimTarget::Turret(id) => (0x54, id as u32, (id >> 32) as u32),
+            AimTarget::Droid(id) => (0x44, id as u32, (id >> 32) as u32),
         };
         eat(&[tag]);
         eat(&i.to_le_bytes());
@@ -377,6 +389,24 @@ impl Sim {
                     building: v.instance,
                 })
             }
+            AimTarget::Droid(_) => None,
+            AimTarget::Turret(id) => {
+                let t = self.live_turret(id)?;
+                let ctr = t.centre();
+                let r = crate::autoturret::RADIUS;
+                Some(Candidate {
+                    team: Some(t.team),
+                    kind: self.turret_class(t)?.health_type as u32,
+                    ctr,
+                    r,
+                    aim: ctr,
+                    vel: t.vel,
+                    assist_r: r,
+                    assist_ctr: ctr,
+                    hull: None,
+                    building: None,
+                })
+            }
         }
     }
 
@@ -392,8 +422,9 @@ impl Sim {
     /// (`Sim::reticle_pick`), which the HUD's target readout shows
     /// (`analysis/re-target-hud.md` §2 [O], card HTGT).
     ///
-    /// The candidates are alive units on foot and alive vehicles and
-    /// building turrets but the shooter's own vehicle (BF2 B2:236430-236440:
+    /// The candidates are alive units on foot, alive vehicles and building
+    /// turrets but the shooter's own vehicle, and dispensed auto-turrets
+    /// (BF2 B2:236430-236440:
     /// alive or a building; a rider is out of the collision world, so its
     /// vehicle stands for it). Port choices: units first in `alive_units()`
     /// order, then vehicles in index order (the PS2's collision-list order
@@ -476,6 +507,8 @@ impl Sim {
         let live = |t: AimTarget| match t {
             AimTarget::Unit(h) => self.unit(h).is_some_and(|u| u.mount.is_none()),
             AimTarget::Vehicle(h) => self.vehicle(h).is_some() && Some(h) != own,
+            AimTarget::Turret(id) => self.live_turret(id).is_some(),
+            AimTarget::Droid(_) => false,
         };
 
         let mut target = self.magnet[slot].filter(|&t| self.aim_candidate(t).is_some());
@@ -520,7 +553,8 @@ impl Sim {
             let mid = pos + dir * (er * 0.5);
             let units = self.alive_units().map(|(h, _)| AimTarget::Unit(h));
             let vehicles = self.alive_vehicles().map(|(h, _)| AimTarget::Vehicle(h));
-            for t in units.chain(vehicles) {
+            let turrets = self.turrets.iter().map(|t| AimTarget::Turret(t.id));
+            for t in units.chain(vehicles).chain(turrets) {
                 if t == AimTarget::Unit(ph) || !live(t) {
                     continue;
                 }
@@ -551,7 +585,42 @@ impl Sim {
                 }
             }
         }
-        let pick = target.and_then(|t| self.aim_candidate(t).map(|u| (t, rel(&u))));
+        let mut pick = target.and_then(|t| self.aim_candidate(t).map(|u| (t, rel(&u))));
+        // [ours] The maintainer: a remote droid under the reticle shows its
+        // name, health and colour and gets no aim assist. So it is read here,
+        // past the magnet's choice, and only ever into the pick; the same
+        // cone and score the other targets' picks use.
+        let mut near = target
+            .and_then(|t| self.aim_candidate(t))
+            .map(|u| cone_score(u.r, angle, er, pos, dir, u.ctr))
+            .filter(|&s| s >= 0.0)
+            .unwrap_or(f32::MAX);
+        for d in &self.droids {
+            if !d.alive() || (d.owner == ph && d.controlled) {
+                continue;
+            }
+            let r = crate::remote::RADIUS;
+            let s = cone_score(r, angle, er, pos, dir, d.pos);
+            if s < 0.0 || s >= near {
+                continue;
+            }
+            let c = Candidate {
+                team: Some(d.team),
+                kind: 0,
+                ctr: d.pos,
+                r,
+                aim: d.pos,
+                vel: d.vel,
+                assist_r: r,
+                assist_ctr: d.pos,
+                hull: None,
+                building: None,
+            };
+            if clear(&c) {
+                near = s;
+                pick = Some((AimTarget::Droid(d.id), rel(&c)));
+            }
+        }
         self.magnet[slot] = if valid && droid.is_none() {
             target
         } else {
@@ -615,7 +684,7 @@ impl Sim {
             let ahead = -0.5 * crate::TICK_DT
                 - match m {
                     AimTarget::Unit(_) => crate::unit::HUMAN_SHOT_LAG,
-                    AimTarget::Vehicle(_) => 0.0,
+                    AimTarget::Vehicle(_) | AimTarget::Turret(_) | AimTarget::Droid(_) => 0.0,
                 };
             let from = if p.scoped() {
                 p.scope_point(self.ground_rules)

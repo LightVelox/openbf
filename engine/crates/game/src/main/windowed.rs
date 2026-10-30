@@ -74,6 +74,12 @@ fn play_event_sounds(
     sl.play_shield_loops(audio, &walk.sim, &listener);
     sl.walker_fire_loops(audio, walk, &listener);
     sl.guided_loops(audio, &walk.sim, &listener);
+    sl.play_hero_blades(audio, walk, &listener);
+    sl.play_hero_samples(
+        audio,
+        &game::event_sounds::hero_sample_asks(walk),
+        &listener,
+    );
     // The soldiers' steps and stance sounds (card FOLY).
     if let Some(foley) = foley {
         let view = game::foley::View::of(&walk.camera(), aspect);
@@ -957,11 +963,12 @@ impl App {
             spawn: (0.0, 0.0),
             spawn_set: false,
             targets: false,
-            // Session Options' Conquest AI Units Per Team (§2.3).
-            ai: Some(self.session.con_numbots.max(0) as u32),
-            // The shell has its own alive-AI slider (MenuAction::SetAiCap).
+            // Map-relative team size, including the human.
+            ai: None,
+            // Explicit CLI cap is separate from the percentage setting.
             ai_cap: None,
-            // The mission's counts (else 250) scaled by the shell's %.
+            team_size_pct: Some(self.session.con_numbots as u32),
+            // Calibrated map tickets, scaled by the shell percentage.
             tickets: 250,
             tickets_set: false,
             ticket_pct: self.session.con_mult.max(10) as u32,
@@ -972,14 +979,12 @@ impl App {
             mission,
             mission_file,
             player_team,
+            heroes: game::heroes::rules(&self.session),
         };
         // Release the renderer field borrow while installing the other App resources.
         let mut renderer = self.renderer.take().expect("loaded renderer");
         let (mut walk, cube) = self.battle_resources(&mut renderer, &scene, Some(&setup));
         self.renderer = Some(renderer);
-        if let Some(cap) = self.profile.settings.ai_alive_cap {
-            walk.sim.ai_alive_cap = cap;
-        }
         super::battle::open_spawn_screens(&mut walk, setup.mission.as_ref());
         self.profile.settings.last_map = Some(name);
         self.profile.settings.last_mode = Some(self.mode.clone());
@@ -1168,6 +1173,7 @@ pub(super) fn run_shell(assets_dir: PathBuf, missions_dir: PathBuf) -> Result<()
         targets: false,
         ai: None,
         ai_cap: None,
+        team_size_pct: None,
         tickets: 250,
         tickets_set: false,
         ticket_pct: 100,
@@ -1178,6 +1184,7 @@ pub(super) fn run_shell(assets_dir: PathBuf, missions_dir: PathBuf) -> Result<()
         mission: None,
         mission_file: None,
         player_team: 0,
+        heroes: Some(core::sim::heroes::HeroRules::default()),
     };
     let autopilot = game::dev::on() && std::env::var("OPENBF_AUTOPILOT").is_ok_and(|v| v == "1");
     let quit_at = quit_at();
@@ -1462,7 +1469,13 @@ impl winit::application::ApplicationHandler for App {
                         let model = ui::menu::MenuModel {
                             cheats: walk.sim.cheats.entries().to_vec(),
                             assist_intensity: walk.sim.assist_intensity,
-                            ai_alive_cap: walk.sim.ai_alive_cap,
+                            team_size_pct: walk.team_size_pct,
+                            reinforcements_pct: walk.reinforcement_pct,
+                            population_note: game::conquest_defaults::menu_note(
+                                walk.team_size_pct,
+                                walk.reinforcement_pct,
+                            ),
+                            team_size_off: walk.conquest_defaults.is_none(),
                             fov_scale: walk.fov_scale,
                             fov_deg: walk.fov_y().to_degrees(),
                             music_volume: walk
@@ -1536,7 +1549,7 @@ impl winit::application::ApplicationHandler for App {
                                 &mut self.pause_menu,
                             );
                             self.cheats.follow(&walk.sim);
-                            persist_setting(&mut self.profile, a, walk);
+                            persist_setting(&mut self.profile, &mut self.session, a, walk);
                             quit |= a == ui::menu::MenuAction::Quit;
                             self.kbm.follow(&self.profile.settings);
                             // The music follows its slider while paused.
@@ -1555,7 +1568,13 @@ impl winit::application::ApplicationHandler for App {
                             respawn_confirm: self.pause_menu.confirm,
                             cheats: walk.sim.cheats.entries().to_vec(),
                             assist_intensity: walk.sim.assist_intensity,
-                            ai_alive_cap: walk.sim.ai_alive_cap,
+                            team_size_pct: walk.team_size_pct,
+                            reinforcements_pct: walk.reinforcement_pct,
+                            population_note: game::conquest_defaults::menu_note(
+                                walk.team_size_pct,
+                                walk.reinforcement_pct,
+                            ),
+                            team_size_off: walk.conquest_defaults.is_none(),
                             fov_scale: walk.fov_scale,
                             fov_deg: walk.fov_y().to_degrees(),
                             music_volume: walk
@@ -1592,11 +1611,13 @@ impl winit::application::ApplicationHandler for App {
                             if let Some(gpu) = self.gpu.as_mut() {
                                 gpu.step_stations(&walk.sim);
                             }
-                            self.fx.ingest(walk);
+                            self.fx.ingest_posed(walk, self.soldier_vis.as_ref());
                             let effect_sounds = self.fx.take_sounds();
                             if let Some(vis) = self.soldier_vis.as_mut() {
                                 vis.note_shots(walk);
-                                self.bolts.set_fire_points(vis.fire_points(walk));
+                                let mut points = vis.fire_points(walk);
+                                self.deka_vis.fire_points(&walk.sim, &mut points);
+                                self.bolts.set_fire_points(points);
                             }
                             self.bolts.track(walk);
                             if let (Some(audio), Some(sl)) =
@@ -1613,7 +1634,7 @@ impl winit::application::ApplicationHandler for App {
                                 );
                                 play_ambience(audio, sl, &self.ambience, walk);
                             }
-                            self.feed.tick(&walk.sim, walk.player);
+                            game::heroes::tick(walk, &mut self.feed);
                             if let Some(bb) = self.blackbox.as_mut() {
                                 stuck_alarm |= bb.tick(walk, Some(tick_pad));
                                 note_sounds(bb, self.sounds.as_mut(), walk.sim.tick);
@@ -1765,9 +1786,12 @@ impl winit::application::ApplicationHandler for App {
                         extra.extend(self.vehicle_vis.draws(r, &walk.sim, &see.vehicles));
                         extra.extend(self.deka_vis.draws(r, &walk.sim));
                     }
-                    if let Some(vis) = self.soldier_vis.as_ref() {
+                    if let Some(vis) = self.soldier_vis.as_mut() {
                         skinned = vis.draws(walk);
                         extra.extend(vis.weapon_draws(walk));
+                        if let Some(r) = self.renderer.as_mut() {
+                            extra.extend(vis.cloth_draws(r, walk));
+                        }
                     }
                     self.frames += 1;
                     if self.frames.is_multiple_of(10) {
@@ -1876,10 +1900,21 @@ impl winit::application::ApplicationHandler for App {
                             let flashes = self
                                 .soldier_vis
                                 .as_ref()
-                                .map(|v| v.flash_draws(walk))
+                                .map(|v| {
+                                    let mut points = v.fire_points(walk);
+                                    self.deka_vis.fire_points(&walk.sim, &mut points);
+                                    v.flash_draws_at(walk, &points)
+                                })
                                 .unwrap_or_default();
                             let mut particles = flashes;
-                            particles.extend(self.deka_vis.bubbles(&walk.sim, camera.position));
+                            if let Some(vis) = &self.soldier_vis {
+                                particles.extend(vis.saber_draws(walk));
+                            }
+                            particles.extend(self.deka_vis.bubbles(
+                                &walk.sim,
+                                &camera,
+                                r.lighting.sun_dir,
+                            ));
                             particles.extend(self.holos.draws(&gpu.holo, walk, &camera));
                             if let Some(w) = self.weather.as_mut() {
                                 particles.extend(w.frame_draws(r, &camera, tracked_velocity(walk)));
@@ -1909,7 +1944,26 @@ impl winit::application::ApplicationHandler for App {
                         .filter(|_| self.hud_view.is_some() && !self.cheats.hud_hidden);
                     if let Some(vis) = self.soldier_vis.as_ref() {
                         let step = if self.paused { 0.0 } else { dt };
-                        let (body, gun) = self.spawn_preview.draws(vis, page, &camera, step);
+                        let (body, gun) = self.spawn_preview.draws_live(
+                            r,
+                            vis,
+                            page,
+                            &camera,
+                            step,
+                            |r, team, class, model, dt| {
+                                let c = self
+                                    .walk
+                                    .as_ref()?
+                                    .0
+                                    .sim
+                                    .classes
+                                    .get(usize::from(team))?
+                                    .get(usize::from(class))?
+                                    .droideka
+                                    .as_deref()?;
+                                Some(self.deka_vis.preview_draws(r, team, class, c, model, dt))
+                            },
+                        );
                         skinned.extend(body);
                         draws.extend(gun);
                     }
@@ -1987,7 +2041,7 @@ impl winit::application::ApplicationHandler for App {
                                         &mut self.pause_menu,
                                     );
                                     self.cheats.follow(&walk.sim);
-                                    persist_setting(&mut self.profile, a, walk);
+                                    persist_setting(&mut self.profile, &mut self.session, a, walk);
                                     self.kbm.follow(&self.profile.settings);
                                     if a == ui::menu::MenuAction::Quit {
                                         self.quit_clicked = true;
@@ -2065,6 +2119,7 @@ mod tests {
             targets: false,
             ai: None,
             ai_cap: cap,
+            team_size_pct: None,
             tickets: 250,
             tickets_set: false,
             ticket_pct: 100,
@@ -2075,7 +2130,17 @@ mod tests {
             mission: None,
             mission_file: None,
             player_team: 0,
+            heroes: Some(core::sim::heroes::HeroRules::default()),
         }
+    }
+
+    fn mission() -> game::mission::MissionDef {
+        ron::from_str(
+            r#"(map: "bf1_nab2", mode: "con", source_game: "bf1", teams: [
+            (faction: "rep", units: 20, tickets: 150), (faction: "cis", units: 20, tickets: 150)],
+            ai_alive_cap: 16, spawn_delay: 10.0, spawn_interval: 0.25)"#,
+        )
+        .expect("mission parses")
     }
 
     #[test]
@@ -2083,21 +2148,35 @@ mod tests {
         use core::skill::Difficulty::{Easy, Elite};
         let settings = game::profile::Settings {
             difficulty: Elite,
-            ai_alive_cap: Some(16),
+            team_size_pct: 150,
             ..Default::default()
         };
+        let settings = game::profile::Settings {
+            reinforcement_pct: 200,
+            ..settings
+        };
         let mut battle = setup(Some(64));
+        battle.mission = Some(mission());
         resolve_direct_settings(&mut battle, None, &settings);
         assert_eq!(battle.difficulty, Elite);
         assert_eq!(battle.ai_cap, Some(64));
         let mut battle = setup(None);
+        battle.mission = Some(mission());
         resolve_direct_settings(&mut battle, Some(Easy), &settings);
         assert_eq!(battle.difficulty, Easy);
-        assert_eq!(battle.ai_cap, Some(16));
+        assert_eq!(battle.ai_cap, None);
+        assert_eq!(battle.team_size_pct, Some(150));
+        assert_eq!(battle.ticket_pct, 200);
+        // A plain `game <map>` launch (no mission) is no conquest: the
+        // profile's team size and reinforcements stay out of it.
+        let mut battle = setup(None);
+        resolve_direct_settings(&mut battle, Some(Easy), &settings);
+        assert_eq!(battle.difficulty, Easy);
+        assert_eq!((battle.team_size_pct, battle.ticket_pct), (None, 100));
         let mut battle = setup(None);
         resolve_direct_settings(&mut battle, None, &game::profile::Settings::default());
         assert_eq!(battle.difficulty, core::skill::Difficulty::default());
-        assert_eq!(battle.ai_cap, None, "leave the mission's cap available");
+        assert_eq!(battle.ai_cap, None, "leave the explicit CLI cap unset");
     }
 
     #[test]

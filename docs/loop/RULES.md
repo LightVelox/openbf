@@ -280,6 +280,13 @@ here. Do not leave a lesson only as JOURNAL prose.
   after a docs-only or comment-only change, after a rebase/cherry-pick that applies cleanly onto code that already
   passed, or for an export of a commit that already passed: build + clippy + the touched crates' tests are enough.
   Round sweeps and win-rate matrices only when the change can move bot results, and once per branch.
+  Who runs full ci (maintainer 2026-10-30, standing): (1) the AUTHOR once at the end of a branch; (2) a REVIEWER runs
+  targeted tests only, plus one full ci only when merging into main needed a hand-resolved CODE conflict; (3) a FIX agent
+  runs targeted tests for what it changed, full ci only if the fix touches per-tick or shared code; (4) a LANDING runs
+  one full ci on the exact tree that goes public; (5) a new worktree builds warm: `HEAVY_WARM=1 scripts/heavy.sh cargo ...`
+  uses a persistent per-slot target (`~/.cache/openbf-warm/slot<N>`) instead of compiling from scratch - not for a
+  binary you then run from `engine/target` (the game). Edit `scripts/heavy.sh` only by writing a new file and `mv`-ing
+  it over (jobs queue inside it; an in-place edit killed one, 2026-10-30).
 - Heavy jobs (cargo build/test, bakes, sweeps, captures) run through `scripts/heavy.sh [--gpu] <cmd>`: up to 3 at once,
   one at a time while the maintainer is playing; it adds the memory cap, nice and timeout (maintainer 2026-10-29: the
   single ci.lock left jobs idle). Plain `flock ci.lock` still works and waits for all of them.

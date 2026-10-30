@@ -21,7 +21,12 @@ pub fn page(
     if !walk.sim.spawn_screens && stage != SpawnStage::Alive {
         return None;
     }
-    let me = &walk.sim.units[walk.player.index as usize];
+    let actor = walk.sim.players.get(slot).copied().flatten()?;
+    let me = walk
+        .sim
+        .units
+        .get(actor.index as usize)
+        .filter(|u| u.gen == actor.gen)?;
     match stage {
         SpawnStage::Side => {
             let [a, b] = feed.team_names();
@@ -57,12 +62,9 @@ pub fn page(
         SpawnStage::Class | SpawnStage::Alive => {
             let team = me.team.min(1);
             let t = &walk.teams[usize::from(team)];
-            let pick = walk
-                .sim
-                .spawn_choice
-                .get(slot)
-                .map_or(0, |c| usize::from(*c))
-                .min(t.classes.len().saturating_sub(1));
+            let classes = walk.sim.spawn_class_indices(slot, team);
+            let pick = walk.sim.spawn_class_choice(slot, team)?;
+            let row = classes.iter().position(|&c| c == pick)?;
             let class = t.classes.get(pick)?;
             let title = feed
                 .class_names(team)
@@ -77,6 +79,7 @@ pub fn page(
                 Some(ClassRefusal::Points(n)) => feed
                     .text_by_hash(0x155a_b074, "Get %d more points to unlock!\r\n")
                     .replacen("%d", &n.to_string(), 1),
+                Some(ClassRefusal::HeroUnavailable) => String::from("Hero unavailable\n"),
                 None => String::new(),
             };
             let count = walk.sim.class_count(team, pick);
@@ -120,11 +123,14 @@ pub fn page(
                     .trim()
                     .to_owned(),
                 team,
-                class: pick,
-                classes: t.classes.len(),
-                refused: (0..t.classes.len().min(32))
-                    .filter(|&j| walk.sim.class_refusal(slot, team, j).is_some())
-                    .fold(0, |m, j| m | 1 << j),
+                class: row,
+                refused: classes
+                    .iter()
+                    .take(32)
+                    .enumerate()
+                    .filter(|&(_, &class)| walk.sim.class_refusal(slot, team, class).is_some())
+                    .fold(0, |m, (j, _)| m | 1 << j),
+                classes: classes.into_iter().map(|c| c as u8).collect(),
             })
         }
         SpawnStage::Accepted => None,
@@ -134,6 +140,7 @@ pub fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod heroes;
     use crate::event_feed::EventFeed;
     use crate::walk::{ClassVisual, WalkSim, WeaponHud};
     use core::sim::{buttons, PadState};
@@ -193,6 +200,24 @@ mod tests {
         );
         w.sim.spawn_stage[0] = core::sim::SpawnStage::Class;
         let me = w.player.index as usize;
+        let u = &w.sim.units[me];
+        w.sim.classes[usize::from(u.team)] = vec![core::unit::UnitClass {
+            consts: u.spec.consts,
+            max_health: u.health.max,
+            health_type: u.spec.health_type,
+            weapon_class: u.weapon_class,
+            total_clips: 6,
+            weapon_slot: u.weapon_slot,
+            slots: u.spec.slots.clone(),
+            jet: false,
+            capture_posts: true,
+            drops: Default::default(),
+            chunk: None,
+            droideka: None,
+            min: 1,
+            max: None,
+            unlock_points: 0,
+        }];
         let team = usize::from(w.sim.units[me].team.min(1));
         let hud = |class: &str| WeaponHud {
             class: class.into(),
@@ -249,10 +274,10 @@ mod tests {
             capture_posts: true,
             drops: core::sim::DropTable::default(),
             chunk: None,
+            droideka: None,
             min: 1,
             max: Some(4),
             unlock_points: 12,
-            droideka: None,
         }];
         w.sim.set_spawn_points(0, 5);
         match page(&w, &feed, 0) {

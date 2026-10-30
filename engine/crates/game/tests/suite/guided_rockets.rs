@@ -345,13 +345,15 @@ fn every_ordinary_disc_guided_launcher_is_gated_and_flies() {
     let bf1 = load_classdb(&dir, "bf1", &["all", "imp", "rep", "cis"]).unwrap();
     assert!(!bf1.names().any(|n| bf1.engine_base(n) == Some("remote")
         && bf1.prop(n, "OrdnanceName").and_then(|o| bf1.engine_base(o)) == Some("flyer")));
-    assert!(matches!(
+    assert_eq!(
         class_slot_kind(
             &db,
             "all_hero_chewbacca",
             "all_weap_hero_rocket_launcher",
             1
         ),
-        SlotKind::NotBuilt(_)
-    ));
+        SlotKind::Guided
+    );
+    let hero = game::roster::weapon_from_db(&db, "all_weap_hero_rocket_launcher").unwrap();
+    assert!(!hero.guided.as_ref().unwrap().requires_award);
 }

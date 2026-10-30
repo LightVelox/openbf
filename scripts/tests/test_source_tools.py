@@ -80,6 +80,45 @@ def original_startup(f, verbs):
 
 
 class MissionTests(unittest.TestCase):
+    def test_hero_classes_are_literal_last_wins_team_assignments(self):
+        calls = [missions.Call('SetHeroClass', [1.0, 'all_hero_hansolo_tat']),
+                 missions.Call('SetHeroClass', [2.0, 'imp_hero_bobafett']),
+                 missions.Call('SetHeroClass', [1.0, 'all_hero_luke_jedi']),
+                 missions.Call('SetHeroClass', [missions.Unknown(), 'invalid'])]
+        self.assertEqual(missions.facts_from_calls(calls)['heroes'],
+                         {1: 'all_hero_luke_jedi', 2: 'imp_hero_bobafett'})
+
+    def test_side_class_load_order_keeps_all_requests_and_case(self):
+        calls = [missions.Call('SetHeroClass', [2.0, 'fielded_second']),
+                 missions.Call('ReadDataFile', [r'SIDE\REP.lvl', 'rep_HERO_aalya',
+                                               'unfielded_vehicle', 'rep_HERO_aalya']),
+                 missions.Call('ReadDataFile', [r'sound\rep.lvl;rep', 'not-a-class']),
+                 missions.Call('ReadDataFile', [r'side\cis.lvl', 'fielded_second',
+                                               'rep_HERO_aalya', 'ordinary_infantry']),
+                 missions.Call('ReadDataFile', [r'WORLD\map.lvl', 'not-a-side-class'])]
+        facts = missions.facts_from_calls(calls)
+        self.assertEqual(facts['class_load_order'],
+                         [('REP', 'rep_HERO_aalya'), ('REP', 'unfielded_vehicle'),
+                          ('REP', 'rep_HERO_aalya'), ('cis', 'fielded_second'),
+                          ('cis', 'rep_HERO_aalya'), ('cis', 'ordinary_infantry')])
+        self.assertEqual(facts['heroes'], {2: 'fielded_second'})
+
+    def test_side_class_load_order_reaches_only_bf2_ron(self):
+        calls = [missions.Call('ReadDataFile', [r'SIDE\rep.lvl', 'z_last',
+                                               'Unfielded', 'z_last', 'a_first'])]
+        with mock.patch.object(missions, 'PS2_ONLY', True), \
+                mock.patch.object(missions, 'load_ps2', return_value=missions.Proto()), \
+                mock.patch.object(missions, 'calls50', return_value=calls), \
+                mock.patch.object(missions, 'calls40', return_value=calls):
+            bf2 = missions.build('x', 'bf2', 'x', 'cw', 'x', 'x')
+            bf1 = missions.build('x', 'bf1', 'x', 'cw', 'x', 'x')
+        emitted = missions.ron(bf2)
+        self.assertIn('class_load_order: [(side: "rep", request: "z_last"), '
+                      '(side: "rep", request: "Unfielded"), '
+                      '(side: "rep", request: "z_last"), '
+                      '(side: "rep", request: "a_first")]', emitted)
+        self.assertNotIn('class_load_order:', missions.ron(bf1))
+
     def test_startup_walk_matches_original_and_expected_order(self):
         for verbs, wrapper in ((missions.ARC_VERBS, missions.arc_calls50),
                                (missions.BARRIER_VERBS, missions.barrier_calls50)):

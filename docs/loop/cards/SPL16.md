@@ -1,6 +1,6 @@
 ---
 id: SPL16
-title: Split the game crate's over-cap files: roster.rs 1924, fx.rs 1857, event_feed.rs 1849, animator.rs 1590, bolt_vis.rs 1512
+title: Split over-cap game modules: roster, fx, event_feed, animator and bolt_vis
 milestone: M0
 value: 2
 phase: cleanup

@@ -143,7 +143,7 @@ fn weapon_row(
 /// §2.1): a copy of the parent's, then the class's own PROPs in file
 /// order; `WEAPONSECTION n` moves the cursor for the unnumbered
 /// `WeaponName`, `WeaponName1..4` write slots 0..3.
-fn weapon_names<'a>(chain: &[&'a ClassDef]) -> Vec<&'a str> {
+pub(crate) fn weapon_names<'a>(chain: &[&'a ClassDef]) -> Vec<&'a str> {
     let h = mungefs::fnv1a_lowercase;
     let (h_sec, h_name) = (h("WEAPONSECTION"), h("WeaponName"));
     let numbered: Vec<u32> = (1..=4).map(|i| h(&format!("WeaponName{i}"))).collect();
@@ -680,6 +680,20 @@ fn tree_order(parents: &[Option<usize>]) -> Vec<usize> {
 /// Resolve every non-combo set of `reg` against `inv`: (family index,
 /// class index) -> its slots.
 pub fn build(inv: &Inventory, reg: &Registry) -> HashMap<(usize, usize), SetSlots> {
+    build_selected(inv, reg, false)
+}
+
+/// Include combo weapons' ordinary movement slots. Their named attacks are
+/// separate `comb` animations, not the fixed weapon-action table.
+pub fn build_with_combos(inv: &Inventory, reg: &Registry) -> HashMap<(usize, usize), SetSlots> {
+    build_selected(inv, reg, true)
+}
+
+fn build_selected(
+    inv: &Inventory,
+    reg: &Registry,
+    combos: bool,
+) -> HashMap<(usize, usize), SetSlots> {
     let mut m = Model {
         inv,
         reg,
@@ -693,7 +707,7 @@ pub fn build(inv: &Inventory, reg: &Registry) -> HashMap<(usize, usize), SetSlot
         let bs: Vec<usize> = order_b
             .iter()
             .copied()
-            .filter(|&b| reg.sets.contains(&(a, b)) && !reg.classes[b].combo)
+            .filter(|&b| reg.sets.contains(&(a, b)) && (combos || !reg.classes[b].combo))
             .collect();
         for &b in &bs {
             m.pass1(a, b);
@@ -704,7 +718,7 @@ pub fn build(inv: &Inventory, reg: &Registry) -> HashMap<(usize, usize), SetSlot
     }
     reg.sets
         .iter()
-        .filter(|&&(_, b)| !reg.classes[b].combo)
+        .filter(|&&(_, b)| combos || !reg.classes[b].combo)
         .map(|&k| {
             let slots = m.rec.remove(&k).map_or_else(
                 || vec![None; PAIRS * 2],

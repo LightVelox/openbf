@@ -206,6 +206,7 @@ fn seat_gun_contact_uses_seat_weapon() {
     w.sim.hover_params = vec![None];
     w.sim.seat_setup = vec![Some(SeatSetup {
         radius: 3.0,
+        body_active: vec![],
         boardable: vec![true],
         exit_drop: 10.0,
         ai_size: 1,

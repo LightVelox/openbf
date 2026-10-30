@@ -115,9 +115,11 @@ impl Sim {
                     .get(slot as usize)
                     .copied()
                     .flatten()
-                    .map(|t| match t {
-                        AimTarget::Unit(h) => MissileTarget::Unit(h),
-                        AimTarget::Vehicle(h) => MissileTarget::Vehicle(h),
+                    .and_then(|t| match t {
+                        AimTarget::Unit(h) => Some(MissileTarget::Unit(h)),
+                        AimTarget::Vehicle(h) => Some(MissileTarget::Vehicle(h)),
+                        // No launcher lock on an auto turret or a remote droid.
+                        AimTarget::Turret(_) | AimTarget::Droid(_) => None,
                     }),
                 _ => ai_target.and_then(|f| f.unit()).map(MissileTarget::Unit),
             };

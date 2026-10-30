@@ -30,6 +30,8 @@ pub use environment::{
 };
 
 pub mod anim_sets;
+pub mod cloth;
+pub mod combo;
 pub mod hud;
 pub mod shell;
 
@@ -220,7 +222,7 @@ pub struct ManifestHardpoint {
     /// Its model-space bind AXES (X, Y, Z), beside `pos` the bind matrix a
     /// rider hangs by (card VRIDE, `analysis/re-vehicle-riders.md` 3: the
     /// Jedi starfighter's `hp_active` is pitched 22 degrees). `None` for a
-    /// weapon's nodes and a bake from before the card, and then not written.
+    /// weapon's nodes from older bakes and a bake from before the card, and then not written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axes: Option<[[f32; 3]; 3]>,
 }
@@ -1154,6 +1156,34 @@ pub struct FxSet {
     pub effects: Vec<FxEffect>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beams: Vec<FxBeam>,
+    /// Top-level `LightningBolt` records. Missing keys remain absent: the
+    /// particle emitter defaults do not apply to this separate effect type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lightning: Vec<FxLightning>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FxLightning {
+    pub hash: u32,
+    pub name: String,
+    pub texture: Option<String>,
+    pub width: Option<f32>,
+    pub fade_time: Option<f32>,
+    pub break_distance: Option<f32>,
+    pub texture_size: Option<f32>,
+    pub spread_factor: Option<f32>,
+    pub max_branches: Option<f32>,
+    pub branch_factor: Option<f32>,
+    pub branch_spread_factor: Option<f32>,
+    pub branch_length: Option<f32>,
+    pub interpolation_speed: Option<f32>,
+    pub num_children: Option<f32>,
+    pub child_break_distance: Option<f32>,
+    pub child_texture_size: Option<f32>,
+    pub child_width: Option<f32>,
+    pub child_spread_factor: Option<f32>,
+    pub color: Option<[f32; 4]>,
+    pub child_color: Option<[f32; 4]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1320,6 +1350,14 @@ pub struct FxEmitter {
     pub world_aligned: bool,
     pub sibling: Option<Box<FxEmitter>>,
     pub sound_name: Option<String>,
+}
+
+/// Rigid droid pieces and the source soldiers' bind-pose launch nodes.
+/// Written by `bake droid-chunks` beside a side's weapons directory.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DroidChunkManifest {
+    pub collision: Vec<ManifestCollision>,
+    pub nodes: Vec<(String, Vec<ManifestHardpoint>)>,
 }
 
 #[cfg(test)]

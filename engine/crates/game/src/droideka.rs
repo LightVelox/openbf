@@ -153,21 +153,23 @@ pub fn camera_sections(db: &ClassDb, class: &str) -> Vec<(u32, core::unit::Camer
     out
 }
 
+/// The class's shield weapon: the slot whose class chain ends at `shield`.
+pub fn shield_weapon(db: &ClassDb, class: &str) -> Option<String> {
+    db.weapon_slots(class)
+        .into_iter()
+        .filter_map(|s| db.resolve(&s.weapon).map(str::to_owned))
+        .find(|w| {
+            db.engine_base(w)
+                .is_some_and(|b| b.eq_ignore_ascii_case("shield"))
+        })
+}
+
 pub fn droideka_class(
     native: &ClassDb,
     play: &ClassDb,
     class: &str,
 ) -> core::droideka::DroidekaClass {
-    let shield_of = |db: &ClassDb| {
-        db.weapon_slots(class)
-            .into_iter()
-            .filter_map(|s| db.resolve(&s.weapon).map(str::to_owned))
-            .find(|w| {
-                db.engine_base(w)
-                    .is_some_and(|b| b.eq_ignore_ascii_case("shield"))
-            })
-    };
-    let shield = shield_of(play);
+    let shield = shield_weapon(play, class);
     let src = crate::roster::ClassSrc { db: play, class };
     let shield_src = shield
         .as_deref()
@@ -178,7 +180,7 @@ pub fn droideka_class(
             .as_ref()
             .map(|s| s as &dyn core::weapon::PropSource),
     );
-    if let Some(w) = shield_of(native) {
+    if let Some(w) = shield_weapon(native, class) {
         let sounds = core::droideka::ShieldClass::from_props(&crate::roster::ClassSrc {
             db: native,
             class: &w,

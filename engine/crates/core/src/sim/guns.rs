@@ -18,7 +18,7 @@
 mod seat_switch;
 
 use super::input::{buttons, PadState};
-use super::state::{Event, Sim};
+use super::state::Sim;
 use crate::collision::{HullFilter, Layers};
 use crate::projectile::{Bolt, Shooter};
 use crate::unit::{Controller, UnitHandle};
@@ -463,12 +463,7 @@ impl Sim {
                         self.nav_stats.carry_shots += 1;
                     }
                 }
-                self.events.push(Event::Shot {
-                    unit: h,
-                    weapon_class: w.class as u32,
-                    origin,
-                    dir: d,
-                });
+                self.note_bolt_shot(&mut bolt, origin, d);
                 self.launch_round(bolt, false);
                 if self.weapon_classes[w.class].secondary.is_some() {
                     let round = st.weapons[k].count_secondary_round();

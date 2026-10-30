@@ -64,6 +64,10 @@ impl Sim {
             if b.advance(dt) {
                 done.push(i);
             }
+            if let Some(shot) = b.visual_shot.filter(|shot| shot.tick == self.tick) {
+                self.shot_flights
+                    .push(crate::projectile::ShotFlight { shot, end: b.end });
+            }
         }
         for &i in &done {
             let b = self.bolts[i].clone();

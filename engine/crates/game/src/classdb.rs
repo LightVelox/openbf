@@ -72,6 +72,8 @@ pub struct ClassDb {
     classes: HashMap<String, ClassDef>,
     /// A `bf2_*` class file was loaded: the db is a BF2 disc's.
     bf2: bool,
+    /// Asset root of the loaded class files, also used for companion hero data.
+    assets_root: Option<std::path::PathBuf>,
 }
 
 impl ClassDb {
@@ -82,6 +84,9 @@ impl ClassDb {
         let defs: Vec<ClassDef> =
             ron::from_str(&pak::read_to_string(path).with_context(|| path.display().to_string())?)
                 .context("parse classes.ron")?;
+        if self.assets_root.is_none() {
+            self.assets_root = path.parent().and_then(Path::parent).map(Path::to_path_buf);
+        }
         self.bf2 |= path
             .file_name()
             .and_then(|n| n.to_str())
@@ -94,6 +99,46 @@ impl ClassDb {
             }
         }
         Ok(added)
+    }
+
+    /// [ours] Use the baked BF1 SBD profile for SBDs and generated Magnaguard
+    /// pieces on every map. Match the resolved geometry, including subclasses.
+    pub(crate) fn load_droid_chunks(&mut self, path: &Path) -> Result<()> {
+        if !pak::is_file(path) {
+            return Ok(());
+        }
+        let profiles: Vec<ClassDef> =
+            ron::from_str(&pak::read_to_string(path)?).context("parse droid chunk profiles")?;
+        let mut patches = Vec::new();
+        for name in self.names() {
+            let Some(geometry) = self.prop(name, "GeometryName") else {
+                continue;
+            };
+            if !self
+                .chain(name)
+                .iter()
+                .any(|d| d.base.eq_ignore_ascii_case("soldier"))
+            {
+                continue;
+            }
+            if let Some(p) = profiles
+                .iter()
+                .find(|p| p.kind == "chunk_profile" && p.name.eq_ignore_ascii_case(geometry))
+            {
+                patches.push((name.to_owned(), p.props.clone()));
+            }
+        }
+        for (name, props) in patches {
+            let d = self.classes.get_mut(&name).expect("existing class");
+            let keys: Vec<_> = props.iter().map(|p| p.0).collect();
+            d.props.retain(|p| !keys.contains(&p.0));
+            // Keep chunk sections last, after all ordinary class properties.
+            d.props.extend(props);
+        }
+        for p in profiles.into_iter().filter(|p| p.kind != "chunk_profile") {
+            self.classes.entry(p.name.clone()).or_insert(p);
+        }
+        Ok(())
     }
 
     /// Load a map's own classes (`<map_dir>/classes.ron`) — the map-local
@@ -134,6 +179,16 @@ impl ClassDb {
 
     pub fn is_bf2(&self) -> bool {
         self.bf2
+    }
+
+    pub fn assets_root(&self) -> Option<&Path> {
+        self.assets_root.as_deref()
+    }
+
+    /// Set the companion model/animation root when class RONs are loaded from
+    /// a separate directory. This explicit root survives later class loads.
+    pub fn set_assets_root(&mut self, root: &Path) {
+        self.assets_root = Some(root.to_path_buf());
     }
 
     /// Every class name the db holds, in no particular order.
@@ -536,5 +591,87 @@ mod tests {
         );
         assert_eq!(db.drop_table("inf_default"), base);
         assert!(db.drop_table("nobody").is_empty());
+    }
+
+    #[test]
+    fn profiles_follow_inherited_soldier_geometry_and_keep_other_classes_unchanged() {
+        let def = |name: &str, base: &str, kind: &str, props: &[(&str, &str)]| ClassDef {
+            name: name.into(),
+            base: base.into(),
+            kind: kind.into(),
+            props: props
+                .iter()
+                .map(|(k, v)| (fnv1a_lowercase(k), (*v).into()))
+                .collect(),
+        };
+        let mut db = ClassDb::default();
+        for d in [
+            def(
+                "parent",
+                "soldier",
+                "entc",
+                &[
+                    ("GeometryName", "cis_inf_sbdroid"),
+                    ("ChunkGeometryName", "bdroid_chunk1"),
+                ],
+            ),
+            def("child", "parent", "entc", &[]),
+            def(
+                "bdroid",
+                "soldier",
+                "entc",
+                &[
+                    ("GeometryName", "cis_inf_bdroid"),
+                    ("ChunkGeometryName", "bdroid_chunk1"),
+                ],
+            ),
+            def(
+                "weapon",
+                "blaster",
+                "wpnc",
+                &[("GeometryName", "cis_inf_sbdroid")],
+            ),
+        ] {
+            db.classes.insert(d.name.clone(), d);
+        }
+        let control = db.get("bdroid").unwrap().props.clone();
+        let dir =
+            std::env::temp_dir().join(format!("openbf_chunk_profiles_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("profiles.ron");
+        let profile = def(
+            "cis_inf_sbdroid",
+            "",
+            "chunk_profile",
+            &[
+                ("ChunkFrequency", "0.6"),
+                ("CHUNKSECTION", "CHUNK1"),
+                ("ChunkGeometryName", "sbdroid_chunk1"),
+            ],
+        );
+        std::fs::write(&path, ron::to_string(&vec![profile]).unwrap()).unwrap();
+        for _ in 0..2 {
+            db.load_droid_chunks(&path).unwrap();
+        }
+        for name in ["parent", "child"] {
+            assert_eq!(db.prop(name, "ChunkGeometryName"), Some("sbdroid_chunk1"));
+            assert_eq!(db.prop_f32(name, "ChunkFrequency"), Some(0.6));
+            assert_eq!(
+                db.get(name)
+                    .unwrap()
+                    .props
+                    .iter()
+                    .filter(|(k, _)| *k == fnv1a_lowercase("CHUNKSECTION"))
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(db.get("bdroid").unwrap().props, control);
+        assert_eq!(db.prop("weapon", "ChunkGeometryName"), None);
+        assert!(
+            db.get("cis_inf_sbdroid").is_none(),
+            "profiles are not fieldable classes"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

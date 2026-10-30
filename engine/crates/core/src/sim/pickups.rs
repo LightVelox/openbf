@@ -18,8 +18,7 @@
 //! PS2 waits out a thrown or tumbling body, §3.3); the item lands by a floor
 //! ray, with no wall contact; the touch is tested every tick for every unit
 //! (the PS2 needs one of the two to move, §5.7); a weapon's reserve cap is
-//! the reserve it spawned with. Heroes (no health, a wasted buff, §5.3, §5.5)
-//! and the dispenser weapon's skip (§5.4) wait for those units to exist.
+//! the reserve it spawned with. The dispenser weapon's skip (§5.4) is not built.
 
 use super::state::{DeathCause, Event, Sim};
 use crate::fmath;
@@ -363,7 +362,9 @@ impl Sim {
         if !matches!(u.health.health_type, HealthType::Person | HealthType::Droid) {
             return false;
         }
-        if c.health > 0.0 && u.health.cur < u.health.max {
+        let hero =
+            self.ground_rules == GroundRules::Bf2 && self.hero_class(u.team) == Some(u.spec.class);
+        if !hero && c.health > 0.0 && u.health.cur < u.health.max {
             return true;
         }
         let lacks = |slot, class: usize, state: &WeaponState| {
@@ -474,9 +475,11 @@ impl Sim {
             {
                 continue;
             }
+            let hero = self.ground_rules == GroundRules::Bf2
+                && self.hero_class(u.team) == Some(u.spec.class);
             let classes = &self.weapon_classes;
             let u = &mut self.units[ui];
-            let health = c.health != 0.0 && u.health.cur < u.health.max;
+            let health = !hero && c.health != 0.0 && u.health.cur < u.health.max;
             if health {
                 u.health.cur = (u.health.cur + c.health).min(u.health.max);
             }
@@ -488,7 +491,9 @@ impl Sim {
             // A buff item is always taken (§5.5); the timer and its number
             // are replaced only by a longer timer.
             let buff = c.offense.0 > 0.0 || c.defense.0 > 0.0;
-            u.buffs.apply_multipliers(c.offense, c.defense);
+            if !hero {
+                u.buffs.apply_multipliers(c.offense, c.defense);
+            }
             if health || ammo || energy || buff {
                 let unit = UnitHandle {
                     index: ui as u32,

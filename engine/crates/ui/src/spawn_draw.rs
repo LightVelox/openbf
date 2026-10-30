@@ -180,9 +180,9 @@ pub enum SpawnPage {
     },
     /// The class panel: the class's name, its lines (blank ones keep
     /// their pitch) and the help lines "Back" and "Select Character";
-    /// the team, its picked class and its class count stand the 3-D
+    /// the team, picked visible row and raw class IDs stand the 3-D
     /// line-up (`game::spawn_preview`); `refused` has bit `j` set for each
-    /// class `j` the game refuses (drawn black there).
+    /// visible row `j` the game refuses (drawn black there).
     Class {
         title: String,
         lines: Vec<String>,
@@ -190,7 +190,7 @@ pub enum SpawnPage {
         accept: String,
         team: u8,
         class: usize,
-        classes: usize,
+        classes: Vec<u8>,
         refused: u32,
     },
 }
@@ -717,7 +717,7 @@ mod tests {
             accept: "Select Character".into(),
             team: 0,
             class: 0,
-            classes: 1,
+            classes: vec![0],
             refused: 0,
         };
         let size = [2520.0, 1080.0];

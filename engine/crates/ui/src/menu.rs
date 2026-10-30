@@ -14,7 +14,14 @@ pub struct MenuModel {
     /// Cheat registry rows: (id, label, enabled).
     pub cheats: Vec<(&'static str, &'static str, bool)>,
     pub assist_intensity: f32,
-    pub ai_alive_cap: u32,
+    /// Team size percentage (the historical action name is SetAiCap).
+    pub team_size_pct: u32,
+    pub reinforcements_pct: u32,
+    /// The Team size / Reinforcements help (all-map averages), in that order.
+    pub population_note: [String; 2],
+    /// A battle without map team sizes (not a conquest from a mission): the
+    /// Team size row would do nothing there, so it is not shown.
+    pub team_size_off: bool,
     /// The FOV option (a multiplier on the PS2 camera's angle) and the
     /// vertical FOV it gives, in degrees, for the label.
     pub fov_scale: f32,
@@ -43,7 +50,9 @@ pub enum MenuAction {
     Respawn,
     ToggleCheat(usize),
     SetAssist(f32),
+    /// Map-relative team size percentage, 10..=[`crate::population::MAX_TEAM_PCT`].
     SetAiCap(u32),
+    SetReinforcements(u32),
     SetFov(f32),
     SetMusic(f32),
     SetMouseSensitivity(f32),
@@ -130,6 +139,7 @@ pub enum Row {
     Cheat(usize),
     Assist,
     AiCap,
+    Reinforcements,
     Fov,
     Music,
     MouseSensitivity,
@@ -144,7 +154,10 @@ pub fn rows(m: &MenuModel) -> Vec<Row> {
     let mut v = vec![Row::Resume];
     v.extend((0..m.cheats.len()).map(Row::Cheat));
     v.push(Row::Assist);
-    v.push(Row::AiCap);
+    if !m.team_size_off || m.in_shell.is_some() {
+        v.push(Row::AiCap);
+    }
+    v.push(Row::Reinforcements);
     v.push(Row::Fov);
     v.push(Row::Music);
     v.push(Row::MouseSensitivity);
@@ -156,6 +169,31 @@ pub fn rows(m: &MenuModel) -> Vec<Row> {
         v.push(Row::Quit);
     }
     v
+}
+
+/// The Team size / Reinforcements rows as drawn: label and value, nothing
+/// after the percentage.
+pub fn population_row(m: &MenuModel, row: Row) -> Option<(&'static str, String)> {
+    match row {
+        Row::AiCap => Some(("Team size  ◀ ▶", format!("{}%", m.team_size_pct))),
+        Row::Reinforcements => Some(("Reinforcements  ◀ ▶", format!("{}%", m.reinforcements_pct))),
+        _ => None,
+    }
+}
+
+/// The help under the rows for the focused row: Team size and
+/// Reinforcements say what an average match looks like at their values. In a
+/// battle a Reinforcements change applies from the next round.
+pub fn row_help(m: &MenuModel, row: Row) -> Option<String> {
+    match row {
+        Row::AiCap => Some(m.population_note[0].clone()),
+        Row::Reinforcements if m.in_shell.is_none() => Some(format!(
+            "{}\nChanges apply from the next round.",
+            m.population_note[1]
+        )),
+        Row::Reinforcements => Some(m.population_note[1].clone()),
+        _ => None,
+    }
 }
 
 /// Apply controller input to the cursor/values; returns actions to perform
@@ -195,12 +233,22 @@ pub fn navigate(m: &MenuModel, input: MenuInput) -> (usize, Vec<MenuAction>) {
             ));
         }
         Row::AiCap if input.left || input.right => {
-            let cap = if input.right {
-                m.ai_alive_cap.saturating_add(2).min(64)
+            let pct = if input.right {
+                m.team_size_pct
+                    .saturating_add(10)
+                    .min(crate::population::MAX_TEAM_PCT)
             } else {
-                m.ai_alive_cap.saturating_sub(2).max(2)
+                m.team_size_pct.saturating_sub(10).max(10)
             };
-            actions.push(MenuAction::SetAiCap(cap));
+            actions.push(MenuAction::SetAiCap(pct));
+        }
+        Row::Reinforcements if input.left || input.right => {
+            let pct = if input.right {
+                m.reinforcements_pct.saturating_add(10).min(500)
+            } else {
+                m.reinforcements_pct.saturating_sub(10).max(10)
+            };
+            actions.push(MenuAction::SetReinforcements(pct));
         }
         Row::Fov if input.left || input.right => {
             let d = if input.right { 0.05 } else { -0.05 };
@@ -333,12 +381,10 @@ pub fn draw_menu(ctx: &egui::Context, m: &MenuModel) -> Vec<MenuAction> {
                                 "Aim assist intensity  ◀ ▶".into(),
                                 Some(format!("{:.1}", m.assist_intensity)),
                             ),
-                            Row::AiCap => row_label(
-                                ui,
-                                sel,
-                                "Alive AI per team  ◀ ▶".into(),
-                                Some(format!("{}", m.ai_alive_cap)),
-                            ),
+                            Row::AiCap | Row::Reinforcements => {
+                                let (label, value) = population_row(m, *row).unwrap();
+                                row_label(ui, sel, label.into(), Some(value))
+                            }
                             Row::Fov => row_label(
                                 ui,
                                 sel,
@@ -382,6 +428,17 @@ pub fn draw_menu(ctx: &egui::Context, m: &MenuModel) -> Vec<MenuAction> {
                                 _ => {}
                             }
                         }
+                    }
+                    // Room is kept for the help so the centered menu does not
+                    // jump as the cursor reaches those rows.
+                    if rows.contains(&Row::Reinforcements) {
+                        ui.add_space(6.0);
+                        ui.scope(|ui| {
+                            ui.set_min_height(60.0);
+                            if let Some(help) = rows.get(m.cursor).and_then(|r| row_help(m, *r)) {
+                                ui.label(RichText::new(help).size(15.0).color(Color32::LIGHT_GRAY));
+                            }
+                        });
                     }
                     ui.add_space(8.0);
                     ui.label(
@@ -561,7 +618,10 @@ mod tests {
                 ("ammo", "Infinite ammo", true),
             ],
             assist_intensity: 1.0,
-            ai_alive_cap: 16,
+            team_size_pct: 100,
+            reinforcements_pct: 100,
+            population_note: Default::default(),
+            team_size_off: false,
             fov_scale: 1.0,
             fov_deg: 37.7,
             music_volume: 1.0,
@@ -573,6 +633,35 @@ mod tests {
             outcome_line: None,
             in_shell: None,
         }
+    }
+
+    #[test]
+    fn team_size_row_only_where_it_acts_and_rows_explain_averages() {
+        let mut m = model();
+        m.population_note = ["A\nL".into(), "R\nL".into()];
+        m.reinforcements_pct = 150;
+        assert!(rows(&m).contains(&Row::AiCap));
+        assert_eq!(row_help(&m, Row::AiCap).as_deref(), Some("A\nL"));
+        assert_eq!(
+            row_help(&m, Row::Reinforcements).as_deref(),
+            Some("R\nL\nChanges apply from the next round.")
+        );
+        assert_eq!(row_help(&m, Row::Fov), None);
+        assert_eq!(
+            population_row(&m, Row::AiCap),
+            Some(("Team size  ◀ ▶", "100%".into()))
+        );
+        assert_eq!(
+            population_row(&m, Row::Reinforcements),
+            Some(("Reinforcements  ◀ ▶", "150%".into()))
+        );
+        m.team_size_off = true;
+        assert!(!rows(&m).contains(&Row::AiCap));
+        assert!(rows(&m).contains(&Row::Reinforcements));
+        // The shell's settings page sets the next battles: both rows.
+        m.in_shell = Some("Game Options".into());
+        assert!(rows(&m).contains(&Row::AiCap));
+        assert_eq!(row_help(&m, Row::Reinforcements).as_deref(), Some("R\nL"));
     }
 
     #[test]
@@ -723,7 +812,7 @@ mod tests {
         );
         assert_eq!(a, vec![MenuAction::SetAssist(1.1)]);
         m.cursor = 4; // AiCap
-        m.ai_alive_cap = 2;
+        m.team_size_pct = 10;
         let (_, a) = navigate(
             &m,
             MenuInput {
@@ -731,9 +820,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(a, vec![MenuAction::SetAiCap(2)]);
-        m.cursor = 5; // Fov
-        assert_eq!(rows(&m)[5], Row::Fov);
+        assert_eq!(a, vec![MenuAction::SetAiCap(10)]);
+        m.cursor = 6; // Fov
+        assert_eq!(rows(&m)[6], Row::Fov);
         let (_, a) = navigate(
             &m,
             MenuInput {
@@ -743,8 +832,8 @@ mod tests {
         );
         assert_eq!(a, vec![MenuAction::SetFov(1.05)]);
         // The music volume: tenths, held in 0..1.
-        m.cursor = 6;
-        assert_eq!(rows(&m)[6], Row::Music);
+        m.cursor = 7;
+        assert_eq!(rows(&m)[7], Row::Music);
         let step = |m: &MenuModel, right: bool| {
             let input = MenuInput {
                 left: !right,

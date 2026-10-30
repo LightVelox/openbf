@@ -27,6 +27,11 @@ impl Sim {
             .find(|t| t.owner == h && t.weapon_class == weapon)
     }
 
+    /// The standing auto-turret `id`, as a target.
+    pub fn live_turret(&self, id: u64) -> Option<&Turret> {
+        self.turrets.iter().find(|t| t.id == id && t.alive())
+    }
+
     pub fn turret_class(&self, t: &Turret) -> Option<&TurretClass> {
         self.weapon_classes[t.weapon_class]
             .turret

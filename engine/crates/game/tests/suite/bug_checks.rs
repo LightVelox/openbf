@@ -155,6 +155,8 @@ fn hud_model(dead: bool) -> ui::hud::HudModel {
         bleed: [0.0; 2],
         hp: if dead { 0.0 } else { 100.0 },
         hp_max: 100.0,
+        hero: false,
+        hero_offer: None,
         energy: 100.0,
         energy_max: 100.0,
         weapon: None,

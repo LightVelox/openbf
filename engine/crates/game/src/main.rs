@@ -97,6 +97,19 @@
 //!   OPENBF_SPEC_MIRROR=0          the consistent specular light instead of
 //!                                 the disc's mirrored one (default on)
 //!   OPENBF_TERRAIN_LIGHTS=0       no BF2 terrain light pass (default on)
+//!   OPENBF_CAMERA_CHUNKS=0        diagnostic: test the chase camera against
+//!                                 every triangle of a blocker, no batch bounds
+//!                                 (default on; same contacts, slower)
+//!   OPENBF_BENCH_DETAIL=<out.json>  with --bench: raw per-tick CPU and
+//!                                 per-frame rows to that file instead of the
+//!                                 summary (--bench-frames 0 = sim only)
+//!   OPENBF_BENCH_TOTAL_PER_SIDE=<any>  with OPENBF_BENCH_DETAIL: --ai <n>
+//!                                 counts the human, n soldiers a side in all
+//!   OPENBF_BENCH_FOREST_EYE=<any>  with OPENBF_BENCH_DETAIL: look at the
+//!                                 first falling-leaf emitter, not the overview
+//!   OPENBF_TERRAIN_LIGHT_GROUPS=0  with OPENBF_BENCH_DETAIL, diagnostic: the
+//!                                 terrain light pass searches every rectangle,
+//!                                 no group bounds (same pixels, slower)
 //!   OPENBF_PROFILE=<file>         the profile file (default
 //!                                 openbf_data/profile.ron beside the game)
 //!   OPENBF_ADAPTER=igpu|dgpu|<name>  the GPU (default: high performance)
@@ -153,6 +166,7 @@ use headless::{run_bench, run_headless};
 use std::path::PathBuf;
 use windowed::{run_shell, run_windowed};
 
+#[derive(Clone)]
 struct ViewerArgs {
     map: PathBuf,
     headless: bool,
@@ -483,17 +497,17 @@ struct BattleSetup {
     spawn_set: bool,
     targets: bool,
     ai: Option<u32>,
-    /// `--ai-cap`: overrides `MissionDef.ai_alive_cap`. Without it the cap is
-    /// mission data only, so nothing headless could run above the PS2's unit
-    /// count — which is exactly the workload the optimisation backlog needs
-    /// to measure (PLAN Optimisation backlog, blocker on M1/M2).
+    /// Explicit CLI alive-AI limit for stress runs. Interactive battles use
+    /// the map-relative combatant percentage; other CLI launches use the mission.
     ai_cap: Option<u32>,
+    team_size_pct: Option<u32>,
     tickets: u32,
     /// Explicit --tickets wins over the mission's (and ignores
     /// `ticket_pct`).
     tickets_set: bool,
     /// The shell's reinforcement % (`con_mult`, 10..500, default 100):
-    /// scales each team's mission count, or `tickets` without a mission
+    /// scales each team's calibrated map count (mission count on the legacy CLI),
+    /// or `tickets` without a mission
     /// (queue TLO, `core::sim::scale_reinforcements`).
     ticket_pct: u32,
     /// The conquest time limit in minutes; 0 = Off (queue TLO).
@@ -507,6 +521,9 @@ struct BattleSetup {
     /// The sim team the player's army sits on: 1 when the shell picked a
     /// mission's own pair the other way round (`game::mission::pick`).
     player_team: u8,
+    /// The session's hero rules (`game::heroes::rules`); `None` = Heroes
+    /// Off, no hero installed. The CLI takes the retail defaults.
+    heroes: Option<core::sim::heroes::HeroRules>,
 }
 
 /// A path's last component as text.
@@ -538,6 +555,7 @@ impl BattleSetup {
             targets: v.targets,
             ai: v.ai,
             ai_cap: v.ai_cap,
+            team_size_pct: None,
             tickets: v.tickets,
             tickets_set: v.tickets_set,
             ticket_pct: 100,
@@ -551,6 +569,7 @@ impl BattleSetup {
             mission,
             mission_file: v.mission.as_deref().and_then(file_name),
             player_team: u8::from(own_seat),
+            heroes: Some(core::sim::heroes::HeroRules::default()),
             classes_dir: v.classes.clone().unwrap_or_else(|| {
                 v.map
                     .parent()

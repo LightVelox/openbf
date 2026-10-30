@@ -110,6 +110,9 @@ pub struct ClassRoster {
     /// The ODF's `PointsToUnlock` (0 = none; `UnitClass::unlock_points`).
     pub unlock_points: u32,
     pub droideka: Option<std::sync::Arc<core::droideka::DroidekaClass>>,
+    /// A droideka's shield in the HUD's secondary row: its `HUDTag`, from the
+    /// play db, so both games show BF2's `hud_droideka_shield`.
+    pub droideka_shield: Option<crate::walk::WeaponHud>,
 }
 
 /// One slot of a class's drop table: the item (`None` when the slot names a
@@ -244,6 +247,7 @@ pub fn load_classdb(classes_dir: &Path, game: &str, factions: &[&str]) -> Result
             classes_dir.display()
         ));
     }
+    db.load_droid_chunks(&classes_dir.join("droid_chunks.ron"))?;
     // A BF1 side whose class takes a BF2 class's weapons loads BF2's side too.
     let mut donors: Vec<&str> = WEAPON_DONORS
         .iter()
@@ -416,36 +420,57 @@ fn primary_slot(slots: &[WeaponSlot]) -> Option<&WeaponSlot> {
 /// battle droid. BF1 has no error vector and no rows.
 pub const AIM_SIZE: &[(&str, f32)] = &[
     ("all_inf_bothanspy", 0.955),
+    ("all_inf_chewbacca", 0.9166),
+    ("all_inf_deathstarleia", 0.8667),
     ("all_inf_engineer", 0.9707),
+    ("all_inf_hothlukeskywalker", 0.9476),
+    ("all_inf_luke", 0.9242),
     ("all_inf_marksperson", 0.6305),
     ("all_inf_markspersonsnow", 0.6416),
     ("all_inf_snowtrooper", 0.9705),
     ("all_inf_soldier", 0.6918),
+    ("all_inf_stormtrooperhansolo", 0.9521),
+    ("all_inf_stormtrooperlukeskywalker", 0.9521),
     ("all_inf_tantive4trooper", 0.676),
+    ("all_inf_tatooinehansolo", 0.9261),
     ("all_inf_vanguard", 0.6651),
     ("all_inf_wookie", 1.021),
     ("cis_inf_bdroid", 0.9252),
+    ("cis_inf_countdooku", 0.9474),
+    ("cis_inf_darthmaul", 0.9478),
+    ("cis_inf_generalgrevious", 0.9813),
+    ("cis_inf_jangofett", 0.9586),
     ("cis_inf_magnaguard", 0.9793),
     ("cis_inf_sbdroid", 0.4805),
     ("imp_inf_atatcommander", 0.7025),
     ("imp_inf_atatpilot", 0.6697),
+    ("imp_inf_bobafett", 0.9586),
     ("imp_inf_darktrooper", 0.9897),
+    ("imp_inf_darthsidious", 0.9542),
+    ("imp_inf_darthvader", 0.7986),
     ("imp_inf_gunner", 0.6825),
     ("imp_inf_scout", 0.961),
     ("imp_inf_shocktrooper", 0.9899),
     ("imp_inf_snowtrooper", 0.9702),
     ("imp_inf_stormtrooper", 0.954),
+    ("rep_inf_aaylasecura", 0.9991),
     ("rep_inf_arctrooper", 0.9514),
     ("rep_inf_clonecommander", 0.9538),
+    ("rep_inf_ep3anakin", 0.9426),
     ("rep_inf_ep3armoredpilot", 0.9519),
+    ("rep_inf_ep3cloakedanakin", 0.9426),
     ("rep_inf_ep3heavytrooper", 0.9536),
     ("rep_inf_ep3jettrooper", 0.9669),
+    ("rep_inf_ep3obiwan", 0.9426),
     ("rep_inf_ep3sniper", 0.9565),
     ("rep_inf_ep3trooper", 0.9548),
     ("rep_inf_feluciatrooper", 0.9633),
     ("rep_inf_jettrooper", 0.9673),
+    ("rep_inf_kiadimundi", 0.9321),
+    ("rep_inf_macewindu", 0.9426),
     ("rep_inf_pilot", 0.9507),
     ("rep_inf_trooper", 0.952),
+    ("rep_inf_yoda", 0.5641),
 ];
 
 /// A class's sound key (`HurtSound`, `DeathSound`: card UCRY) through its
@@ -521,6 +546,7 @@ pub fn engine_block(db: &ClassDb, class: &str) -> JetLook {
 /// and its `LowHealthThreshold`.
 pub fn cries(db: &ClassDb, class: &str) -> crate::walk::Cries {
     crate::walk::Cries {
+        hero: crate::heroes::HeroAudio::from_db(db, class),
         hurt: sound_key(db, class, "HurtSound"),
         death: sound_key(db, class, "DeathSound"),
         acquired: sound_key(db, class, "AcquiredTargetSound"),
@@ -637,6 +663,7 @@ pub fn class_anim(
         family,
         root_scale,
         banks,
+        custom: Default::default(),
     }
 }
 
@@ -862,6 +889,31 @@ fn secondary_ordnance(db: &ClassDb, src: &ListSrc<'_>) -> Option<Secondary> {
 /// `NextCharge`), from its replayed keys `props` (base first, file order).
 fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<WeaponClass> {
     let wsrc = ListSrc { props };
+    if db.is_bf2() && db.engine_base(weapon) == Some("melee") {
+        let mut w = WeaponClass::from_props(weapon, &wsrc, OrdnanceClass::from_props(&wsrc));
+        // Native base ctor0x327e98 sets TriggerSingle; melee keeps it.
+        // Ordinary weapon defaults remain on their existing paths.
+        w.trigger_single = wsrc
+            .prop("TriggerSingle")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .is_none_or(|v| v != 0.0);
+        w.ordnance.explosion = wsrc
+            .prop("ExplosionName")
+            .and_then(|n| explosion_class(db, n.trim()));
+        w.rounds_per_clip = 0;
+        w.flash = None;
+        return Ok(w);
+    }
+    if db.is_bf2() && db.engine_base(weapon) == Some("areaeffectweapon") {
+        let mut w = WeaponClass::from_props(weapon, &wsrc, OrdnanceClass::default());
+        w.force = Some(
+            core::hero_weapon::ForcePower::choke(&wsrc)
+                .with_context(|| format!("{weapon}: unsupported area effect"))?,
+        );
+        w.rounds_per_clip = 0;
+        w.flash = None;
+        return Ok(w);
+    }
     if db.engine_base(weapon) == Some("remote") {
         return remotes::remote_weapon(db, weapon, &wsrc);
     }
@@ -935,11 +987,38 @@ fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<Wea
             db.is_bf2(),
         ));
     }
+    if db.is_bf2() && db.engine_base(weapon) == Some("meleethrow") {
+        w.saber_throw = Some(
+            core::hero_weapon::SaberThrow::from_props(
+                &wsrc,
+                &ClassSrc {
+                    db,
+                    class: &ord_name,
+                },
+            )
+            .with_context(|| format!("{weapon}: incomplete saber throw data"))?,
+        );
+        w.rounds_per_clip = 0;
+        w.flash = None;
+    }
     if db.is_bf2() && db.engine_base(&ord_name) == Some("emitterordnance") {
         w.ability = core::weapon::Ability::from_props(&ClassSrc {
             db,
             class: &ord_name,
         });
+        if wsrc
+            .prop("EnergyDrain")
+            .and_then(|v| v.parse::<f32>().ok())
+            .is_some_and(|energy| energy > 0.0)
+        {
+            w.force = core::hero_weapon::ForcePower::emitter(
+                &wsrc,
+                &ClassSrc {
+                    db,
+                    class: &ord_name,
+                },
+            );
+        }
     }
     // The dwell lock (card UORD §5): the PS2 parses `LockTime` in the
     // launcher setter alone, so a cannon that authors it (the wrist rockets)
@@ -1093,6 +1172,9 @@ pub enum SlotKind {
     Cloak,
     Guided,
     Remote,
+    Melee,
+    Force,
+    SaberThrow,
     /// Fired by the soldier's weapon: a `cannon` or `launcher`, whatever its
     /// channel, and the mortar launchers (a `grenade` weapon on channel 0):
     /// each charge stage's round flies as its ordnance does, a `sticky` one
@@ -1137,11 +1219,27 @@ pub fn slot_kind(db: &ClassDb, weapon: &str, channel: u8) -> SlotKind {
             });
             if db.is_bf2() && ability.is_some() {
                 SlotKind::Ability
+            } else if db.is_bf2()
+                && db.prop(weapon, "OrdnanceName").is_some_and(|name| {
+                    core::hero_weapon::ForcePower::emitter(
+                        &ClassSrc { db, class: weapon },
+                        &ClassSrc {
+                            db,
+                            class: name.trim(),
+                        },
+                    )
+                    .is_some()
+                })
+            {
+                SlotKind::Force
             } else {
                 SlotKind::NotBuilt("officer and hero abilities (issue #47)")
             }
         }
         ("invisibility", _) => SlotKind::Cloak,
+        ("melee", _) if db.is_bf2() => SlotKind::Melee,
+        ("meleethrow", _) if db.is_bf2() => SlotKind::SaberThrow,
+        ("areaeffectweapon", _) if db.is_bf2() => SlotKind::Force,
         ("melee" | "meleethrow" | "areaeffectweapon", _) => {
             SlotKind::NotBuilt("sabres and force powers (the hero work)")
         }
@@ -1152,10 +1250,7 @@ pub fn slot_kind(db: &ClassDb, weapon: &str, channel: u8) -> SlotKind {
 
 pub fn class_slot_kind(db: &ClassDb, soldier: &str, weapon: &str, channel: u8) -> SlotKind {
     match slot_kind(db, weapon, channel) {
-        SlotKind::Guided if soldier.contains("_hero_") => {
-            SlotKind::NotBuilt("hero equipment (the hero work)")
-        }
-        SlotKind::Ability if !soldier.contains("officer") => {
+        SlotKind::Ability if !soldier.contains("officer") && !soldier.contains("_hero_") => {
             SlotKind::NotBuilt("hero abilities (the hero work)")
         }
         kind => kind,
@@ -1176,7 +1271,10 @@ pub fn held_slots(db: &ClassDb, soldier: &str, primary: u8) -> Vec<HeldSlot> {
                 | SlotKind::Ability
                 | SlotKind::Cloak
                 | SlotKind::Guided
-                | SlotKind::Remote => weapon_from_db(db, &name).ok()?,
+                | SlotKind::Remote
+                | SlotKind::Melee
+                | SlotKind::Force
+                | SlotKind::SaberThrow => weapon_from_db(db, &name).ok()?,
                 SlotKind::NotBuilt(_) => return None,
             };
             Some(HeldSlot {
@@ -1304,17 +1402,22 @@ fn impact_explosion<'a>(db: &'a ClassDb, ordnance: &str) -> Option<&'a str> {
 pub const PUSH_SPARES_THE_LIVING: &[&str] =
     &["com_weap_inf_bulldog_exp", "com_weap_inf_incinerator_exp"];
 
+/// [ours] The chance a droid bursts into chunks when it dies, for every class
+/// with a chunk death (maintainer 2026-10-30: "65% body fall, 35% chunks").
+/// Both discs author `ChunkFrequency` 0.6 on every chunked droid.
+pub const DROID_CHUNK_CHANCE: f32 = 0.35;
+
 /// A soldier class's chunk death (card DROIDDEATH, `analysis/re-droid-death.md`
 /// §1-§2): only a class with chunk geometry (`ChunkGeometryName` in its
-/// chain: the CIS soldier droids of both discs) has one, with its
-/// `ChunkFrequency` (BF2's ctor default -1.0 when unset: only a mark bursts
-/// it) and its `ExplosionName` class.
+/// chain: the CIS soldier droids of both discs) has one, with
+/// [`DROID_CHUNK_CHANCE`] in place of its `ChunkFrequency` and its
+/// `ExplosionName` class.
 pub fn chunk_death(db: &ClassDb, class: &str) -> Option<core::unit::ChunkDeath> {
     db.prop(class, "ChunkGeometryName")
         .map(str::trim)
         .filter(|g| !g.is_empty())?;
     Some(core::unit::ChunkDeath {
-        frequency: db.prop_f32(class, "ChunkFrequency").unwrap_or(-1.0),
+        frequency: DROID_CHUNK_CHANCE,
         explosion: db
             .prop(class, "ExplosionName")
             .map(str::trim)
@@ -1718,7 +1821,40 @@ impl ClassRoster {
             primary.slot,
         );
         let mut weapon = weapon_from_db(weapon_db, &weapon_name)?;
+        if db.is_bf2() && weapon_db.engine_base(&weapon_name) == Some("melee") {
+            weapon.saber = Some(Box::new(crate::hero_blades::saber_class(
+                weapon_db,
+                class,
+                &weapon_name,
+            )?));
+        }
         let mut held = held_slots(weapon_db, weapon_owner, weapon_slot);
+        if db.is_bf2() && class.contains("_hero_") {
+            for selected in
+                std::iter::once(&mut weapon).chain(held.iter_mut().map(|s| &mut s.weapon))
+            {
+                if selected.force.is_none() {
+                    if let Some(ord) = weapon_db.prop(&selected.name, "OrdnanceName") {
+                        if weapon_db.engine_base(ord) == Some("emitterordnance") {
+                            selected.force = core::hero_weapon::ForcePower::emitter(
+                                &ClassSrc {
+                                    db: weapon_db,
+                                    class: &selected.name,
+                                },
+                                &ClassSrc {
+                                    db: weapon_db,
+                                    class: ord,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if held.iter().any(|slot| slot.weapon.saber_throw.is_some()) {
+            anyhow::ensure!(weapon.saber.as_ref().is_some_and(|s| !s.throw_edges.is_empty()),
+                "{class}: saber throw requires the authored primary weapon attachment and blade templates");
+        }
         if donated {
             for selected in
                 std::iter::once(&mut weapon).chain(held.iter_mut().map(|s| &mut s.weapon))
@@ -1835,6 +1971,10 @@ impl ClassRoster {
                         .flatten()
                 })
                 .unwrap_or(0),
+            droideka_shield: walker_droid
+                .then(|| crate::droideka::shield_weapon(weapon_db, class))
+                .flatten()
+                .map(|w| weapon_hud(weapon_db, &w)),
             droideka: walker_droid.then(|| {
                 std::sync::Arc::new(crate::droideka::droideka_class(db, weapon_db, class))
             }),

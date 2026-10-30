@@ -8,8 +8,8 @@
 //! - a soldier's death, only when the victim is a human: "%s killed %s",
 //!   "%s killed %s - [TK]", "%s killed himself", and with no killer
 //!   "%s died". An AI's death makes no line; the player's own kill shows as
-//!   his statistics. (The PS2's hero clauses — a hero victim, a human or hero
-//!   killer — have no unit behind them here: the sim has no heroes yet.)
+//!   his statistics. A hero victim also makes a line when killed by a human
+//!   or hero in a single-screen battle.
 //! - `[ours]` a post captured or lost, on every map: "%s captured the %s" /
 //!   "%s lost the %s" — BF1's lines in BF2's own unused strings (§7.3:
 //!   The maintainer's ask; the BF2 PS2 shows none — [`POST_LINES`] reverses it).
@@ -119,12 +119,23 @@ const SAME_LINE_TICKS: u64 = 4 * core::TICK_HZ as u64;
 /// BF2's points per event (§9: the table at 0x5fedf0, filled at run time by
 /// `ScriptCB_SetPlayerStatsPoints`, read from two HOT1 save states [M]; the
 /// events by their call sites [V]). Not built: the 2-point kills beside a
-/// post (events 0x17, 0x18, 0x1b, 0x1d, 0x1e) and the hero's 5.
+/// post (events 0x17, 0x18, 0x1b, 0x1d, 0x1e).
 pub mod points {
     /// Event 0: killing an AI soldier (`FUN_00362268`).
     pub const KILL_AI: i32 = 1;
     /// Event 1: killing a human.
     pub const KILL_HUMAN: i32 = 2;
+    /// Event 0x14: killing a hero (`FUN_00362268`).
+    pub const KILL_HERO: i32 = 5;
+    pub fn kill(human: bool, hero: bool) -> i32 {
+        if hero {
+            KILL_HERO
+        } else if human {
+            KILL_HUMAN
+        } else {
+            KILL_AI
+        }
+    }
     /// Event 3: killing oneself (`FUN_00362c60`), or dying with no killer
     /// and no killing team (`FUN_0034f650`).
     pub const SUICIDE: i32 = -1;
@@ -153,6 +164,14 @@ const KILLED: (u32, &str) = (0xacc1_eef7, "%s killed %s");
 const TEAM_KILLED: (u32, &str) = (0xc57a_e533, "%s killed %s - [TK]");
 const SUICIDE: (u32, &str) = (0x6163_33ea, "%s killed himself");
 const DIED: (u32, &str) = (0x0a9f_4178, "%s died");
+const DEFEATED: (u32, &str) = (0x083a_b1e9, "%s defeated %s");
+const FLED: (u32, &str) = (0x07aa_d4c1, "%s has fled");
+const HERO_SPAWNED: (u32, &str) = (0x0f66_9681, "%s is now playing as %s");
+/// The killer's name a dispensed turret carries in BF2's death line (D:438921).
+const AUTO_TURRET: (u32, &str) = (0x664f_fe37, "Auto Turret");
+/// The recon droid's name in the discs' tables, for a droid weapon whose own
+/// `weapons.<side>.<kind>.<rest>` key has none.
+const RECON_DROID: (u32, &str) = (0x950b6800, "Recon Droid");
 const CAPTURED: (u32, &str) = (0xdd27_9cfc, "%s captured the %s");
 const LOST: (u32, &str) = (0xae1e_c790, "%s lost the %s");
 const COMMAND_POST: (u32, &str) = (0x7e64_bc51, "Command Post");
@@ -664,10 +683,24 @@ impl EventFeed {
                         &sim.units[shooter.index as usize],
                         &sim.units[victim.index as usize],
                     );
-                    // The gate (§1.1): only a human's death makes a line.
-                    if v.is_player {
+                    let hero = sim.hero_class(v.team) == Some(v.spec.class);
+                    let killer_hero = sim.hero_class(k.team) == Some(k.spec.class);
+                    // PS2's offline single-screen gate, §1.1.
+                    if v.is_player
+                        || (hero
+                            && sim.players.iter().flatten().count() == 1
+                            && (k.is_player || killer_hero))
+                    {
                         let (kn, vn) = (self.unit_name(sim, shooter), self.unit_name(sim, victim));
-                        let text = if shooter == victim {
+                        let hero_name = self.classes[usize::from(v.team.min(1))]
+                            .get(usize::from(v.spec.class))
+                            .cloned()
+                            .unwrap_or(vn.clone());
+                        let text = if hero && shooter == victim {
+                            fill(&self.texts.line(FLED), &[&hero_name])
+                        } else if hero {
+                            fill(&self.texts.line(DEFEATED), &[&kn, &hero_name])
+                        } else if shooter == victim {
                             fill(&self.texts.line(SUICIDE), &[&vn])
                         } else if k.team == v.team {
                             fill(&self.texts.line(TEAM_KILLED), &[&kn, &vn])
@@ -685,11 +718,7 @@ impl EventFeed {
                             self.points += points::TEAM_KILL;
                         } else {
                             self.kills += 1;
-                            self.points += if v.is_player {
-                                points::KILL_HUMAN
-                            } else {
-                                points::KILL_AI
-                            };
+                            self.points += points::kill(v.is_player, hero);
                         }
                     }
                 }
@@ -704,14 +733,44 @@ impl EventFeed {
                 }
                 Event::EnvDeath { unit, .. } => {
                     if sim.units[unit.index as usize].is_player {
-                        let name = self.unit_name(sim, unit);
-                        let text = fill(&self.texts.line(DIED), &[&name]);
+                        let u = &sim.units[unit.index as usize];
+                        let hero = sim.hero_class(u.team) == Some(u.spec.class);
+                        let name = if hero {
+                            self.classes[usize::from(u.team.min(1))]
+                                .get(usize::from(u.spec.class))
+                                .cloned()
+                                .unwrap_or_else(|| self.unit_name(sim, unit))
+                        } else {
+                            self.unit_name(sim, unit)
+                        };
+                        let text = fill(&self.texts.line(if hero { FLED } else { DIED }), &[&name]);
                         self.say(text, message_color::NEUTRAL, tick);
                     }
                     if unit == viewer {
                         self.points += points::SUICIDE;
                     }
-                    self.round.env_death(unit);
+                    self.round.env_death(sim, unit);
+                }
+                Event::Respawn { unit }
+                    if sim.units.get(unit.index as usize).is_some_and(|u| {
+                        u.gen == unit.gen && sim.hero_class(u.team) == Some(u.spec.class)
+                    }) =>
+                {
+                    let u = &sim.units[unit.index as usize];
+                    let name = self.classes[usize::from(u.team.min(1))]
+                        .get(usize::from(u.spec.class))
+                        .cloned()
+                        .unwrap_or_default();
+                    let text = fill(
+                        &self.texts.line(HERO_SPAWNED),
+                        &[&self.unit_name(sim, unit), &name],
+                    );
+                    self.say(text, relation(u.team), tick);
+                }
+                // The plain hit flash on an enemy's auto-turret too (the PS2's
+                // hit call takes any victim of enemy relation, B2 `FUN_001e0580`).
+                Event::TurretHit { shooter, team, .. } if shooter == viewer && team != my_team => {
+                    self.body = Some(tick);
                 }
                 Event::VehicleDestroyed {
                     vehicle,
@@ -746,7 +805,12 @@ impl EventFeed {
                     // Every soldier's share, for the stats pages (issue #50).
                     for i in 0..sim.units.len() {
                         if let Some(first) = self.capture_credit(sim, sim.handle(i), cp, team) {
-                            self.round.capture(i, first);
+                            let u = &sim.units[i];
+                            self.round.capture(
+                                i,
+                                first,
+                                sim.hero_class(u.team) == Some(u.spec.class),
+                            );
                         }
                     }
                 }
@@ -916,6 +980,37 @@ impl EventFeed {
                     shield: None,
                 })
             }
+            AimTarget::Droid(id) => {
+                let d = sim.live_droid(id)?;
+                let max = sim.droid_class(d)?.max_health;
+                let name = sim
+                    .weapon_classes
+                    .get(d.weapon_class)
+                    .and_then(|w| self.texts.weapon_name(&w.name))
+                    .unwrap_or_else(|| self.texts.line(RECON_DROID));
+                Some(HudTarget {
+                    // Bit 59: a droid's id is no other kind's.
+                    id: (1 << 59) | id,
+                    name,
+                    health_fraction: (d.health / max.max(1e-6)).clamp(0.0, 1.0),
+                    relation,
+                    team0: false,
+                    shield: None,
+                })
+            }
+            AimTarget::Turret(id) => {
+                let t = sim.live_turret(id)?;
+                let max = sim.turret_class(t)?.body.max_health;
+                Some(HudTarget {
+                    // Bit 60: a turret's id is no other kind's.
+                    id: (1 << 60) | id,
+                    name: self.texts.line(AUTO_TURRET),
+                    health_fraction: (t.health / max.max(1e-6)).clamp(0.0, 1.0),
+                    relation,
+                    team0: false,
+                    shield: None,
+                })
+            }
         }
     }
 
@@ -1038,7 +1133,11 @@ impl EventFeed {
             points: self.points,
             kills: self.kills,
             deaths: sim.units[viewer.index as usize].deaths as i32,
-            hero_points: 0,
+            hero_points: self
+                .round
+                .units
+                .get(viewer.index as usize)
+                .map_or(0, |u| u.hero_points),
             captures: self.battle.captures.min(i32::MAX as u32) as i32,
         }
     }
@@ -1692,6 +1791,51 @@ mod tests {
         assert_eq!(edges(VehicleKind::Hover, 0.0, 0, None), []);
         assert_eq!(edges(VehicleKind::Flyer, 0.0, 0, from_left), []);
         assert_eq!(edges(VehicleKind::Turret, 0.0, 0, from_left), []);
+    }
+
+    #[test]
+    fn hero_victim_uses_disc_points_and_hero_message_even_after_death() {
+        let mut s = scene();
+        let victim = s.rebels[0];
+        s.sim.heroes = Some(core::sim::heroes::Heroes::new([Some(0), None]));
+        s.feed.classes[0] = vec!["Luke Skywalker".into()];
+        s.sim.units[victim.index as usize].alive = false;
+        let me = s.me;
+        assert_eq!(
+            happen(
+                &mut s,
+                &[Event::Kill {
+                    shooter: me,
+                    victim
+                }]
+            ),
+            [line("Player 1 defeated Luke Skywalker", [200, 100, 100])]
+        );
+        assert_eq!(s.feed.stats(&s.sim, me).points, points::KILL_HERO);
+        assert_eq!(
+            s.feed.round().units[me.index as usize].points,
+            points::KILL_HERO
+        );
+    }
+
+    #[test]
+    fn hero_earned_points_are_displayed_separately_and_do_not_rank_future_offers() {
+        let mut s = scene();
+        s.sim.heroes = Some(core::sim::heroes::Heroes::new([None, Some(0)]));
+        let me = s.me;
+        let victim = s.rebels[0];
+        happen(
+            &mut s,
+            &[Event::Kill {
+                shooter: me,
+                victim,
+            }],
+        );
+        let stats = s.feed.stats(&s.sim, me);
+        assert_eq!((stats.points, stats.hero_points), (1, 1));
+        assert_eq!(s.feed.round().units[me.index as usize].ordinary_points(), 0);
+        crate::heroes::scores(&mut s.sim, &s.feed);
+        assert_eq!(s.sim.heroes.as_ref().unwrap().points[me.index as usize], 0);
     }
 
     /// Card EVMSG's gate (`re-event-messages.md` §1.1): only a human's death

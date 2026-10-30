@@ -1100,7 +1100,7 @@ fn replay_spot(snap: &Snapshot, id: Option<u32>) -> String {
     let h = &snap.header;
     format!(
         "spot map={} seed={} tick={} unit={} class={} pos={:.1},{:.1},{:.1} goal={} leg={}->{} stop={:?} {} build={}\n  \
-         a headless round is not this round (no human, 16 v 16): look at the PLACE, not the tick —\n  \
+         a headless round is not this round (no human, the map's own team sizes): look at the PLACE, not the tick —\n  \
          FLOOR_GRID={:.0},{:.0},8,1,{:.0} STUCK_CENSUS=1 ROUND_VERBOSE=1 cargo run --release -p game --example round_to_outcome -- 60000 {} {}\n  \
          scripts/sweep_seeds.py for the map's 8-seed table; BLACKBOX_ON=stuck on round_to_outcome writes a headless snapshot of the first 30 s stuck run\n",
         h.meta.map,

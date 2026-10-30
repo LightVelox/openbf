@@ -1,7 +1,7 @@
 //! A BF2 soldier's cloth (the Hoth snowtroopers' skirt, the clone capes) as
 //! extra skinned segments of its GLB, pinned rigid to its bones - card CLOTH
-//! slice 1, `analysis/re-cloth.md` [O]. No simulation yet (card CLOTH2): the
-//! mesh hangs in its rest shape.
+//! slice 1, `analysis/re-cloth.md` [O]. The hero closure also writes an
+//! optional raw-physics companion for live cloth; the GLB stays a fallback.
 //!
 //! Who wears it (re-cloth 2): a cloth named in the model's `gmod` INFO list is
 //! worn when the side LVL also holds a class of that name with `BASE` `cloth`
@@ -23,6 +23,7 @@ use anyhow::{anyhow, bail, Result};
 use mungefs::cloth::Cloth;
 use mungefs::entity::{EntityClass, GeomModel};
 use mungefs::skel::{mul_row, xform_point, RowMat4, Skeleton};
+use std::path::Path;
 
 /// fnv1a("Transparent") / fnv1a("HardEdge"): EntityClothClass flag bits 36 and
 /// 35 (re-cloth 3, B2 FUN_001da5b0).
@@ -33,6 +34,7 @@ const PROP_HARDEDGE: u32 = 0x5caf_15e1;
 pub struct WornCloth {
     pub name: String,
     pub segment: SkinnedSegment,
+    pub physics: manifest::cloth::Cloth,
 }
 
 /// The cloths `model` wears in this side LVL (`inner` = its opened payload),
@@ -80,9 +82,102 @@ pub fn worn_cloths(inner: &[u8], model: &str, skel: &Skeleton) -> Result<Vec<Wor
         out.push(WornCloth {
             name: cloth.name.clone(),
             segment,
+            physics: physics(cloth, class)?,
         });
     }
     Ok(out)
+}
+
+/// EntityClothClass constructor/property reader, B2 FUN_001da478/001da5b0.
+/// The class labels Cross/Bend gate DATA's third/second lists respectively.
+fn physics(c: &Cloth, class: &EntityClass) -> Result<manifest::cloth::Cloth> {
+    let value = |key: u32| {
+        class
+            .props
+            .iter()
+            .rev()
+            .find(|p| p.key_hash == key)
+            .map(|p| p.value.as_str())
+    };
+    let scalar = |key, default| -> Result<f32> {
+        value(key).map_or(Ok(default), |v| v.trim().parse::<f32>().map_err(Into::into))
+    };
+    let mut wind_direction = [1.0, 0.0, 0.0];
+    if let Some(v) = value(0x415e_2b30) {
+        let angles: Vec<f32> = v
+            .split_whitespace()
+            .map(str::parse)
+            .collect::<Result<_, _>>()?;
+        if angles.len() != 2 {
+            bail!("cloth {}: WindDirection needs two angles", c.name);
+        }
+        let (s, y) = angles[0].to_radians().sin_cos();
+        let (z, x) = angles[1].to_radians().sin_cos();
+        wind_direction = [-s * x, y, -s * z];
+    }
+    let mass = scalar(0x6eb9_57f3, 1.0)?;
+    if !mass.is_finite() || mass <= 0.0 {
+        bail!("cloth {}: invalid ParticleMass {mass}", c.name);
+    }
+    Ok(manifest::cloth::Cloth {
+        name: c.name.clone(),
+        part: 0,
+        parent: c.parent_bone.clone(),
+        frame: c.xfrm,
+        positions: c.positions.clone(),
+        uvs: c.uvs.clone(),
+        pinned: c.pinned,
+        pin_bones: c.pin_bones.clone(),
+        triangles: c.triangles.clone(),
+        constraints: [c.stretch.clone(), c.cross.clone(), c.bend.clone()],
+        enabled: [
+            scalar(0x8311_cd99, 1.0)? != 0.0,
+            scalar(0x94dd_79b9, 1.0)? != 0.0,
+            scalar(0xde11_2858, 1.0)? != 0.0,
+        ],
+        shapes: c
+            .shapes
+            .iter()
+            .map(|s| manifest::cloth::Shape {
+                bone: s.bone.clone(),
+                kind: s.kind,
+                params: s.params,
+                frame: s.rows,
+            })
+            .collect(),
+        wind_direction,
+        wind_speed: scalar(0x1390_1a72, 10.0)?,
+        dampening: scalar(0xc113_3964, 0.5)?,
+        drag: scalar(0xb88c_0d43, -2.0)?,
+        mass,
+        max_acceleration: scalar(0x4e99_4b61, 20.0)?,
+    })
+}
+
+/// Write the optional live-cloth companion. Only the hero closure calls this
+/// until other cloth wearers receive their own real-content acceptance.
+pub fn bake_companion(lvl: &Path, model: &str, out: &Path) -> Result<usize> {
+    let data = std::fs::read(lvl)?;
+    let inner = mungefs::open(&data).map_err(|e| anyhow!("{e}"))?;
+    let (m, skel) = crate::soldier::find_soldier(inner, model)?;
+    let first = m
+        .segments
+        .iter()
+        .filter(|s| !s.triangles.is_empty())
+        .count();
+    let mut cloths: Vec<_> = worn_cloths(inner, model, &skel)?
+        .into_iter()
+        .map(|c| c.physics)
+        .collect();
+    for (k, c) in cloths.iter_mut().enumerate() {
+        c.part = first + k;
+    }
+    let path = manifest::cloth::path(out, model);
+    std::fs::write(
+        path,
+        ron::ser::to_string_pretty(&cloths, ron::ser::PrettyConfig::default())?,
+    )?;
+    Ok(cloths.len())
 }
 
 /// A class flag key's value: a number, non-zero = set (the disc writes `1`).

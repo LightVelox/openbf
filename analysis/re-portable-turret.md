@@ -158,7 +158,7 @@ com_bldg_inf_autoturret com_weap_inf_dropturret`), so its band scrolls too.
 - [H] Expiry and replacement explode through `ExplosionName` (the kill goes through the damage interface, whose death
   path explodes armed buildings; the explosion on that path was not traced to the call).
 - [H] The turret outlives its owner; nothing in §3 tests the owner.
-- [H] It cannot be repaired; the repair weapons' target test was not re-read for this class.
+- Repair: settled in section 10.
 - OURS: the think interval (0.5 s), holding the trigger while the gun's `ShotDelay` / salvo pace it, the aim as
   world-frame yaw / pitch, the hit sphere as the shell's bind-pose sphere.
 - [D] The landing puts the origin on the contact point; the entity's collision primitive was not read. The reference
@@ -166,4 +166,61 @@ com_bldg_inf_autoturret com_weap_inf_dropturret`), so its band scrolls too.
 - [H] Whether the cluster count holds the target itself (the port's `is_group`: more than 4 counting him).
 - Not modelled: the aimer pitch pose (the model is drawn rigid), the band's unlit draw (weapon parts are drawn with the
   character light), `OverrideTexture` as a general mechanism, the ambient / activate / collision sounds, the third kill
-  of §3, soldiers colliding with it, enemy bots choosing it as a target.
+  of §3 (now section 10), soldiers colliding with it.
+
+## 10. Destroying it (the maintainer, 2026-10-30) [O]
+
+"The auto turrets: Can those not be destroyed yet? They don't have health and attacking them doesn't do anything.
+They should have health and be attackable like the original games had."
+
+**Which entities.** In a conquest round (the port's only mode) the only unmanned auto turret is this one, the BF2
+sniper's dropped `<side>_bldg_inf_autoturret` (base `com_bldg_inf_autoturret`, `portableturret`), on every BF2 map whose
+missions field a sniper. Census of the port's picked conquest layers over all baked maps (`mode_layer_index`'s rule): no
+`PilotType self` instance. The placed ones stay in other layers: HOT1 `hoth_objective` + `hoth_ctf` / `hoth_hunt`
+(`tur_bldg_chaingun_tripod`, `_roof`), KAM1 / MUS1 `*_campaign` (roof gun), FEL1 / NAB2 `*_campaign`, MYG1 `myg1_cp-assault`
+(`tur_bldg_recoilless_*_auto`), UTA1 `uta1_campaign` (card VSELF: they never fire; they already are armed buildings with
+health). BF1 has no auto turret but the fambaa's two (card FAMB; NAB1_H only, not in any baked manifest instance). Remaining
+armed classes in conquest layers are manned.
+
+**What was wrong: not the pool.** `MaxHealth` 50, bolts and blasts by the Building scale already ran (`Target::Turret`,
+`damage_item`). Measured on BF2 Naboo, reticle dead on the centre, parent commit:
+
+| | standing 6-38 m | crouched 6-30 m |
+|---|---|---|
+| rifle | destroyed in 7 bolts | 0-40 of 50 HP off in a clip's 4 s: bolts pass under |
+| rocket | destroyed; missed at 38 m | missed at every range to 38 m |
+
+- The aim ray (`Sim::aim_hit`) ignored it, so the bolt flew from the fire point to the ground behind: 0.5 m under the
+  ray at 15 m crouched against a 0.25 m sphere.
+- The reticle's pick ignored it: no name, no health bar, no colour, no hit flash. Hence "they don't have health".
+- Bots never took one ("not modelled" above).
+
+**The PS2.** It is an armed building (`re-vehicles.md` line 545) and the disc's model has one prim,
+`p_-so_sphere` r 0.25 on `boneroot`, mask 17 (soldier + ordnance): the port's `RADIUS` is that prim, not ours.
+- The acquisition takes a building, and the readout shows its name and health (`re-target-hud.md` headline, B2:410093-410122);
+  the class has no `HideHealthBar`. `TargetBuilding 0` on the rifle and launcher keeps the magnet off it, so the pull
+  is unchanged: only `com_weap_inf_autoturret`-like weapons with the bit pull. The name is Locl 0x664ffe37 "Auto Turret" [D:438921].
+- Hit call: `FUN_001e0580` calls `FUN_0035fd50` for any victim of enemy relation (B2:91673).
+- Death: dead with no destroyed (+0x384) and no unbuilt (+0x4d4) model, the update kills it through the damage interface at
+  once (`FUN_0022d1e0` B2:144295-144302; this is the "third kill" of §3, the flag being the alive bit,
+  `re-build-zones.md` 1): the class authors neither, so it is **gone, with its explosion; no wreck and no rebuild**. The
+  maintainer's "only fixed by a fusion cutter" rule has nothing to act on once it is down.
+- Repair of a standing one: the cutter's amount is by the target's health type with no class test
+  (`FUN_00346fa0` B2:339872): Building's `BuildingHealth`, friend's only (the cutter's team mask). [V]; the port now does.
+- Credit: BF2's point events are soldier kills and posts (`event_feed::points`, `re-event-messages.md` table), and no line
+  names a destroyed building. **No points, no stat for destroying one** (the turret's own kills already credit its owner).
+- Bots: `FUN_002e3aa0` asks `FUN_002a7c30` (alive, finite health, hostile), view × 10 for an armed building
+  (`FUN_002e3910`), radius by the longest weapon + 5 × speed (`FUN_002a9d90`), then the weapon choice
+  (`FUN_002ac8f8` -> `FUN_002abee0` -> `FUN_002ab590` -> `FUN_002aaba0`): the mask is `AITarget*`. Disc: rifle, pistol, grenade
+  mask 0x7 (no Building): **a rifleman walks by; a rocketeer (`AITargetBuilding 1`) takes it.**
+
+**The port** (`[ours]` called out):
+- `AimTarget::Turret(id)`: the pick, HUD name and health, the magnet where the weapon's bits allow.
+- `Sim::aim_hit` stops on a live turret or droid of another owner.
+- `Event::TurretHit` carries the plain hit flash.
+- `Foe::Turret(id)`, `AimRequest::Turret`: the scan, weapon choice and fire, as `Foe::Droid`. `[ours]`: the aim error's
+  size term is the droid's 0.17; a weak-weapon rule of 22.1 steps 5-6 is left out (no held weapon reaches it).
+- The cutter mends a standing friend's turret. `[ours]`: bots do not go to one (`ai::fix` is for placed turrets; it lives 60 s).
+- **Same gap, same fix:** a remote droid's sphere is on the aim ray too. Its reticle readout stays unported (a fast
+  flyer would change the magnet's feel; follow-up).
+- Not ported: soldiers colliding with the sphere (mask `s`), the class's damage effects (sparks under 50, smoke under 30).

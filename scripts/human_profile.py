@@ -20,7 +20,9 @@ SWEEP_PROXY and MATCHLOG_DIR).
       [--keep DIR] [--tol 0.2]
       the tuning loop: for every point of the grid, play the human's map at
       his tier with the proxy on his team (seeds 1..N, round_to_outcome with
-      SWEEP_PROXY + MATCHLOG_DIR, 16 v 16), sum the proxy's logs, and rank the
+      SWEEP_PROXY + MATCHLOG_DIR, 16 per side on the mission's tickets:
+      SWEEP_COMBATANTS=16 SWEEP_MISSION_TICKETS=1, both overridable from the
+      environment), sum the proxy's logs, and rank the
       points by their distance to the human on the FIT metrics. Prints the
       best point and the `Strength::Good` fields to set in
       engine/crates/core/src/ai/proxy.rs.
@@ -286,7 +288,10 @@ def run_round(bin_path, head, strength, point, seed, out_dir):
         "SWEEP_PROXY": spec,
         "SWEEP_DIFFICULTY": head.get("difficulty") or "normal",
         "SWEEP_THREADS": "1",
-        "SWEEP_NOFILL": os.environ.get("SWEEP_NOFILL", "1"),
+        # The proxy and the tiers live at 16 per side on the mission's tickets
+        # (the sweep's own default is the map's team sizes and tickets).
+        "SWEEP_COMBATANTS": os.environ.get("SWEEP_COMBATANTS", "16"),
+        "SWEEP_MISSION_TICKETS": os.environ.get("SWEEP_MISSION_TICKETS", "1"),
         "MATCHLOG_DIR": str(out_dir),
     })
     if head.get("mission", "").endswith("_con_cw.ron"):

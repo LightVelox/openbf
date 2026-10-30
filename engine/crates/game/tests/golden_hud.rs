@@ -24,6 +24,8 @@ fn model() -> ui::hud::HudModel {
         hp_max: 300.0,
         energy: 64.0,
         energy_max: 100.0,
+        hero: false,
+        hero_offer: None,
         weapon: Some(ui::hud::HudWeapon {
             key: "all_weap_inf_rifle".into(),
             class: String::new(),

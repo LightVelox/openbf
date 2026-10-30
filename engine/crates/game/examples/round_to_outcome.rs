@@ -5,36 +5,27 @@
 //! cargo run --release -p game --example round_to_outcome [max_ticks] [seed] [map ...]
 //! ```
 //!
-//! NOBODY is human here: each team gets 16 AI and the slot-0 player `WalkSim`
-//! seats is un-spawned and refilled with an ordinary bot, so this measures
-//! whether the AI, the command posts and the ticket rules can resolve a round
-//! on their own. It prints the live-unit counts and the spread of unit heights
-//! at the end, which is what separates the two failure modes this found (see
-//! the PLAN Log, "Round-completion sweep").
+//! Map defaults come from `game::conquest_defaults`, including calibrated
+//! tickets. `SWEEP_COMBATANTS=N` overrides both teams' combatant slots (1..64)
+//! for explicit stress/control runs. `SWEEP_TICKETS=A:B` overrides tickets;
+//! `SWEEP_TICKET_PCT=N` scales map-default tickets when no explicit pair is set.
+//! `SWEEP_TEAM_PCT=N` scales map-default combatants the way Instant Action's
+//! Team size percentage does (`ui::population::team_counts`: halves up, the
+//! pair stops at 32 together) when `SWEEP_COMBATANTS` is not set.
+//! `SWEEP_MISSION_TICKETS=1` takes the mission's own tickets (scaled by
+//! `SWEEP_TICKET_PCT`) instead of the map defaults: with `SWEEP_COMBATANTS=16`
+//! it is the 16-per-side setup the difficulty tiers were tuned at.
+//! Both values and the resolved roster are printed in each `setup` row.
 //!
-//! ## Slot 0 (the maintainer's decision 2, 2026-09-03) — `SWEEP_SLOT0`
-//! An idle human is not neutral and it is not a unit either disc's round
-//! contains: it stands where conquest put it for the whole round, it counts
-//! against the `alive < tickets` ticket rule that decides the BF2 standoffs
-//! (it never dies, so team 0 carries a permanent live unit), `Battle::try_spawn`
-//! lets it displace AI to take the last reinforcement slots, and it is a free
-//! kill nobody has to walk to. `Sim::vacate_player_slot(0)` takes it off the
-//! field without spending a ticket and the filler goes in through the ordinary
-//! `Sim::spawn_ai` path, so team 0 fields the same COUNT it always did (17 —
-//! the 16 AI plus slot 0 — against team 1's 16), all of them fighting. The
-//! ticket rule itself is unchanged. `SWEEP_SLOT0=player` restores the idle
-//! human, which is what the pre-2026-09-09 baselines were measured with.
-//! With it, `SLOT0_AT=x,y,z` (card JITR) stands that human at a point of the
-//! map, invincible: a playtest snapshot's scene re-run (bots holding and
-//! firing at a player who does not move).
+//! NOBODY is human here by default: slot 0 is vacated before the opening wave.
+//! The opening roster and respawn targets are the same combatant counts used
+//! by Instant Action. A `SWEEP_PROXY` replaces one ordinary bot, occupying
+//! one slot; `SWEEP_SLOT0=player` keeps an idle human in one team-0 slot.
+//! `SWEEP_NOFILL` is obsolete: there is no additional filler above the roster.
+//! `SLOT0_AT=x,y,z` stands a retained human there, invincible, for scene replay.
 //!
-//! The map's MISSION (`missions/<key>_con.ron`) is applied when it exists: its
-//! ticket pools, its command-post roster (`posts`), its `KillObject` posts,
-//! its `SetObjectTeam` ownership, its death regions, its FACTIONS (Phase B —
-//! a post's attack/defend value is per faction, and "team" would read the
-//! Locals row on every map) and, since session 12, its per-team CLASS MIX.
-//! The 16-v-16 unit count stays the example's own; the mission's unit counts
-//! and alive-AI cap are `game::main`'s job, not this smoke test's.
+//! Missions supply factions, classes, post ownership, death regions and rules.
+//! Shared common props are merged into collision, as in the game.
 //!
 //! ## Which teams a map fields
 //! Each team is a `game::roster::FactionRoster`: every class the mission
@@ -42,8 +33,8 @@
 //! registered once per weapon NAME (two classes with the same rifle share one
 //! `Sim::weapon_classes` index). The AI then come out of `Sim::spawn_ai`,
 //! which draws from the registered classes using `Sim::ai_class_weights`
-//! and the shared weighted selection in `Sim::ai_class`. Slot 0's replacement
-//! bot spawns LAST, after the 16, and takes the next weighted draw. The initial
+//! and the shared weighted selection in `Sim::ai_class`. No bot has an
+//! additional slot above the configured population. The initial
 //! idle player's template remains class 0 (the mission's first class).
 //!
 //! Three things can make a team something other than its mission's mix, and
@@ -148,7 +139,7 @@
 //! census's place and order:
 //!
 //! ```text
-//! deaths <key>: team0 kill K region R fall F vehicle V blast B floor X under U lost L stalled S | team1 …
+//! deaths <key>: team0 kill K region R fall F vehicle V blast B floor X under U lost L stalled S suicide Q hero_exhausted H | team1 …
 //! ```
 //!
 //! ...and (card FFLN) who the fire landed on, from the sim's own counters: the
@@ -388,7 +379,6 @@
 //! ## The human proxy and the difficulty check (card DPRX)
 //! Run settings, all optional (stderr only: stdout is unchanged with them):
 //! - `SWEEP_TEAMS=<t0>:<t1>` sets each team's tier (`Sim::team_difficulty`);
-//! - `SWEEP_NOFILL=1` vacates slot 0 without the filler bot (16 v 16);
 //! - `SWEEP_ERA=cw` reads `missions/<key>_con_cw.ron` where there is one;
 //! - `SWEEP_MISSION_DIR=<dir>` reads the missions from another folder (the
 //!   faction-swap copies of a balance run);
@@ -418,7 +408,8 @@
 //! (the map's side bias cancels in the average; it is never corrected), and
 //! prints per tier the proxy team's wins, mean margin, the proxy's K/D and
 //! accuracy, and PASS / FAIL against `core::ai::proxy::TARGETS`. It plays 16
-//! v 16 (slot 0 vacated, no filler; `SWEEP_NOFILL=0` keeps the filler). Without
+//! per side on the missions' tickets, the setup the tiers were tuned at (not
+//! the map defaults); `SWEEP_COMBATANTS` / `SWEEP_TICKETS` override. Without
 //! maps it runs [`CHECK_MAPS`]. `SWEEP_THREADS` (default 8) rounds at once.
 //!
 //! ## Animation census — `ANIM_CENSUS`
@@ -486,7 +477,13 @@ macro_rules! outln {
 struct Cfg {
     difficulty: core::skill::Difficulty,
     teams: [Option<core::skill::Difficulty>; 2],
-    nofill: bool,
+    tickets: Option<[u32; 2]>,
+    combatants: Option<u32>,
+    team_pct: u32,
+    ticket_pct: u32,
+    /// Tickets from the mission (scaled by `ticket_pct`) instead of the map
+    /// defaults: `--difficulty-check` plays the tiers' tuning setup.
+    mission_tickets: bool,
     era_cw: bool,
     mission_dir: Option<std::path::PathBuf>,
     /// The proxy's team, profile and strength label.
@@ -508,7 +505,26 @@ impl Cfg {
                 .and_then(|v| tier(&v))
                 .unwrap_or_default(),
             teams,
-            nofill: var("SWEEP_NOFILL").is_some_and(|v| v != "0"),
+            combatants: var("SWEEP_COMBATANTS")
+                .map(|v| v.parse::<u32>().expect("SWEEP_COMBATANTS must be 1..64"))
+                .inspect(|n| assert!((1..=64).contains(n))),
+            team_pct: var("SWEEP_TEAM_PCT")
+                .map(|v| v.parse::<u32>().expect("SWEEP_TEAM_PCT must be an integer"))
+                .unwrap_or(100),
+            ticket_pct: var("SWEEP_TICKET_PCT")
+                .map(|v| {
+                    v.parse::<u32>()
+                        .expect("SWEEP_TICKET_PCT must be an integer")
+                })
+                .unwrap_or(100),
+            mission_tickets: var("SWEEP_MISSION_TICKETS").as_deref() == Some("1"),
+            tickets: var("SWEEP_TICKETS").map(|v| {
+                let (a, b) = v.split_once(':').expect("SWEEP_TICKETS requires a:b");
+                [
+                    a.parse().expect("integer tickets"),
+                    b.parse().expect("integer tickets"),
+                ]
+            }),
             era_cw: var("SWEEP_ERA").as_deref() == Some("cw"),
             mission_dir: var("SWEEP_MISSION_DIR").map(std::path::PathBuf::from),
             proxy: var("SWEEP_PROXY").and_then(|v| match parse_proxy(&v) {
@@ -1450,9 +1466,9 @@ fn deaths_on() -> bool {
 /// Deaths per team (the victim's; a team above 1 counts as 1) by cause:
 /// kill, death region, fall, destroyed vehicle, attackerless blast, the kill
 /// floor, a landing under the map, a lost bot's recycle (card KFLR), a
-/// stalled bot's (card RCYC).
+/// stalled bot's (card RCYC), confirmed Respawn, hero time exhaustion.
 #[derive(Default)]
-struct Deaths([[u32; 9]; 2], Option<Clamp>, Vec<bool>);
+struct Deaths([[u32; 11]; 2], Option<Clamp>, Vec<bool>);
 
 /// Card FLNK: the hubs' visit test runs every this many ticks (4 Hz at
 /// 30 ticks a second, about the PS2 samples' rate).
@@ -1518,6 +1534,7 @@ impl Deaths {
                     unit,
                     match cause {
                         DeathCause::Suicide => 9,
+                        DeathCause::HeroExhausted => 10,
                         DeathCause::DeathRegion | DeathCause::Water => 1,
                         DeathCause::Fall => 2,
                         DeathCause::VehicleDestroyed => 3,
@@ -1561,10 +1578,10 @@ impl Deaths {
     }
 
     fn line(&self, key: &str, sim: &core::sim::Sim) -> String {
-        let t = |d: &[u32; 9]| {
+        let t = |d: &[u32; 11]| {
             format!(
-                "kill {} region {} fall {} vehicle {} blast {} floor {} under {} lost {} stalled {}",
-                d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8]
+                "kill {} region {} fall {} vehicle {} blast {} floor {} under {} lost {} stalled {} suicide {} hero_exhausted {}",
+                d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10]
             )
         };
         let mut text = format!(
@@ -4095,10 +4112,34 @@ fn run_map(
     scene.install_water(&mut sim);
     sim.ground_rules = core::soldier::GroundRules::for_game(&scene.manifest.source_game);
     sim.item_pool = game::roster::item_pool(&scene.manifest.source_game, &scene.manifest.map);
+    let defaults = game::conquest_defaults::for_map(key, cfg().era_cw).unwrap_or(
+        game::conquest_defaults::Defaults {
+            combatants: [16; 2],
+            tickets: mission.as_ref().map_or([250; 2], |m| m.tickets()),
+        },
+    );
+    let counts = cfg()
+        .combatants
+        .map_or(defaults.scaled(cfg().team_pct, 100).combatants, |n| [n; 2]);
+    let tickets = cfg().tickets.unwrap_or_else(|| match &mission {
+        Some(m) if cfg().mission_tickets => m
+            .tickets()
+            .map(|n| core::sim::scale_reinforcements(n, cfg().ticket_pct)),
+        _ => defaults.scaled(100, cfg().ticket_pct).tickets,
+    });
+    sim.battle = core::battle::Battle::new(tickets);
     if let Some(m) = &mission {
-        sim.battle = core::battle::Battle::new(m.tickets());
         m.apply_death_drains(&mut sim.battle);
     }
+    sim.team_combatants = Some(counts);
+    outln!(
+        out,
+        "    setup {key} combatants {}/{} tickets {}/{}",
+        counts[0],
+        counts[1],
+        tickets[0],
+        tickets[1]
+    );
     // The two teams are the MISSION'S ROSTERS (D6): its factions — which
     // `setup_conquest` needs to pick each team's row out of a post's five
     // per-faction ATK/DEF values (PLAN "Phase B addendum") — and its class
@@ -4250,50 +4291,35 @@ fn run_map(
             Vec::new()
         }
     };
-    // Card DTEAM: the idle human seated in slot 0 (team 0) for the opening
-    // wave is not one of this sweep's humans when slot 0 becomes a bot just
-    // below; one counted on team 1 cancels him (the rule reads only the
-    // difference), so the wave's bots take the rows the round has after.
-    let seated = w.sim.extra_humans;
+    // The proxy counts as a human for difficulty from the opening wave,
+    // just as it does after set_proxy. Slot 0 is vacated before this census.
     if slot0_is_bot() {
-        w.sim.extra_humans[1] += 1;
+        w.sim.vacate_player_slot(0);
     }
-    w.opening_wave([16, 16], true);
+    let seated = w.sim.extra_humans;
+    if let Some((team, _, _)) = cfg().proxy {
+        w.sim.extra_humans[team as usize] += 1;
+    }
+    let opening = if slot0_is_bot() {
+        counts
+    } else {
+        [counts[0].saturating_sub(1), counts[1]]
+    };
+    w.opening_wave(opening, true);
+    let opened = [0u8, 1].map(|team| w.sim.alive_units().filter(|(_, u)| u.team == team).count());
+    outln!(out, "    opening {key} alive {}/{}", opened[0], opened[1]);
     w.sim.extra_humans = seated;
-    // Slot 0 becomes a BOT (the maintainer's decision 2, 2026-09-03; `SWEEP_SLOT0`
-    // switches it back). `WalkSim` seats a player there because the game does,
-    // and this referee never presses a button: the idle human stands on its
-    // post for the whole round, counts against the `alive < tickets` rule that
-    // decides the standoffs, and is a free kill nobody has to walk to. It is
-    // un-spawned and refilled through the ordinary AI path, so team 0 fields
-    // the same COUNT of units it did, all of them fighting.
-    if slot0_is_bot() {
-        if let Some((pos, yaw)) = w.sim.vacate_player_slot(0).filter(|_| !cfg().nofill) {
-            let filled = if w.sim.classes[0].is_empty() {
-                // No class table (the built-in-trooper fallback above): the
-                // team template, exactly as `setup_conquest` spawns its AI.
-                let spec = w.teams[0].spec(0, pos, yaw, core::unit::Controller::Ai, 0);
-                w.sim.spawn(&spec).is_some()
-            } else {
-                w.sim.spawn_ai(0, pos, yaw).is_some()
-            };
-            if !filled {
-                outln!(
-                    out,
-                    "{key:10} slot 0 vacated but the battle refused the filler bot"
-                );
+    if !slot0_is_bot() {
+        if let Some(p) = slot0_at() {
+            w.sim.cheats.invincible = true;
+            let h = w
+                .sim
+                .alive_units()
+                .find(|(_, u)| u.is_player)
+                .map(|(h, _)| h);
+            if let Some(u) = h.and_then(|h| w.sim.unit_mut(h)) {
+                u.soldier.pos = p;
             }
-        }
-    } else if let Some(p) = slot0_at() {
-        // `SLOT0_AT` (module header): the idle human stands THERE, unhurt.
-        w.sim.cheats.invincible = true;
-        let human = w
-            .sim
-            .alive_units()
-            .find(|(_, u)| u.is_player)
-            .map(|(h, _)| h);
-        if let Some(u) = human.and_then(|h| w.sim.unit_mut(h)) {
-            u.soldier.pos = p;
         }
     }
 
@@ -4475,8 +4501,14 @@ fn run_map(
     let mut exit_counts = [0u32; 6];
     let mut exit_floor = [0u32; 2];
     let mut exit_other = [0u32; 2];
+    let timing = std::env::var_os("SWEEP_TIMING").is_some();
+    let mut tick_us = Vec::new();
     while t < max_ticks && w.sim.outcome.is_none() {
+        let started = timing.then(std::time::Instant::now);
         w.step_tick(&idle);
+        if let Some(started) = started {
+            tick_us.push(started.elapsed().as_micros() as u64);
+        }
         t += 1;
         if let Some((i, tally)) = proxy.as_mut() {
             tally.tick(&w.sim, Some((*i, "proxy")));
@@ -4792,6 +4824,16 @@ fn run_map(
         o.finish();
     }
 
+    if !tick_us.is_empty() {
+        tick_us.sort_unstable();
+        outln!(
+            out,
+            "    timing {key} median_us {} p99_us {} max_us {}",
+            tick_us[tick_us.len() / 2],
+            tick_us[tick_us.len() * 99 / 100],
+            tick_us[tick_us.len() - 1]
+        );
+    }
     let alive: Vec<_> = w.sim.alive_units().collect();
     let (mut ymin, mut ymax) = (f32::MAX, f32::MIN);
     for (_, u) in &alive {
@@ -5449,6 +5491,10 @@ fn lower_median(v: &[u16]) -> String {
     }
 }
 
+/// Combatants per side `--difficulty-check` plays without `SWEEP_COMBATANTS`:
+/// the size the tiers were tuned at.
+const DIFFICULTY_CHECK_PER_SIDE: u32 = 16;
+
 /// Card DPRX: `--difficulty-check` (module header). One round per (tier,
 /// map, proxy side, seed), `SWEEP_THREADS` at once; the verdict per tier
 /// against `core::ai::proxy::TARGETS`.
@@ -5487,11 +5533,14 @@ fn difficulty_check(maps: &[(String, String, std::path::PathBuf)], args: &[Strin
     if selected.len() != only.len() {
         eprintln!("difficulty check: some of {only:?} are not baked maps");
     }
-    // 16 v 16: slot 0 is vacated without a filler (team 0 would field 17),
-    // unless `SWEEP_NOFILL=0` asks for the filler.
+    // The tiers (`core::ai::proxy::TARGETS`) were tuned at 16 per side on the
+    // missions' tickets: the check plays that unless SWEEP_COMBATANTS /
+    // SWEEP_TICKETS / SWEEP_TICKET_PCT say otherwise.
+    let base = Cfg::from_env();
     let base = Cfg {
-        nofill: std::env::var("SWEEP_NOFILL").as_deref() != Ok("0"),
-        ..Cfg::from_env()
+        combatants: base.combatants.or(Some(DIFFICULTY_CHECK_PER_SIDE)),
+        mission_tickets: true,
+        ..base
     };
     // (tier, map, side, seed)
     let mut jobs: Vec<(Difficulty, usize, u8, u32)> = Vec::new();
@@ -5510,11 +5559,12 @@ fn difficulty_check(maps: &[(String, String, std::path::PathBuf)], args: &[Strin
         .unwrap_or(8)
         .clamp(1, jobs.len().max(1));
     eprintln!(
-        "difficulty check: proxy {} (PROVISIONAL profile {:?}), tiers {:?}, {} maps x 2 sides x {seeds} seeds, {} rounds on {threads} threads",
+        "difficulty check: proxy {} (PROVISIONAL profile {:?}), tiers {:?}, {} maps x 2 sides x {seeds} seeds, {} per side, {} rounds on {threads} threads",
         strength.label(),
         strength.profile(),
         tiers.iter().map(|d| d.label()).collect::<Vec<_>>(),
         selected.len(),
+        base.combatants.unwrap_or(DIFFICULTY_CHECK_PER_SIDE),
         jobs.len()
     );
     let next = AtomicUsize::new(0);
@@ -5752,6 +5802,53 @@ mod diagnostic_tests {
     use core::ai::Behaviour;
     use core::unit::{Controller, UnitHandle, UnitSpec};
     use glam::Vec3;
+
+    #[test]
+    fn every_death_cause_has_a_distinct_bounded_counter_for_both_teams() {
+        use core::sim::{DeathCause, Event};
+        let mut sim = core::sim::Sim::empty(7);
+        let units = [0, 1].map(|team| {
+            sim.spawn(&UnitSpec::trooper(team, Vec3::X * f32::from(team)))
+                .unwrap()
+        });
+        sim.outcome = Some(0);
+        for (team, unit) in units.into_iter().enumerate() {
+            sim.events.push(Event::Kill {
+                shooter: units[1 - team],
+                victim: unit,
+            });
+            for cause in [
+                DeathCause::DeathRegion,
+                DeathCause::Fall,
+                DeathCause::VehicleDestroyed,
+                DeathCause::Blast,
+                DeathCause::KillFloor,
+                DeathCause::UnderMap,
+                DeathCause::Lost,
+                DeathCause::Stalled,
+                DeathCause::Suicide,
+                DeathCause::HeroExhausted,
+            ] {
+                sim.events.push(Event::EnvDeath { unit, cause });
+            }
+        }
+        let mut counts = Deaths::default();
+        counts.observe(&sim);
+        assert_eq!(counts.0, [[1; 11]; 2]);
+        let line = counts.line("fixture", &sim);
+        assert_eq!(line.matches("suicide 1 hero_exhausted 1").count(), 2);
+        // Deep water wears a droideka down: it counts with the death regions.
+        let mut sim = core::sim::Sim::empty(7);
+        let unit = sim.spawn(&UnitSpec::trooper(0, Vec3::ZERO)).unwrap();
+        sim.outcome = Some(0);
+        sim.events.push(Event::EnvDeath {
+            unit,
+            cause: DeathCause::Water,
+        });
+        let mut counts = Deaths::default();
+        counts.observe(&sim);
+        assert_eq!(counts.0[0][1], 1);
+    }
 
     fn bot(sim: &mut core::sim::Sim, pos: Vec3) -> UnitHandle {
         sim.spawn(&UnitSpec {

@@ -275,11 +275,9 @@ impl App {
     /// Session Options were left (`push_prefs`): AI Difficulty is the
     /// profile's tier, saved.
     fn keep_session_prefs(&mut self, options: &ui::shell::SessionOptions) {
-        let now = self.profile.settings.difficulty;
-        if game::shell_ia::ia_level(now) == options.difficulty {
-            return;
-        }
         self.profile.settings.difficulty = game::shell_ia::port_difficulty(options.difficulty);
+        self.profile.settings.team_size_pct = options.con_numbots as u32;
+        self.profile.settings.reinforcement_pct = options.con_mult as u32;
         if let Err(e) = self.profile.save() {
             eprintln!("profile autosave failed: {e:#}");
         }
@@ -627,7 +625,12 @@ impl App {
             let k = settings.fov_scale;
             let model = ui::menu::MenuModel {
                 assist_intensity: settings.assist_intensity,
-                ai_alive_cap: settings.ai_alive_cap.unwrap_or(16),
+                team_size_pct: settings.team_size_pct,
+                reinforcements_pct: settings.reinforcement_pct,
+                population_note: game::conquest_defaults::menu_note(
+                    settings.team_size_pct,
+                    settings.reinforcement_pct,
+                ),
                 fov_scale: k,
                 fov_deg: (game::walk::chase_fov_y() * k).to_degrees(),
                 music_volume: settings.music_volume,
@@ -664,6 +667,11 @@ impl App {
                                 self.profile.settings.difficulty,
                             ))
                         }
+                    }
+                    if let Some(ia) = front.ia.as_mut() {
+                        ia.options.num_bots = self.profile.settings.team_size_pct as i32;
+                        ia.options.con_numbots = self.profile.settings.team_size_pct as i32;
+                        ia.options.con_mult = self.profile.settings.reinforcement_pct as i32;
                     }
                     front.ia_open = true;
                 }
@@ -827,7 +835,8 @@ impl App {
             }
             MenuAction::ToggleCheat(_) => return,
             MenuAction::SetAssist(v) => s.assist_intensity = v.clamp(0.0, 1.5),
-            MenuAction::SetAiCap(c) => s.ai_alive_cap = Some(c),
+            MenuAction::SetAiCap(c) => s.team_size_pct = c,
+            MenuAction::SetReinforcements(c) => s.reinforcement_pct = c,
             MenuAction::SetFov(k) => {
                 s.fov_scale = k.clamp(game::walk::FOV_SCALE_RANGE.0, game::walk::FOV_SCALE_RANGE.1)
             }
@@ -879,7 +888,7 @@ mod tests {
         use ui::menu::{MenuInput, MenuModel, Row};
         let model = MenuModel {
             in_shell: Some("Game Options".into()),
-            ai_alive_cap: 2,
+            team_size_pct: 10,
             ..Default::default()
         };
         let rows = ui::menu::rows(&model);
@@ -956,6 +965,7 @@ mod tests {
             targets: false,
             ai: None,
             ai_cap: None,
+            team_size_pct: None,
             tickets: 250,
             tickets_set: false,
             ticket_pct: 100,
@@ -966,6 +976,7 @@ mod tests {
             mission: None,
             mission_file: None,
             player_team: 0,
+            heroes: Some(core::sim::heroes::HeroRules::default()),
         };
         let mut app = App::new(
             Default::default(),

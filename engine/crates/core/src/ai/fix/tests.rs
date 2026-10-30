@@ -34,6 +34,7 @@ fn world(bots: usize, d: f32) -> (Sim, Vec<UnitHandle>, VehicleHandle) {
     sim.weapon_classes.push(cutter());
     sim.seat_setup = vec![Some(SeatSetup {
         radius: 1.5,
+        body_active: vec![],
         boardable: vec![true; 2],
         exit_drop: 10.0,
         ai_size: 1,

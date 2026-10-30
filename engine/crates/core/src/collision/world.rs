@@ -430,6 +430,14 @@ impl CollisionWorld {
         &self.bodies
     }
 
+    /// Map bodies followed by every live vehicle hull, in stable slot order.
+    /// Physical weapon sweeps need both; `bodies` alone is only the map.
+    pub fn bodies_and_hulls(&self) -> impl Iterator<Item = &Body> {
+        self.bodies
+            .iter()
+            .chain(self.hulls.iter().flat_map(|h| h.bodies.iter()))
+    }
+
     /// Associate a placed map instance with a live station index.
     pub fn bind_station(&mut self, instance: u32, station: u16) {
         self.stations.insert(instance, station);

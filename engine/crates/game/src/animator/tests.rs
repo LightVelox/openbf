@@ -181,6 +181,7 @@ fn input(speed: f32) -> AnimInput {
         max_speed: 7.0,
         root_scale: 1.0,
         dead: false,
+        hero_dead: false,
         hard_lock: false,
         set: 0,
         fired: false,
@@ -200,6 +201,38 @@ struct Run {
     clips: Vec<Clip>,
     skel: Skeleton,
     a: Animator,
+}
+
+#[test]
+fn named_offhand_pose_keeps_running_legs_and_applies_joined_legs() {
+    let mut r = Run::new(rig_bf2());
+    r.clips.push(clip(9, "human_rifle_cast_full", 31, false));
+    r.steps(&input(7.0), 30);
+    let before = r.a.pose(&r.skel);
+    let class = ClassAnim {
+        family: "human".into(),
+        ..Default::default()
+    };
+    assert!(r
+        .a
+        .offhand_pose(&r.rig, &r.clips, &r.skel, &class, "power", "cast", 0.0, false,));
+    let moving = r.a.pose(&r.skel);
+    assert_eq!(moving.0[LEG].translation, before.0[LEG].translation);
+    assert_eq!(moving.0[ARM].translation.x, 1000.0);
+    assert_eq!(moving.0[0].translation, before.0[0].translation);
+    assert!(!r.a.combo_override, "ordinary root twist remains enabled");
+    assert!(r
+        .a
+        .offhand_pose(&r.rig, &r.clips, &r.skel, &class, "power", "cast", 0.0, true,));
+    let joined = r.a.pose(&r.skel);
+    assert_eq!(joined.0[LEG].translation.x, 1000.0);
+    assert_eq!(joined.0[ARM].translation.x, 1000.0);
+    assert!(!r
+        .a
+        .offhand_pose(&r.rig, &r.clips, &r.skel, &class, "power", "missing", 0.0, false,));
+    let missing = r.a.pose(&r.skel);
+    assert_eq!(missing.0[LEG].translation, joined.0[LEG].translation);
+    assert_eq!(missing.0[ARM].translation, joined.0[ARM].translation);
 }
 
 impl Run {
@@ -1465,3 +1498,15 @@ fn a_prone_change_plays_its_transition_through_the_lock() {
 
 mod jet;
 mod legs;
+
+#[test]
+fn bf2_hero_death_uses_the_hero_clip_but_a_thrown_hero_stays_thrown() {
+    let mut i = input(0.0);
+    i.dead = true;
+    i.hero_dead = true;
+    assert_eq!(stance_of(&i, Game::Bf2), Err(Special::HeroDead));
+    assert_eq!(Special::HeroDead.name(), "stand_deadhero");
+    assert_eq!(stance_of(&i, Game::Bf1), Err(Special::Dead));
+    i.stance = Stance::Thrown;
+    assert!(matches!(stance_of(&i, Game::Bf2), Err(Special::Flying(_))));
+}

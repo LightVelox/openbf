@@ -9,6 +9,7 @@ use crate::weapon::WeaponClass;
 
 mod jet;
 mod ramps;
+mod scratch;
 
 /// The combat calls `unit` asked over `ticks` steps: (tick, call).
 fn calls_of(s: &mut Sim, ticks: u32) -> Vec<(u64, UnitHandle, Call)> {

@@ -66,7 +66,10 @@ fn the_hero_flamethrower_burns_fifty_a_second_for_five_seconds() {
     let after_hit = health(&s, target);
     assert_eq!(after_hit, 285.0);
     let burn = s.unit(target).unwrap().burn.unwrap();
-    assert_eq!((burn.timer, burn.rate, burn.by), (5.0, 50.0, shooter));
+    assert_eq!(
+        (burn.left, burn.damage_per_second, burn.owner),
+        (5.0, 50.0, shooter)
+    );
     for _ in 0..30 {
         s.tick_burns(TICK_DT);
     }
@@ -90,8 +93,8 @@ fn a_new_hit_keeps_the_longer_timer_and_takes_the_new_rate() {
     }
     s.fire_emitter(shooter.index as usize, short, 1.0);
     let burn = s.unit(target).unwrap().burn.unwrap();
-    assert!((burn.timer - 4.0).abs() < 1e-4);
-    assert_eq!(burn.rate, 0.0);
+    assert!((burn.left - 4.0).abs() < 1e-4);
+    assert_eq!(burn.damage_per_second, 0.0);
     assert_eq!(burn.weapon_class, short);
     let before = health(&s, target);
     s.tick_burns(TICK_DT);
@@ -158,4 +161,27 @@ fn a_burn_reaches_the_hash_only_while_it_runs() {
     }
     assert!(s.units[target.index as usize].burn.is_none());
     assert_eq!(s.hash(), without);
+}
+
+#[test]
+fn a_bots_cone_spares_a_human_teammate_and_still_draws_its_arc() {
+    let mut s = Sim::empty(3);
+    s.heightfield = Some(flat_ground());
+    let bot = s.spawn(&UnitSpec::trooper(0, Vec3::ZERO)).unwrap();
+    s.units[bot.index as usize].soldier.yaw = -std::f32::consts::FRAC_PI_2;
+    let human = s
+        .spawn(&UnitSpec::player(0, Vec3::new(3.0, 0.0, 0.0)))
+        .unwrap();
+    let before = health(&s, human);
+    let class = add(
+        &mut s,
+        EmitterOrdnance {
+            affect_friends: true,
+            ..flamethrower(true, 5.0, 50.0)
+        },
+    );
+    s.fire_emitter(bot.index as usize, class, 1.0);
+    assert_eq!(health(&s, human), before);
+    assert!(s.unit(human).unwrap().burn.is_none());
+    assert!(s.events.iter().any(|e| matches!(e, Event::Emitter { .. })));
 }

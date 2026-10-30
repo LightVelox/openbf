@@ -307,3 +307,189 @@ fn a_bot_droideka_rolls_again_once_its_fight_is_over() {
         state(&s, h)
     );
 }
+
+#[test]
+fn audit_droideka_look_preview_matches_each_form_without_zoom() {
+    for rolling in [false, true] {
+        for boost in [false, true] {
+            for mouse in [false, true] {
+                let mut s = sim();
+                let h = s.spawn(&deka(UnitSpec::player(0, Vec3::ZERO))).unwrap();
+                if rolling {
+                    s.step(&[pad(buttons::ROLL_STANCE, 0.0)]);
+                    for _ in 0..60 {
+                        s.step(&[pad(0, 1.0)]);
+                    }
+                    assert_eq!(state(&s, h), ROLLING);
+                }
+                let p = PadState {
+                    rx: PadState::quantize(0.75),
+                    ry: PadState::quantize(-0.6),
+                    ly: PadState::quantize(1.0),
+                    buttons: if boost { buttons::SPRINT } else { 0 },
+                    mx: if mouse {
+                        PadState::quantize_look(0.2)
+                    } else {
+                        0
+                    },
+                    my: if mouse {
+                        PadState::quantize_look(0.1)
+                    } else {
+                        0
+                    },
+                    ..Default::default()
+                };
+                let Some(crate::sim::LookPreview::Foot { yaw, pitch, .. }) = s.look_preview(h, &p)
+                else {
+                    panic!("droideka look preview absent");
+                };
+                s.step(&[p]);
+                let u = s.unit(h).unwrap();
+                assert_eq!(
+                    (yaw, pitch),
+                    (u.soldier.yaw, u.soldier.pitch),
+                    "rolling={rolling} boost={boost} mouse={mouse}"
+                );
+                s.step(&[PadState {
+                    buttons: buttons::ZOOM,
+                    ..Default::default()
+                }]);
+                assert!(
+                    s.unit(h).unwrap().zoom.is_none(),
+                    "droidekas deliberately cannot zoom"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn audit_droideka_zoom_press_is_ignored_in_walk_and_ball() {
+    let mut s = sim();
+    let h = s.spawn(&deka(UnitSpec::player(0, Vec3::ZERO))).unwrap();
+    for rolling in [false, true] {
+        if rolling {
+            s.step(&[pad(buttons::ROLL_STANCE, 0.0)]);
+            for _ in 0..60 {
+                s.step(&[pad(0, 0.0)]);
+            }
+            assert_eq!(state(&s, h), ROLLING);
+        }
+        for _ in 0..3 {
+            s.step(&[pad(buttons::ZOOM, 0.0)]);
+            assert!(s.unit(h).unwrap().zoom.is_none());
+            s.step(&[pad(0, 0.0)]);
+        }
+    }
+}
+
+/// The maintainer: "droideka: shouldn't be able to sprint in ball or walking
+/// form." The same run with and without the button, in both forms.
+#[test]
+fn the_sprint_button_changes_nothing_in_either_form() {
+    for rolling in [false, true] {
+        let run = |sprint: u32| {
+            let mut s = sim();
+            let h = s.spawn(&deka(UnitSpec::player(0, Vec3::ZERO))).unwrap();
+            if rolling {
+                s.step(&[pad(buttons::ROLL_STANCE, 0.0)]);
+                for _ in 0..60 {
+                    s.step(&[pad(0, 1.0)]);
+                }
+                assert_eq!(state(&s, h), ROLLING);
+            }
+            for _ in 0..90 {
+                s.step(&[pad(sprint, 1.0)]);
+            }
+            let u = s.unit(h).unwrap();
+            let d = u.droideka.as_ref().unwrap();
+            (
+                u.soldier.pos,
+                u.soldier.vel,
+                u.soldier.energy,
+                d.energy,
+                d.omega,
+                d.boosting,
+            )
+        };
+        let (plain, held) = (run(0), run(buttons::SPRINT));
+        assert_eq!(plain, held, "rolling={rolling}");
+        assert!(!held.5, "rolling={rolling}");
+    }
+}
+
+fn bar(s: &Sim, h: UnitHandle) -> (f32, f32) {
+    s.unit(h).unwrap().stamina_bar()
+}
+
+/// The maintainer: "The droideka stamina bar is how much shield is left.
+/// removing the shield recharges it." BF2's numbers: 3000, -100/s up once it
+/// is under full, +300/s down, and a full shield raised does not drain.
+#[test]
+fn the_stamina_bar_is_the_shield_and_lowering_it_recharges() {
+    let mut s = sim();
+    let h = s.spawn(&deka(UnitSpec::player(0, Vec3::ZERO))).unwrap();
+    s.step(&[pad(0, 0.0)]);
+    assert_eq!(bar(&s, h), (3000.0, 3000.0));
+    // Raised at full: no drain.
+    s.step(&[pad(buttons::SECONDARY_FIRE, 0.0)]);
+    for _ in 0..30 {
+        s.step(&[pad(0, 0.0)]);
+    }
+    assert_eq!(bar(&s, h), (3000.0, 3000.0));
+    // A hit takes the bar down by its damage, then it drains at 100/s.
+    let d = s.units[h.index as usize].droideka.as_mut().unwrap();
+    assert!(d.shield.on);
+    assert_eq!(d.shield.absorb(1000.0, 1.0), 0.0);
+    assert_eq!(bar(&s, h), (2000.0, 3000.0));
+    let dt = crate::TICK_DT;
+    for _ in 0..30 {
+        s.step(&[pad(0, 0.0)]);
+    }
+    let up = 2000.0 - 100.0 * 30.0 * dt;
+    assert!((bar(&s, h).0 - up).abs() < 0.5, "{}", bar(&s, h).0);
+    // Lowered: 300/s up to the cap.
+    s.step(&[pad(buttons::SECONDARY_FIRE, 0.0)]);
+    let low = bar(&s, h).0;
+    assert!(!s.unit(h).unwrap().droideka.as_ref().unwrap().shield.on);
+    for _ in 0..30 {
+        s.step(&[pad(0, 0.0)]);
+    }
+    let down = low + 300.0 * 30.0 * dt;
+    assert!((bar(&s, h).0 - down).abs() < 0.5, "{}", bar(&s, h).0);
+    for _ in 0..(10.0 / dt) as usize {
+        s.step(&[pad(0, 0.0)]);
+    }
+    assert_eq!(bar(&s, h), (3000.0, 3000.0));
+}
+
+/// A bolt on the raised shield shows on the bar.
+#[test]
+fn a_bolt_on_the_raised_shield_lowers_the_bar() {
+    let mut s = sim();
+    s.spawn(&UnitSpec::player(0, Vec3::ZERO)).unwrap();
+    let t = target(&mut s, true);
+    shoot(&mut s, 60);
+    let (cur, max) = bar(&s, t);
+    assert_eq!(max, 3000.0);
+    assert!(cur < 3000.0, "{cur}");
+    assert_eq!(
+        cur,
+        s.units[t.index as usize]
+            .droideka
+            .as_ref()
+            .unwrap()
+            .shield
+            .points
+    );
+}
+
+/// A soldier's bar stays his energy.
+#[test]
+fn a_soldiers_stamina_bar_is_his_energy() {
+    let mut s = sim();
+    let h = s.spawn(&UnitSpec::player(0, Vec3::ZERO)).unwrap();
+    s.units[h.index as usize].soldier.energy = 37.0;
+    let u = s.unit(h).unwrap();
+    assert_eq!(u.stamina_bar(), (37.0, u.consts.energy_bar));
+}

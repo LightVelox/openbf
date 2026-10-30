@@ -334,6 +334,47 @@ impl PoseRig {
     }
 }
 
+/// Mesh skeletons may omit an unskinned attachment joint. The animation rig
+/// still owns that joint (Yoda's hp_weapons); append it without changing the
+/// existing skin joint indices.
+pub(crate) fn append_rig_attachment(
+    skel: &mut Skeleton,
+    rig: &mungefs::anim::Rig,
+    name: &str,
+) -> Result<bool> {
+    let crc = crc32_lower(name);
+    if skel.index_of(name).is_some() {
+        return Ok(false);
+    }
+    let Some(joint) = rig.joint(crc) else {
+        return Ok(false);
+    };
+    let parent = if joint.parent_crc == 0 {
+        None
+    } else {
+        Some(
+            skel.bones
+                .iter()
+                .position(|b| b.crc == joint.parent_crc)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "{}: rig attachment {name} has a parent absent from the model",
+                        skel.name
+                    )
+                })?,
+        )
+    };
+    let rotation = Mat3::from_quat(Quat::from_array(joint.rest_rot).normalize());
+    skel.bones.push(mungefs::skel::SkelBone {
+        name: name.to_owned(),
+        crc,
+        parent,
+        rows: rotation.to_cols_array_2d(),
+        t: joint.rest_pos,
+    });
+    Ok(true)
+}
+
 /// [`PoseRig`] of `model` from the level's soldier classes: the first class
 /// (in `classes` order) whose `GeometryName` is the model and whose chain
 /// names a `SkeletonName`. `None` = the human rig, whose rest is the human

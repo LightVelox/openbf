@@ -14,6 +14,9 @@ use game::viewer::{camera_from, upload_scene, upload_unit_cube, SceneGpu};
 use game::walk::WalkSim;
 use render::{Camera, DrawCmd, Renderer};
 
+#[path = "headless/detailed_bench.rs"]
+mod detailed_bench;
+
 /// Keep feed statistics current even without a HUD consumer. Presentation
 /// output has no reader in that mode, so discard it after each sim tick.
 fn tick_event_feed(
@@ -144,11 +147,15 @@ impl ReplayFrame {
         draws.extend(self.deka_vis.draws(r, &walk.sim));
         let skinned = self.vis.draws(walk);
         draws.extend(self.vis.weapon_draws(walk));
+        draws.extend(self.vis.cloth_draws(r, walk));
         draws.extend(self.fx.draws(self.quad, self.sprite, &cam));
         self.holos.advance(walk);
         game::point_light::submit(r, gpu, walk, &mut self.bolts, cam.position, &self.holos);
-        let mut particles = self.vis.flash_draws(walk);
-        particles.extend(self.deka_vis.bubbles(&walk.sim, cam.position));
+        let mut points = self.vis.fire_points(walk);
+        self.deka_vis.fire_points(&walk.sim, &mut points);
+        let mut particles = self.vis.flash_draws_at(walk, &points);
+        particles.extend(self.vis.saber_draws(walk));
+        particles.extend(self.deka_vis.bubbles(&walk.sim, &cam, r.lighting.sun_dir));
         particles.extend(self.holos.draws(&gpu.holo, walk, &cam));
         if let Some(w) = self.weather.as_mut() {
             particles.extend(w.frame_draws(r, &cam, glam::Vec3::ZERO));
@@ -192,6 +199,46 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
     use core::sim::Event;
     for e in events {
         let line = match e {
+            Event::ForceHit {
+                owner,
+                weapon_class,
+                blocked,
+                ..
+            } => format!(
+                "{tick},force_hit,{},{weapon_class},{}\n",
+                owner.index,
+                u8::from(*blocked)
+            ),
+            Event::WeaponBlast { pos, weapon_class } => format!(
+                "{tick},weapon_blast,{weapon_class},,{:.2}:{:.2}:{:.2}\n",
+                pos.x, pos.y, pos.z
+            ),
+            Event::ComboSound {
+                unit,
+                weapon_class,
+                sound_hash,
+            } => format!(
+                "{tick},combo_sound,{},{weapon_class},{sound_hash:08x}\n",
+                unit.index
+            ),
+            Event::SaberContact {
+                pos,
+                weapon_class,
+                deflect,
+            } => format!(
+                "{tick},saber_contact,{weapon_class},{},{:.2}:{:.2}:{:.2}\n",
+                u8::from(*deflect),
+                pos.x,
+                pos.y,
+                pos.z
+            ),
+            Event::SaberThrowHit { pos, weapon_class } => format!(
+                "{tick},saber_throw_hit,{weapon_class},,{:.2}:{:.2}:{:.2}\n",
+                pos.x, pos.y, pos.z
+            ),
+            Event::HeroOffered { unit, class } => {
+                format!("{tick},hero_offer,{},{class},\n", unit.index)
+            }
             Event::MineBlast {
                 pos,
                 weapon_class,
@@ -242,10 +289,21 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
                 "{tick},turret_gone,{weapon_class},{end:?},{:.2}:{:.2}:{:.2}\n",
                 pos.x, pos.y, pos.z
             ),
+            Event::TurretHit {
+                shooter,
+                turret,
+                damage,
+                health_left,
+                ..
+            } => format!(
+                "{tick},turret_hit,{},{turret},{damage:.2},{health_left:.2}\n",
+                shooter.index
+            ),
             Event::Ability {
                 unit,
                 weapon_class,
                 pos,
+                ..
             } => format!(
                 "{tick},ability,{},{weapon_class},{:.2}:{:.2}:{:.2}\n",
                 unit.index, pos.x, pos.y, pos.z
@@ -291,7 +349,6 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
             Event::BoltExpired { struck, .. } => format!("{tick},expire,,,{}\n", *struck as u8),
             // Render-only, and the expire / hit line already records it.
             Event::Impact { .. } => continue,
-            Event::Blast { .. } => continue,
             // HUD-only (the reticle mark); the hit line records the hit.
             Event::CriticalHit { .. } => continue,
             Event::Despawn { unit } => format!("{tick},despawn,{},,\n", unit.index),
@@ -323,6 +380,7 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
             Event::EnvDeath { unit, cause } => {
                 let what = match cause {
                     core::sim::DeathCause::Suicide => "suicide",
+                    core::sim::DeathCause::HeroExhausted => "hero_exhausted",
                     core::sim::DeathCause::DeathRegion => "region",
                     core::sim::DeathCause::Fall => "fall",
                     core::sim::DeathCause::VehicleDestroyed => "vehicle",
@@ -414,6 +472,9 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
 /// The sim is driven by a fixed idle pad: this measures the machine, and a
 /// pad-script would make runs incomparable between maps.
 pub(super) fn run_bench(v: &ViewerArgs) -> Result<()> {
+    if let Some(path) = std::env::var_os("OPENBF_BENCH_DETAIL") {
+        return detailed_bench::run(v, std::path::Path::new(&path));
+    }
     use std::time::Instant;
 
     let mut r = Renderer::new_headless(v.size.0, v.size.1).map_err(|e| anyhow!("renderer: {e}"))?;
@@ -484,6 +545,7 @@ pub(super) fn run_bench(v: &ViewerArgs) -> Result<()> {
         draws.extend(vehicle_vis.draws(&mut r, &walk.sim, &[]));
         draws.extend(deka_vis.draws(&mut r, &walk.sim));
         let skinned = vis.draws(&walk);
+        draws.extend(vis.cloth_draws(&mut r, &walk));
         battle_draws = draws.len();
         skinned_draws = skinned.len();
         // One warm-up frame: the first submit pays for pipeline warm-up and
@@ -657,16 +719,18 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
         };
         gpu.step_stations(&walk.sim);
         for (tick, pads) in log.frames().enumerate() {
+            game::heroes::scores(&mut walk.sim, &frame.feed);
             walk.step_tick(pads);
             gpu.step_stations(&walk.sim);
-            frame.fx.ingest(&walk);
+            frame.fx.ingest_posed(&walk, Some(&frame.vis));
             let effect_sounds = frame.fx.take_sounds();
             if let Some(sl) = sound_log.as_mut() {
                 sl.tick(tick, &walk, &effect_sounds);
                 sl.voice(tick, &mut walk);
             }
             frame.vis.update(&walk, core::TICK_DT);
-            let fire_points = frame.vis.fire_points(&walk);
+            let mut fire_points = frame.vis.fire_points(&walk);
+            frame.deka_vis.fire_points(&walk.sim, &mut fire_points);
             frame.fx.set_repair_origins(&fire_points);
             frame.bolts.set_fire_points(fire_points);
             frame.fx.set_jet_frames(frame.vis.jet_frames(&walk));

@@ -80,6 +80,7 @@ pub(super) fn run(args: &[String]) -> Result<()> {
             targets: false,
             ai: Some(16),
             ai_cap: None,
+            team_size_pct: None,
             tickets: 250,
             tickets_set: false,
             ticket_pct: 100,
@@ -93,6 +94,7 @@ pub(super) fn run(args: &[String]) -> Result<()> {
             mission: None,
             mission_file: None,
             player_team: 0,
+            heroes: Some(core::sim::heroes::HeroRules::default()),
         };
         let walk = super::battle::make_walk(&scene, &setup);
         (

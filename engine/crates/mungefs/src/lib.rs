@@ -193,10 +193,10 @@ fn chunks_at(mut buf: &[u8], base: usize) -> impl Iterator<Item = Result<Chunk<'
 /// inside a `lvl_` is a hashed sub-level wrapper whose children are content
 /// — a hash can happen to be printable ASCII (TAT2's hunt layer 0x2A635340 =
 /// "@Sc*"), so membership here, not `tag_is_ascii`, decides.
-const CONTENT_TAGS: &[&[u8; 4]] = &[
+pub const CONTENT_TAGS: &[&[u8; 4]] = &[
     b"entc", b"wpnc", b"ordc", b"expc", b"tex_", b"modl", b"skel", b"gmod", b"coll", b"wrld",
     b"tern", b"path", b"PATH", b"plan", b"lght", b"zaa_", b"zaf_", b"scr_", b"Locl", b"mcfg",
-    b"prim", b"fx__", b"snd_", b"font", b"anim", b"bnd_", b"shdw", b"CLTH",
+    b"prim", b"fx__", b"snd_", b"font", b"anim", b"bnd_", b"shdw", b"CLTH", b"comb",
 ];
 
 /// Collect CONTENT chunks from an opened LVL payload, flattening `lvl_`

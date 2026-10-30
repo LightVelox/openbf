@@ -182,6 +182,31 @@ struct TriMesh {
     positions: Vec<Vec3>,
     indices: Vec<u32>,
     local: Aabb,
+    /// Bounds of consecutive batches, shared by all instances of the model.
+    /// Triangle order stays unchanged (including equal-distance contacts).
+    chunks: Vec<Aabb>,
+}
+
+const TRIANGLES_PER_CHUNK: usize = 16;
+
+fn triangle_chunks(positions: &[Vec3], indices: &[u32]) -> Vec<Aabb> {
+    indices
+        .chunks(3 * TRIANGLES_PER_CHUNK)
+        .map(|chunk| {
+            let mut bounds = Aabb::empty();
+            for &i in chunk {
+                let p = positions[i as usize];
+                if !p.is_finite() {
+                    return Aabb {
+                        min: Vec3::splat(f32::NEG_INFINITY),
+                        max: Vec3::splat(f32::INFINITY),
+                    };
+                }
+                bounds.add(p);
+            }
+            bounds
+        })
+        .collect()
 }
 
 /// The point of triangle `abc` nearest `p` (Ericson, Real-Time Collision
@@ -341,6 +366,7 @@ impl CameraBlockers {
     /// One blocker per drawable instance in the scene (terrain excluded —
     /// `camera()` already floors against the heightfield).
     pub fn from_scene(scene: &Scene) -> Self {
+        let chunked = std::env::var("OPENBF_CAMERA_CHUNKS").as_deref() != Ok("0");
         let mut meshes: HashMap<String, Arc<TriMesh>> = HashMap::new();
         let mut blockers = Vec::new();
         for (ii, inst) in scene.manifest.instances.iter().enumerate() {
@@ -367,12 +393,18 @@ impl CameraBlockers {
                     .flatten()
                     .copied()
                     .collect();
+                let chunks = if chunked {
+                    triangle_chunks(&positions, &indices)
+                } else {
+                    Vec::new()
+                };
                 meshes.insert(
                     model.to_owned(),
                     Arc::new(TriMesh {
                         positions,
                         indices,
                         local,
+                        chunks,
                     }),
                 );
             }
@@ -509,6 +541,22 @@ impl Blocker {
     /// `dir` (unit) before it touches this model, placed by `inv`
     /// (world -> model).
     fn sweep(&self, inv: Mat4, from: Vec3, dir: Vec3, len: f32, radius: f32) -> Option<f32> {
+        // Empty only in diagnostic reference mode: the original complete scan.
+        if self.mesh.chunks.is_empty() {
+            self.sweep_filtered::<false>(inv, from, dir, len, radius)
+        } else {
+            self.sweep_filtered::<true>(inv, from, dir, len, radius)
+        }
+    }
+
+    fn sweep_filtered<const FILTER: bool>(
+        &self,
+        inv: Mat4,
+        from: Vec3,
+        dir: Vec3,
+        len: f32,
+        radius: f32,
+    ) -> Option<f32> {
         let o = inv.transform_point3(from);
         let d = inv.transform_vector3(dir);
         // Model units per metre along the track (1 for a rigid instance).
@@ -517,12 +565,34 @@ impl Blocker {
             return None;
         }
         let (d, r) = (d / k, radius * self.scale);
+        let end = o + d * (len * k);
+        // A broad phase only: include the triangle routine's 0.1 mm face
+        // tolerance and ample roundoff room for its quadratic edge/vertex
+        // tests. Non-finite tracks take the original complete scan.
+        let magnitude = o.abs().max(end.abs()).max_element();
+        let padding = r + 0.001 + (64.0 * f32::EPSILON).sqrt() * magnitude;
+        let lo = o.min(end) - Vec3::splat(padding);
+        let hi = o.max(end) + Vec3::splat(padding);
+        let finite = o.is_finite() && end.is_finite() && padding.is_finite();
         let mut best: Option<f32> = None;
-        for tri in self.mesh.indices.as_chunks::<3>().0 {
-            let [a, b, c] = tri.map(|i| self.mesh.positions[i as usize]);
-            let reach = best.map_or(len, |t| t) * k;
-            if let Some(hit) = sweep_sphere_tri(o, d, reach, r, a, b, c) {
-                best = Some(hit / k);
+        for (i, chunk) in self
+            .mesh
+            .indices
+            .chunks(3 * TRIANGLES_PER_CHUNK)
+            .enumerate()
+        {
+            if FILTER && finite {
+                let bounds = self.mesh.chunks[i];
+                if hi.cmplt(bounds.min).any() || lo.cmpgt(bounds.max).any() {
+                    continue;
+                }
+            }
+            for tri in chunk.as_chunks::<3>().0 {
+                let [a, b, c] = tri.map(|i| self.mesh.positions[i as usize]);
+                let reach = best.map_or(len, |t| t) * k;
+                if let Some(hit) = sweep_sphere_tri(o, d, reach, r, a, b, c) {
+                    best = Some(hit / k);
+                }
             }
         }
         best
@@ -661,10 +731,12 @@ mod tests {
         for p in &positions {
             local.add(*p);
         }
+        let chunks = triangle_chunks(&positions, &indices);
         Arc::new(TriMesh {
             positions,
             indices,
             local,
+            chunks,
         })
     }
 
@@ -936,5 +1008,64 @@ mod tests {
         let w = Aabb::transformed(local, Mat4::from_rotation_y(std::f32::consts::FRAC_PI_4));
         assert!((w.max.x - 2f32.sqrt()).abs() < 1e-5, "{w:?}");
         assert!((w.max.y - 2.0).abs() < 1e-5, "{w:?}");
+    }
+
+    #[test]
+    fn chunked_sweeps_match_the_complete_triangle_scan_bit_for_bit() {
+        let mut positions = Vec::new();
+        let mut indices = Vec::new();
+        for x in -12..=12 {
+            for z in -12..=12 {
+                let at = positions.len() as u32;
+                let (x, z) = (x as f32 * 2.0, z as f32 * 2.0);
+                positions.extend([
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(x + 1.8, 0.0, z),
+                    Vec3::new(x, 0.2, z + 1.8),
+                ]);
+                indices.extend([at, at + 1, at + 2]);
+            }
+        }
+        let mesh = mesh(positions, indices);
+        assert_eq!(mesh.chunks.len(), 40); // includes the final short batch
+        let mut hits = 0;
+        let mut misses = 0;
+        for pose in [
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(170.0, -3.0, -250.0))
+                * Mat4::from_rotation_y(0.71)
+                * Mat4::from_scale(Vec3::new(0.7, 1.3, 1.8)),
+        ] {
+            let b = Blocker::new(mesh.clone(), pose, 7, true);
+            for x in -10..=10 {
+                for y in [-0.35, 0.0, 0.15, 0.35, 1.0, 3.0] {
+                    let from = pose.transform_point3(Vec3::new(x as f32 * 2.0, y, -8.0));
+                    for delta in [
+                        Vec3::new(0.0, -2.0, 0.0),
+                        Vec3::new(0.35, -0.1, 8.0),
+                        Vec3::new(-3.0, 0.0, 8.0),
+                    ] {
+                        let end = pose.transform_point3(Vec3::new(x as f32 * 2.0, y, -8.0) + delta);
+                        let len = end.distance(from);
+                        let dir = (end - from) / len;
+                        for radius in [SIGHT_RADIUS, CAMERA_RADIUS] {
+                            let want = b.sweep_filtered::<false>(b.inv, from, dir, len, radius);
+                            let got = b.sweep(b.inv, from, dir, len, radius);
+                            assert_eq!(
+                                got.map(f32::to_bits),
+                                want.map(f32::to_bits),
+                                "{from} {dir} {len} {radius}"
+                            );
+                            if got.is_some() {
+                                hits += 1;
+                            } else {
+                                misses += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(hits > 100 && misses > 100, "{hits} hits / {misses} misses");
     }
 }

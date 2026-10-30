@@ -214,6 +214,7 @@ pub fn pick(sim: &Sim, me: UnitHandle, st: &crate::ai::AiState) -> Option<UnitHa
         .iter()
         .filter(|t| t.bot == me)
         .filter_map(|t| own(st, t.human, sim.tick).map(|c| (t.human, c)))
+        .filter(|(_, c)| crate::perception::target_admitted(sim, me, c))
         .min_by(|a, b| {
             (!a.1.seen_now)
                 .cmp(&!b.1.seen_now)

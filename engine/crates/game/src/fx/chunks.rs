@@ -110,6 +110,7 @@ struct Spec {
     trails: Vec<(String, Option<Mat4>)>,
     smoke: Vec<(String, Mat4)>,
     node: Option<Mat4>,
+    node_name: Option<String>,
 }
 
 impl Spec {
@@ -416,6 +417,42 @@ impl SideData {
                     .or_insert_with(|| v.class.hardpoints.clone());
             }
         }
+        for file in dirs
+            .iter()
+            .filter_map(|d| d.parent())
+            .map(|d| d.join("droid_chunks.ron"))
+            .filter(|p| pak::is_file(p))
+        {
+            match pak::read_to_string(&file)
+                .map_err(anyhow::Error::from)
+                .and_then(|t| {
+                    ron::from_str::<manifest::DroidChunkManifest>(&t).map_err(anyhow::Error::from)
+                }) {
+                Ok(meta) => {
+                    for c in meta.collision {
+                        if let [p] = &c.prims[..] {
+                            if let Some(prim) =
+                                crate::assets::prim_shape(p).as_ref().and_then(Prim::of)
+                            {
+                                out.prims.insert(
+                                    c.geometry.to_ascii_lowercase(),
+                                    (
+                                        prim,
+                                        crate::viewer::instance_matrix(p.rotation, p.translation),
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    out.nodes.extend(
+                        meta.nodes
+                            .into_iter()
+                            .map(|(n, nodes)| (n.to_ascii_lowercase(), nodes)),
+                    );
+                }
+                Err(e) => eprintln!("chunks {}: {e:#}", file.display()),
+            }
+        }
         out
     }
 }
@@ -448,6 +485,7 @@ pub(super) struct Chunks {
     loose: Vec<LiveEffect>,
     rng: Option<Lcg>,
     bf1: bool,
+    posed_nodes: HashMap<u32, Vec<(String, Mat4)>>,
 }
 
 impl Chunks {
@@ -469,6 +507,10 @@ impl Chunks {
             let vehicle_nodes = side
                 .classes
                 .get(&name.to_ascii_lowercase())
+                .or_else(|| {
+                    db.prop(name, "GeometryName")
+                        .and_then(|g| side.nodes.get(&g.to_ascii_lowercase()))
+                })
                 .map_or(&[][..], Vec::as_slice);
             for slot in chunk_properties(db.chain(name)) {
                 let props = &slot.props;
@@ -564,6 +606,7 @@ impl Chunks {
                         })
                         .collect(),
                     node: text("ChunkNodeName").and_then(|n| node_matrix(vehicle_nodes, n)),
+                    node_name: text("ChunkNodeName").map(|n| n.trim().to_owned()),
                 }));
             }
             if !specs.is_empty() {
@@ -571,6 +614,16 @@ impl Chunks {
             }
         }
         out
+    }
+
+    pub(super) fn pose_bursts(&mut self, walk: &WalkSim, vis: &crate::soldier_vis::SoldierVisuals) {
+        self.posed_nodes.clear();
+        for e in &walk.sim.events {
+            if let Event::DroidBurst { unit, .. } = e {
+                self.posed_nodes
+                    .insert(unit.index, vis.chunk_nodes(walk, *unit));
+            }
+        }
     }
 
     pub(super) fn tick(&mut self, walk: &WalkSim, lib: Option<&Library>) {
@@ -614,7 +667,8 @@ impl Chunks {
                 } => {
                     let name = &walk.teams[usize::from(*team).min(1)].class(*class).name;
                     let u = &walk.sim.units[unit.index as usize];
-                    self.launch(
+                    let nodes = self.posed_nodes.remove(&unit.index);
+                    self.launch_posed(
                         name,
                         u.soldier.pos,
                         u.soldier.vel,
@@ -622,6 +676,7 @@ impl Chunks {
                         1.0,
                         *scale,
                         lib,
+                        nodes.as_deref(),
                     );
                 }
                 Event::VehicleDestroyed {
@@ -662,13 +717,39 @@ impl Chunks {
         scale: f32,
         lib: Option<&Library>,
     ) {
+        self.launch_posed(name, pos, velocity, rot, radius, scale, lib, None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn launch_posed(
+        &mut self,
+        name: &str,
+        pos: Vec3,
+        velocity: Vec3,
+        rot: Quat,
+        radius: f32,
+        scale: f32,
+        lib: Option<&Library>,
+        nodes: Option<&[(String, Mat4)]>,
+    ) {
         let Some(specs) = self.defs.get(name) else {
             return;
         };
         let start = Mat4::from_rotation_translation(rot, pos);
         let bodies: Vec<Mat4> = specs
             .iter()
-            .map(|s| start * s.node.unwrap_or(Mat4::IDENTITY) * s.local)
+            .map(|s| {
+                let posed = s.node_name.as_deref().and_then(|name| {
+                    // Only pieces with baked launch frames opt into posed bones.
+                    // Native battle-droid pieces keep their existing origin.
+                    s.node?;
+                    nodes?
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                        .map(|(_, m)| *m)
+                });
+                start * posed.or(s.node).unwrap_or(Mat4::IDENTITY) * s.local
+            })
             .collect();
         let centre = bodies.iter().map(|b| b.w_axis.truncate()).sum::<Vec3>() / specs.len() as f32;
         let rng = self.rng.get_or_insert(Lcg(0xdeb1_5eed));
@@ -778,6 +859,7 @@ impl Chunks {
     pub(super) fn clear(&mut self) {
         self.live.clear();
         self.loose.clear();
+        self.posed_nodes.clear();
     }
 }
 

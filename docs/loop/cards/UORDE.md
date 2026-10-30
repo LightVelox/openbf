@@ -11,7 +11,7 @@ declares: sim; sweep; arena
 needs: the H2 PS2 checks (lead_tmp/uord/helpers/H2_emitter.md) and an 8 x 32 sweep 256 / 256; the deflection / buff keys are uncracked (burn traced 2026-10-30)
 effort:
 branch: uord-missiles
-resume: 2026-10-30: implementation LANDED on branch uord-missiles (70da755 + uncommitted tree) - the emitterordnance class, the BF1 / BF2 query law, the soldier_shots dispatch, one Event::Emitter per link and the lightning-arc renderer, with 22 core tests and the game arc test. Burn (traced in the BF2 decomp), the shot flame effect and the burn bone effects landed later the same day. Status stays blocked: deflection / per-hit buffs / pull have no RE model, and the mutation check and the 8 x 32 sweep are not run. Restore the H2 checks first; the PS2-side files are absent (Test-Path false).
+resume: 2026-10-30: implementation LANDED on branch uord-missiles (70da755 through 1b1e72b, pull request #84) - the emitterordnance class, the BF1 / BF2 query law, the soldier_shots dispatch, one Event::Emitter per link and the lightning-arc renderer, with 22 core tests and the game arc test. Burn (traced in the BF2 decomp), the shot flame effect and the burn bone effects landed later the same day. Status stays blocked: deflection / per-hit buffs / pull have no RE model, and the mutation check and the 8 x 32 sweep are not run. Restore the H2 checks first; the PS2-side files are absent (Test-Path false).
 created: 2026-10-22
 ---
 ## Why
@@ -31,7 +31,7 @@ analysis/re-ordnance-kinds.md §8 (card UORD; full reading lead_tmp/uord/helpers
 - Visual only (no sim): the lightning segments, BF2's extra arcs, the flame effect, the burn bone effects.
 - Named-deviation candidates (H2 §6): BF1's missing front test, its feet-point cone test, its dead scale keys, corpses as targets - measure on the PS2 before keeping or dropping any.
 
-## What landed 2026-10-30 (branch `uord-missiles`, 70da755 + uncommitted tree)
+## What landed 2026-10-30 (branch `uord-missiles`, 70da755 through 1b1e72b, pull request #84)
 An `emitterordnance` class is now one instant query per shot, not a bolt. Line numbers are the working tree's.
 
 - **The class** (`engine/crates/core/src/weapon/emitter.rs:27-95`): `EmitterOrdnance` reads `ConeLength`,

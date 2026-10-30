@@ -10,6 +10,8 @@ use crate::soldier::{GroundRules, Soldier, SoldierConstants, Stance};
 use crate::weapon::{Health, HealthType, WeaponClass, WeaponState};
 use glam::Vec3;
 
+mod melee;
+
 /// Where a bot's next life starts (card BSPN; re-command-walker-post §6
 /// [O]): one of the sim's command posts by index, or a live command walker —
 /// a post like any other to the PS2's draw.
@@ -240,6 +242,8 @@ pub struct HeldWeapon {
 
 #[derive(Clone, Debug)]
 pub struct Unit {
+    pub choked: Option<crate::hero_weapon::Choked>,
+    pub burn: Option<crate::hero_weapon::Burn>,
     pub gen: u32,
     pub alive: bool,
     pub team: u8,
@@ -362,7 +366,6 @@ pub struct Unit {
     /// BF2's timed offense / defense buffs (card PWUP, `sim/pickups.rs`).
     /// HASHED only while one runs.
     pub buffs: crate::sim::Buffs,
-    pub burn: Option<crate::sim::Burn>,
     pub cloak: crate::cloak::CloakState,
     /// The zoom of the weapon in hand, `None` when not zoomed: every bot,
     /// always. HASHED only when `Some`, so a round nobody zooms in hashes as
@@ -579,6 +582,11 @@ impl Unit {
         self.weapon.hash_into(eat);
         self.ai.hash_into(eat);
         self.aim.hash_into(eat);
+        // Humans (including the proxy) use the current error direction;
+        // only bots interpolate from the previous one (gunner_foot::error_dir).
+        if !self.is_human() {
+            self.aim.hash_history_into(eat);
+        }
         eat(&self.respawn_at.unwrap_or(u64::MAX).to_le_bytes());
         let (w, s) = self.spawn_slot.unwrap_or((u32::MAX, u32::MAX));
         eat(&w.to_le_bytes());
@@ -644,12 +652,17 @@ impl Unit {
         if let Some(m) = self.mount {
             m.hash_into(eat);
         }
+        if let Some(choked) = self.choked {
+            eat(b"CHOKED");
+            eat(&choked.left.to_bits().to_le_bytes());
+            eat(&choked.age.to_bits().to_le_bytes());
+        }
+        if let Some(burn) = self.burn {
+            burn.hash_into(eat);
+        }
         self.cloak.hash_into(eat);
         if self.buffs.active() {
             self.buffs.hash_into(eat);
-        }
-        if let Some(b) = &self.burn {
-            b.hash_into(eat);
         }
         if let Some(z) = self.zoom {
             eat(&[0x5a, z.step, z.scope as u8]);
@@ -824,7 +837,7 @@ pub(crate) fn ray_sphere(o: Vec3, d: Vec3, c: Vec3, r: f32) -> Option<f32> {
 }
 
 /// An upright cylinder of radius `r` and half height `hh` centred `c`.
-fn ray_upright_cylinder(o: Vec3, d: Vec3, c: Vec3, r: f32, hh: f32) -> Option<f32> {
+pub(crate) fn ray_upright_cylinder(o: Vec3, d: Vec3, c: Vec3, r: f32, hh: f32) -> Option<f32> {
     let (lo, hi) = (c.y - hh, c.y + hh);
     let (mx, mz) = (o.x - c.x, o.z - c.z);
     let a = d.x * d.x + d.z * d.z;
@@ -860,7 +873,14 @@ fn ray_upright_cylinder(o: Vec3, d: Vec3, c: Vec3, r: f32, hh: f32) -> Option<f3
 }
 
 /// A box of half extents `half` (along `right`, up, `fwd`) centred `c`.
-fn ray_yawed_box(o: Vec3, d: Vec3, c: Vec3, right: Vec3, fwd: Vec3, half: Vec3) -> Option<f32> {
+pub(crate) fn ray_yawed_box(
+    o: Vec3,
+    d: Vec3,
+    c: Vec3,
+    right: Vec3,
+    fwd: Vec3,
+    half: Vec3,
+) -> Option<f32> {
     let m = o - c;
     let (lo, ld) = (
         Vec3::new(m.dot(right), m.y, m.dot(fwd)),
@@ -1098,6 +1118,17 @@ impl AimBlock {
             eat(&v.to_bits().to_le_bytes());
         }
     }
+
+    /// Extra state only for units whose next aim interpolates this history.
+    /// Keeping it separate preserves the legacy human/default hash format.
+    fn hash_history_into(&self, eat: &mut impl FnMut(&[u8])) {
+        if self.from != Vec3::ZERO {
+            eat(b"AIM_FROM");
+            for v in self.from.to_array() {
+                eat(&v.to_bits().to_le_bytes());
+            }
+        }
+    }
 }
 
 /// How to build a unit (class constants resolved by the game layer).
@@ -1211,6 +1242,8 @@ impl UnitSpec {
             w.state.active = Some(i) == cur1;
         }
         Unit {
+            choked: None,
+            burn: None,
             gen,
             alive: true,
             team: self.team,
@@ -1248,7 +1281,6 @@ impl UnitSpec {
             order: None,
             mount: None,
             buffs: crate::sim::Buffs::default(),
-            burn: None,
             cloak: crate::cloak::CloakState::default(),
             zoom: None,
             droideka: self.droideka.as_ref().map(|c| {
@@ -1447,8 +1479,8 @@ mod tests {
         );
     }
 
-    /// Every one of the twelve floats `hash_into` eats moves the hash (`dir`
-    /// and `from` are not: every think writes them from `quat`).
+    /// The legacy twelve fields each move the block hash. Current `dir` is
+    /// derived from `quat`; bot-only history is tested separately below.
     #[test]
     fn the_aim_block_is_hashed_field_by_field() {
         let hash = |b: &AimBlock| {
@@ -1480,4 +1512,5 @@ mod tests {
             seen.push(h);
         }
     }
+    mod audit;
 }

@@ -31,6 +31,10 @@ pub(super) struct World {
 }
 
 pub(super) fn world(map: &str, factions: [&str; 2]) -> Option<World> {
+    world_mode(map, factions, "con")
+}
+
+pub(super) fn world_mode(map: &str, factions: [&str; 2], mode: &str) -> Option<World> {
     let root = game::assets::baked_root();
     let dir = root.join(map);
     if !dir.join("manifest.ron").exists() {
@@ -38,7 +42,7 @@ pub(super) fn world(map: &str, factions: [&str; 2]) -> Option<World> {
         return None;
     }
     let mut scene = game::assets::load_scene(&dir).expect("load scene");
-    scene.apply_mode_layer("con");
+    scene.apply_mode_layer(mode);
     scene.merge_common(
         game::assets::load_common(&root.join(format!("common_{}", scene.manifest.source_game)))
             .expect("common assets"),

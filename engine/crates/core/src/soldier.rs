@@ -59,10 +59,21 @@ pub const CONTROL_SPEED: [[f32; 3]; 8] = [
     [0.0, 0.0, 0.1],   // tumble / get-up / dead
 ];
 
+/// Active BF2 melee movement returned by weapon vtable +0x6c.
+#[derive(Debug, Clone, Copy)]
+pub struct MotionTarget {
+    /// Local forward/right values: ground desired m/s; air acceleration m/s².
+    pub forward: f32,
+    pub strafe: f32,
+    pub weight: f32,
+}
+
 /// Soldier tuning, ODF-loadable (BF2 EntitySoldierClass ctor defaults; the
 /// game layer overrides from baked classes.ron via ClassDb).
 #[derive(Debug, Clone, Copy)]
 pub struct SoldierConstants {
+    /// Active weapon's per-tick movement output (BF2 vtable +0x6c).
+    pub motion_target: Option<MotionTarget>,
     pub immune_to_mines: bool,
     pub max_speed: f32,
     pub max_strafe_speed: f32,
@@ -79,6 +90,8 @@ pub struct SoldierConstants {
     pub energy_bar: f32,
     pub energy_restore: f32,
     pub energy_restore_idle: f32,
+    /// Per-tick active weapon override, after the stance chooses its rate.
+    pub energy_override: Option<f32>,
     pub energy_drain_sprint: f32,
     pub energy_cost_jump: f32,
     pub energy_cost_jump_sprint: f32,
@@ -142,6 +155,7 @@ pub struct SoldierConstants {
 impl Default for SoldierConstants {
     fn default() -> Self {
         Self {
+            motion_target: None,
             immune_to_mines: false,
             max_speed: 9.0,
             max_strafe_speed: 7.0,
@@ -156,6 +170,7 @@ impl Default for SoldierConstants {
             energy_bar: 100.0,
             energy_restore: 10.0,
             energy_restore_idle: 15.0,
+            energy_override: None,
             energy_drain_sprint: 20.0,
             energy_cost_jump: 10.0,
             energy_cost_jump_sprint: 30.0,
@@ -789,7 +804,7 @@ impl Soldier {
     /// The energy bar's take (BF2 FUN_001e2010, re-stance-roll.md §4.3d): a
     /// cost of 0 always passes; a depleted bar refuses; a bar that cannot
     /// cover the cost is emptied and marked depleted.
-    fn pay_energy(&mut self, cost: f32) -> bool {
+    pub(crate) fn pay_energy(&mut self, cost: f32) -> bool {
         if cost <= 0.0 {
             return true;
         }
@@ -1065,7 +1080,13 @@ impl Soldier {
         }
 
         // ── Energy (BF2 pool; restore idle vs moving) ─────────────────────
-        if self.stance == Stance::Sprint {
+        if let Some(rate) = c.energy_override {
+            if rate < 0.0 {
+                self.pay_energy(-rate * dt);
+            } else {
+                self.energy += rate * dt;
+            }
+        } else if self.stance == Stance::Sprint {
             self.energy -= c.energy_drain_sprint * dt;
         } else if self.stance.jetting() {
             // BF2's rate is 0 from stance 4 up (re-stance-roll.md §4.3d): a
@@ -1077,7 +1098,11 @@ impl Soldier {
             } else {
                 c.energy_restore
             };
-            self.energy += rate * dt;
+            if rate < 0.0 {
+                self.pay_energy(-rate * dt);
+            } else {
+                self.energy += rate * dt;
+            }
         }
         self.energy = self.energy.clamp(0.0, c.energy_bar);
         if self.energy_depleted && self.energy >= ENERGY_RECOVER_THRESHOLD {
@@ -1104,8 +1129,26 @@ impl Soldier {
         } else {
             c.max_strafe_speed * ctl[0]
         };
-        let target_fwd = fwd_in * fwd_cap;
-        let target_strafe = strafe_in * c.max_strafe_speed * ctl[1];
+        let mut target_fwd = fwd_in * fwd_cap;
+        let mut target_strafe = strafe_in * c.max_strafe_speed * ctl[1];
+        // Native cases 0..3 blend desired locomotion before acceleration.
+        // Roll and the jet states keep their own movers.
+        if rules == GroundRules::Bf2
+            && matches!(
+                self.stance,
+                Stance::Stand | Stance::Crouch | Stance::Prone | Stance::Sprint
+            )
+        {
+            if let Some(motion) = c.motion_target.filter(|m| m.weight > 0.0) {
+                if motion.weight >= 1.0 {
+                    target_fwd = motion.forward;
+                    target_strafe = motion.strafe;
+                } else {
+                    target_fwd += (motion.forward - target_fwd) * motion.weight;
+                    target_strafe += (motion.strafe - target_strafe) * motion.weight;
+                }
+            }
+        }
 
         // The axes lie in the plane of the last floor contact (BF2
         // FUN_002480a0: T1 = R x N, T2 = N x T1; mirrored for the port's
@@ -1566,8 +1609,16 @@ impl Soldier {
         match rules {
             GroundRules::Bf2 => {
                 self.vel *= fmath::exp(-AIR_DRAG * self.vel.length() * dt);
-                self.vel += t1 * (fwd_in * ctl[0] * c.acceleration * dt)
-                    + t2 * (strafe_in * ctl[1] * c.acceleration * dt);
+                if let Some(motion) = c.motion_target.filter(|m| m.weight > 0.0) {
+                    // Native cases 4/8/9 replace the stick acceleration;
+                    // this output is neither a velocity cap nor a lerp.
+                    let weight = motion.weight.min(1.0);
+                    self.vel +=
+                        t1 * (motion.forward * weight * dt) + t2 * (motion.strafe * weight * dt);
+                } else {
+                    self.vel += t1 * (fwd_in * ctl[0] * c.acceleration * dt)
+                        + t2 * (strafe_in * ctl[1] * c.acceleration * dt);
+                }
             }
             GroundRules::Bf1 => {
                 let air = if took_off { 1.0 } else { BF1_AIR_ACCEL };

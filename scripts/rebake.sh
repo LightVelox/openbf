@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Rebake every baked asset the engine ships with, from the local extracted
-# discs. Output goes to engine/assets_baked/ (gitignored). Run from anywhere:
+# discs. Output goes to engine/assets_baked/ (gitignored), or to $REBAKE_OUT
+# when set (a staging tree). Run from anywhere:
 #
 #   scripts/rebake.sh            # everything
 #   scripts/rebake.sh tat1 side  # only the named groups
@@ -31,7 +32,7 @@ S2="$E/bf2/sound/DATA/_LVL_PS2"
 # sound LVLs are then beside the rest.
 [ -d "$S1" ] || S1="$B1"
 [ -d "$S2" ] || S2="$B2"
-OUT="$ROOT/engine/assets_baked"
+OUT="${REBAKE_OUT:-$ROOT/engine/assets_baked}"
 
 # Classic-plus tier 2: the maintainer's PC SWBF2 install. Any texture the PC ships
 # LARGER than the PS2 one adds an optional tier; the PS2 base is preserved
@@ -143,7 +144,9 @@ if want side; then
   clean "$OUT/side_bf1/soldiers" "$OUT/side_bf1/weapons" "$OUT/side_bf1/textures" \
         "$OUT/side_bf2/soldiers" "$OUT/side_bf2/weapons" "$OUT/side_bf2/textures" \
         "$OUT/side_bf1/vehicles" "$OUT/side_bf2/vehicles" \
-        "$OUT/side_bf1/effects" "$OUT/side_bf2/effects"
+        "$OUT/side_bf1/effects" "$OUT/side_bf2/effects" \
+        "$OUT/side_bf1/droid_chunks" "$OUT/side_bf2/droid_chunks" \
+        "$OUT/droid_effects" "$OUT/classes/droid_chunks.ron"
   # EVERY soldier geometry and every PRIMARY-weapon geometry named by the four
   # default class lists (game::roster::DEFAULT_CLASSES) or by any of the 57
   # mission RONs' per-team class mixes, deduped and grouped by the side LVL
@@ -169,6 +172,12 @@ if want side; then
   BF1_ANIMS="$A1" "$BAKE" soldier "$B2/SIDE/CIS.LVL" cis_inf_bdroid,cis_inf_magnaguard,cis_inf_sbdroid "$OUT/side_bf2" "$B2/INGAME.LVL" ${PCSIDE_CIS:+"$PCSIDE_CIS"}
   BF1_ANIMS="$A1" "$BAKE" soldier "$B2/SIDE/ALL.LVL" all_inf_bothanspy,all_inf_engineer,all_inf_marksperson,all_inf_markspersonsnow,all_inf_snowtrooper,all_inf_soldier,all_inf_tantive4trooper,all_inf_vanguard,all_inf_wookie "$OUT/side_bf2" "$B2/INGAME.LVL"
   BF1_ANIMS="$A1" "$BAKE" soldier "$B2/SIDE/IMP.LVL" imp_inf_atatcommander,imp_inf_atatpilot,imp_inf_darktrooper,imp_inf_gunner,imp_inf_scout,imp_inf_shocktrooper,imp_inf_snowtrooper,imp_inf_stormtrooper "$OUT/side_bf2" "$B2/INGAME.LVL"
+  # Every BF2 hero body, cloth, weapon, HUD icon and blade sheet comes from
+  # its class references, including the campaign variants.
+  BF1_ANIMS="$A1" "$BAKE" heroes "$B2" "$OUT/side_bf2"
+  for s in ALL IMP REP CIS TUR DES WOK GAM EWK GEO; do
+    "$BAKE" combos "$B2/SIDE/$s.LVL" "$OUT/side_bf2/combos/$(echo "$s" | tr 'A-Z' 'a-z').ron"
+  done
   # BF2's pistols are baked for the HUD's weapon row (card HUDW): the PS2
   # shows a weapon's own model there, and every BF2 side's second weapon is
   # its pistol (IMP's has been baked since the officer's primary names it).
@@ -178,9 +187,15 @@ if want side; then
   "$BAKE" weapon  "$B1/SIDE/ALL.LVL" all_weap_inf_bowcaster,all_weap_inf_fusioncutter,all_weap_inf_launcher,all_weap_inf_pistol,all_weap_inf_rifle,all_weap_inf_seeker,all_weap_inf_sniperrifle "$OUT/side_bf1"
   "$BAKE" weapon  "$B1/SIDE/IMP.LVL" imp_weap_inf_fusioncutter,imp_weap_inf_launcher,imp_weap_inf_pistol,imp_weap_inf_rifle,imp_weap_inf_sniperrifle "$OUT/side_bf1"
   "$BAKE" weapon  "$B1/SIDE/REP.LVL" rep_weap_inf_fusioncutter,rep_weap_inf_launcher,rep_weap_inf_pistol,rep_weap_inf_rifle,rep_weap_inf_sniperrifle,rep_weap_inf_landmine "$OUT/side_bf1"
-  "$BAKE" weapon  "$B1/SIDE/CIS.LVL" cis_weap_inf_fusioncutter,cis_weap_inf_launcher,cis_weap_inf_pistol,cis_weap_inf_sniperrifle,bdroid_chunk1,bdroid_chunk2,bdroid_chunk3,bdroid_chunk4,bdroid_chunk5,sbdroid_chunk1,sbdroid_chunk2,sbdroid_chunk3,sbdroid_chunk4,sbdroid_chunk5 "$OUT/side_bf1"
+  "$BAKE" weapon  "$B1/SIDE/CIS.LVL" cis_weap_inf_fusioncutter,cis_weap_inf_launcher,cis_weap_inf_pistol,cis_weap_inf_sniperrifle "$OUT/side_bf1"
   "$BAKE" weapon  "$B2/SIDE/REP.LVL" rep_weap_inf_chaingun,rep_weap_inf_fusioncutter,rep_weap_inf_launcher,rep_weap_inf_pistol,rep_weap_inf_rifle,rep_weap_inf_sniperrifle "$OUT/side_bf2" ${PCSIDE_REP:+"$PCSIDE_REP"}
-  "$BAKE" weapon  "$B2/SIDE/CIS.LVL" bdroid_chunk1,bdroid_chunk2,bdroid_chunk3,bdroid_chunk4,bdroid_chunk5,cis_weap_inf_fusioncutter,cis_weap_inf_launcher,cis_weap_inf_pistol,cis_weap_inf_rifle,cis_weap_inf_sniperrifle,hud_cis_wristblaster,hud_cis_trishot,hud_cis_wristrocket "$OUT/side_bf2" ${PCSIDE_CIS:+"$PCSIDE_CIS"}
+  "$BAKE" weapon  "$B2/SIDE/CIS.LVL" cis_weap_inf_fusioncutter,cis_weap_inf_launcher,cis_weap_inf_pistol,cis_weap_inf_rifle,cis_weap_inf_sniperrifle,hud_cis_wristblaster,hud_cis_trishot,hud_cis_wristrocket,hud_droideka_shield "$OUT/side_bf2" ${PCSIDE_CIS:+"$PCSIDE_CIS"}
+  # [ours] BF1 SBD chunks on both games; reproducible Magnaguard mesh cuts.
+  # Every droid chunk model goes through here, never `bake weapon`: its sheets
+  # get an `openbf_droid_` name, so no living soldier's sheet is overwritten
+  # (a chunk's weapon bake made the battle droid's sheet opaque). After the
+  # soldier bake: the Magnaguard cuts draw its living sheets.
+  "$BAKE" droid-chunks "$B1/SIDE/CIS.LVL" "$B2/SIDE/CIS.LVL" "$A1" "$OUT" ${PCSIDE_CIS:+"$PCSIDE_CIS"}
   "$BAKE" weapon  "$B2/SIDE/ALL.LVL" all_weap_inf_bowcaster,all_weap_inf_fusioncutter,all_weap_inf_launcher,all_weap_inf_pistol,all_weap_inf_rifle,all_weap_inf_seeker,all_weap_inf_sniperrifle "$OUT/side_bf2"
   "$BAKE" weapon  "$B2/SIDE/IMP.LVL" imp_weap_inf_fusioncutter,imp_weap_inf_launcher,imp_weap_inf_pistol,imp_weap_inf_rifle,imp_weap_inf_sniperrifle "$OUT/side_bf2"
   # The torpedo launcher's model is SHARED, not per-side: BF1 IMP/REP/CIS's

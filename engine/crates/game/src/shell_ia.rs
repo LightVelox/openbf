@@ -59,6 +59,7 @@ pub fn instant_action(
     });
     let options = SessionOptions {
         difficulty: ia_level(difficulty),
+        population_table: crate::conquest_defaults::TABLE,
         ..Default::default()
     };
     InstantAction::new(maps, texts, options)
@@ -115,5 +116,11 @@ mod tests {
             .map(|r| r.text.as_str())
             .collect();
         assert!(dimmed.iter().all(|t| t.starts_with("Space ")), "{dimmed:?}");
+        assert_eq!(ia.options.population_table.len(), 61);
+        let help = ia
+            .options
+            .population_help(ui::shell::Opt::ConNumBots)
+            .unwrap();
+        assert!(help.starts_with("Average team size: 20 units\n"), "{help}");
     }
 }

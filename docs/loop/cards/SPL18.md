@@ -1,6 +1,6 @@
 ---
 id: SPL18
-title: Split ui/src/shell.rs (1944 lines, 56 under the 2,000 strict cap)
+title: Split ui/src/shell.rs (2,009 lines; strict size hold)
 milestone: M0
 value: 2
 phase: cleanup

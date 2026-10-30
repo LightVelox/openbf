@@ -487,6 +487,59 @@ pub struct Body {
 }
 
 impl Body {
+    /// Native blade query: primitive bounds expand by width and the ray
+    /// moves back by width without extending its length (B2 0016a710).
+    /// Mesh primitives take the unexpanded ray (00160d60 -> 00166328).
+    pub fn blade_contact(&self, start: Vec3, end: Vec3, radius: f32) -> bool {
+        self.blade_contact_at(start, end, radius).is_some()
+    }
+
+    /// The contact's distance from `start` along the blade, as
+    /// [`crate::unit::BoltPrims::melee_contact`] measures it.
+    pub fn blade_contact_at(&self, start: Vec3, end: Vec3, radius: f32) -> Option<f32> {
+        let delta = end - start;
+        let length = delta.length();
+        if !length.is_finite() || length <= 0.0 || !radius.is_finite() || radius < 0.0 {
+            return None;
+        }
+        let dir = self.to_local.transform_vector3(delta / length);
+        let mut from = self.to_local.transform_point3(start);
+        if let Shape::Mesh(_) = &self.shape {
+            let ray = parry3d::query::Ray::new(super::point(from), vector(dir));
+            return self
+                .shape
+                .cast_local(&ray, length)
+                .map(|hit| hit.time_of_impact)
+                .filter(|&t| t < length);
+        }
+        from -= dir * radius;
+        let contact = match &self.shape {
+            Shape::Sphere { radius: r } => {
+                crate::unit::ray_sphere(from, dir, Vec3::ZERO, r + radius)
+            }
+            Shape::Cylinder {
+                radius: r,
+                half_height,
+            } => crate::unit::ray_upright_cylinder(
+                from,
+                dir,
+                Vec3::ZERO,
+                r + radius,
+                half_height + radius,
+            ),
+            Shape::Box { half } => crate::unit::ray_yawed_box(
+                from,
+                dir,
+                Vec3::ZERO,
+                Vec3::X,
+                Vec3::Z,
+                *half + Vec3::splat(radius),
+            ),
+            Shape::Mesh(_) => unreachable!(),
+        };
+        contact.filter(|&t| t == 0.0 || t < length)
+    }
+
     /// A body in EVERY layer — the PS2's default for a body no collision
     /// property names (RE §0.3), and the semantics every fixture in this
     /// module was written under.
@@ -1264,5 +1317,49 @@ mod tests {
         assert!(c
             .ray_hit(Vec3::new(0.0, 1.0, -40.0), Vec3::NEG_Z, 100.0)
             .is_none());
+    }
+    #[test]
+    fn blade_primitive_width_moves_the_ray_and_preserves_native_length() {
+        let body = Body::new(Mat4::IDENTITY, Shape::Sphere { radius: 1.0 });
+        let start = Vec3::new(0.0, 0.0, -2.0);
+        assert!(!body.blade_contact(start, start + Vec3::Z * 0.85, 0.25));
+        assert!(body.blade_contact(start, start + Vec3::Z * 1.01, 0.25));
+        assert!(body.blade_contact(Vec3::ZERO, Vec3::Z * 0.01, 0.25));
+    }
+
+    #[test]
+    fn blade_queries_expand_box_corners_and_cylinder_flat_caps() {
+        for shape in [
+            Shape::Box { half: Vec3::ONE },
+            Shape::Cylinder {
+                radius: 1.0,
+                half_height: 1.0,
+            },
+        ] {
+            let matrix = Mat4::from_translation(Vec3::new(2.0, 3.0, -4.0))
+                * Mat4::from_rotation_y(0.3)
+                * Mat4::from_rotation_x(-0.5);
+            let body = Body::new(matrix, shape);
+            let a = matrix.transform_point3(Vec3::new(1.15, 1.15, -3.0));
+            let b = matrix.transform_point3(Vec3::new(1.15, 1.15, 3.0));
+            // The native expanded bounds include this square corner. A
+            // rounded Minkowski capsule is too narrow at the diagonal.
+            assert!(body.blade_contact(a, b, 0.2));
+            let a = matrix.transform_point3(Vec3::new(1.21, 1.15, -3.0));
+            let b = matrix.transform_point3(Vec3::new(1.21, 1.15, 3.0));
+            assert!(!body.blade_contact(a, b, 0.2));
+        }
+    }
+
+    #[test]
+    fn blade_mesh_branch_ignores_width_as_the_native_mesh_vtable_does() {
+        let mesh = trimesh(
+            &[[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]],
+            &[0, 1, 2],
+        )
+        .unwrap();
+        let body = Body::new(Mat4::IDENTITY, Shape::Mesh(mesh));
+        assert!(body.blade_contact(Vec3::NEG_Z, Vec3::Z, 0.5));
+        assert!(!body.blade_contact(Vec3::new(0.8, 0.0, -1.0), Vec3::new(0.8, 0.0, 1.0), 0.5));
     }
 }

@@ -1,0 +1,268 @@
+//! Opt-in real-content benchmark. No timing or observation feeds the sim.
+//! `OPENBF_BENCH_DETAIL=out.json game --bench ...` writes raw tick/frame rows.
+//! Zero frames measures only the sim, without creating a graphics device.
+
+use super::*;
+use serde_json::json;
+use std::time::Instant;
+
+// CLOCK_THREAD_CPUTIME_ID excludes scheduler waits. Other platforms retain wall
+// samples and report no CPU samples, rather than relabeling wall time as CPU.
+#[cfg(target_os = "linux")]
+fn cpu_ms() -> Option<f64> {
+    #[repr(C)]
+    struct Timespec {
+        sec: std::ffi::c_long,
+        ns: std::ffi::c_long,
+    }
+    unsafe extern "C" {
+        fn clock_gettime(clock: std::ffi::c_int, time: *mut Timespec) -> std::ffi::c_int;
+    }
+    let mut t = Timespec { sec: 0, ns: 0 };
+    // SAFETY: a writable ABI-compatible timespec; Linux clock id 3 is thread CPU.
+    (unsafe { clock_gettime(3, &mut t) } == 0).then_some(t.sec as f64 * 1000.0 + t.ns as f64 / 1e6)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cpu_ms() -> Option<f64> {
+    None
+}
+
+#[inline(never)]
+fn measured_tick(walk: &mut WalkSim, pad: &[core::sim::PadState]) {
+    walk.step_tick(pad);
+}
+
+fn ms(t: Instant) -> f64 {
+    t.elapsed().as_secs_f64() * 1000.0
+}
+
+pub(super) fn run(v: &ViewerArgs, output: &std::path::Path) -> Result<()> {
+    let t = Instant::now();
+    let (scene, load) = game::assets::load_battle_scene(&v.map, &v.mode)?;
+    if let Some((path, Err(e))) = &load.common {
+        return Err(anyhow!("common assets {}: {e:#}", path.display()));
+    }
+    let load_ms = ms(t);
+    let setup = BattleSetup::from_args(v, v.seed)?;
+    let t = Instant::now();
+    let total = std::env::var_os("OPENBF_BENCH_TOTAL_PER_SIDE").is_some();
+    let counts = if total {
+        let n =
+            v.ai.filter(|&n| n > 0)
+                .context("total population requires --ai > 0")?;
+        let mut counts = [n; 2];
+        counts[usize::from(setup.player_team.min(1))] -= 1;
+        Some(counts)
+    } else {
+        None
+    };
+    let mut walk = super::super::battle::make_walk_with_counts(&scene, &setup, counts);
+    let setup_ms = ms(t);
+    let initial_alive = alive(&walk);
+    if total {
+        anyhow::ensure!(
+            initial_alive == [v.ai.unwrap() as usize; 2],
+            "opening population mismatch: {initial_alive:?}"
+        );
+    }
+    let initial_hash = format!("{:016x}", walk.sim.hash());
+    let pad = [core::sim::PadState::default()];
+    let mut ticks = Vec::with_capacity(v.bench_ticks as usize);
+    let mut hashes = Vec::new();
+    let mut cameras = Vec::new();
+    for k in 0..v.bench_ticks {
+        let t = Instant::now();
+        let cpu = cpu_ms();
+        measured_tick(&mut walk, &pad);
+        let cpu = cpu.zip(cpu_ms()).map(|(a, b)| b - a);
+        let wall = ms(t);
+        ticks.push(json!({"tick": k + 1, "wall_ms": wall, "cpu_ms": cpu}));
+        if (k + 1) % 30 == 0 || k + 1 == v.bench_ticks {
+            hashes.push(json!([k + 1, format!("{:016x}", walk.sim.hash())]));
+            let cam = walk.camera();
+            cameras.push(json!([
+                k + 1,
+                cam.position.to_array().map(f32::to_bits),
+                cam.yaw.to_bits(),
+                cam.pitch.to_bits(),
+                cam.fov_y.to_bits()
+            ]));
+        }
+    }
+    let sim_hash = format!("{:016x}", walk.sim.hash());
+    let mut report = json!({
+        "schema": 2, "map": v.map, "seed": v.seed, "size": [v.size.0, v.size.1],
+        "ai": v.ai, "initial_alive": initial_alive, "alive_after_sim": alive(&walk),
+        "total_per_side": total,
+        "native_alive": walk.sim.units.iter().filter(|u| u.alive && u.team >= 2).count(),
+        "vehicles_alive": walk.sim.vehicles.iter().filter(|v| v.alive).count(),
+        "initial_hash": initial_hash, "sim_hash": sim_hash, "tick_hashes": hashes,
+        "camera_samples": cameras,
+        "load_ms": load_ms, "setup_ms": setup_ms, "ticks": ticks,
+        "leaf_groups": scene.manifest.leaf.len(),
+        "falling_leaves": scene.manifest.leaf.iter().map(|l| u32::from(l.falling_count)).sum::<u32>(),
+    });
+    if v.bench_frames > 0 {
+        render(v, &scene, &setup, &mut walk, &mut report)?;
+    }
+    std::fs::write(output, serde_json::to_vec(&report)?)?;
+    println!("detailed bench {}: sim hash {sim_hash}", output.display());
+    Ok(())
+}
+
+fn alive(walk: &WalkSim) -> [usize; 2] {
+    [0, 1].map(|team| {
+        walk.sim
+            .units
+            .iter()
+            .filter(|u| u.alive && u.team == team)
+            .count()
+    })
+}
+
+fn render(
+    v: &ViewerArgs,
+    scene: &game::assets::Scene,
+    setup: &BattleSetup,
+    walk: &mut WalkSim,
+    report: &mut serde_json::Value,
+) -> Result<()> {
+    render::made::enable(true);
+    let t = Instant::now();
+    let mut r = Renderer::new_headless(v.size.0, v.size.1).map_err(|e| anyhow!("{e}"))?;
+    r.cull = !v.no_cull;
+    if std::env::var("OPENBF_TERRAIN_LIGHT_GROUPS").as_deref() == Ok("0") {
+        r.set_terrain_light_grouping(false);
+    }
+    report["device_ms"] = json!(ms(t));
+    report["adapter"] = json!(format!("{:?}", r.adapter_info()));
+    let t = Instant::now();
+    let mut gpu = upload_scene(&mut r, scene)?;
+    game::forest::configure(&mut r, scene, setup.mission.as_ref())?;
+    let assets = v.map.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let vis = game::soldier_vis::SoldierVisuals::for_walk(&mut r, assets, scene, walk);
+    let mut frame = ReplayFrame {
+        cube: upload_unit_cube(&mut r)?,
+        models: [vis.has_model(0), vis.has_model(1)],
+        vis,
+        vehicle_vis: game::viewer::VehicleVisuals::load(
+            &mut r,
+            scene,
+            assets,
+            &walk.vehicle_geometry,
+        ),
+        deka_vis: game::viewer::DroidekaVisuals::load(&mut r, scene, assets, walk),
+        quad: game::viewer::upload_billboard_quad(&mut r)?,
+        sprite: game::viewer::upload_fx_sprite(&mut r).ok(),
+        icons: squad_icons(&mut r, assets),
+        fx: game::fx::Fx::for_walk(assets, &scene.dir, &scene.manifest.source_game, walk),
+        bolts: game::bolt_vis::BoltVis::new(assets, &scene.manifest.source_game),
+        weather: game::weather::Weather::load(
+            &scene.manifest,
+            assets,
+            &scene.dir,
+            game::weather::STILL_SEED,
+        ),
+        holos: game::holo::Holos::default(),
+        overlay: v
+            .hud
+            .then(|| ui::overlay::EguiOverlay::headless(r.device(), render::HEADLESS_FORMAT)),
+        hud_view: v.hud.then(|| load_hud_view(assets, &r)).flatten(),
+        feed: game::event_feed::EventFeed::for_walk(assets, &scene.manifest.source_game, walk),
+    };
+    frame.fx.set_water(&scene.manifest);
+    frame.fx.set_scene_effects(scene);
+    // Match the windowed battle's HITCH loading phase. Otherwise the harness
+    // reports first-shot uploads that production already preloads.
+    frame.fx.preload(&mut r);
+    frame.vehicle_vis.preload(&mut r, &walk.sim);
+    frame.bolts.preload(&mut r, walk);
+    gpu.step_stations(&walk.sim);
+    frame.vis.update(walk, core::TICK_DT);
+    report["upload_ms"] = json!(ms(t));
+    report["load_objects"] = made();
+    report["load_objects_dropped"] = json!(render::made::dropped());
+    let mut frames = Vec::with_capacity(v.bench_frames as usize);
+    // Use a fixed overview or explicitly supplied eye; keep the production
+    // replay renderer, including its effects, forest, lights and HUD.
+    let mut view = v.clone();
+    if !v.cam_set && !v.bench_player_cam {
+        let mut cam = super::bench_camera(v, scene, walk);
+        if std::env::var_os("OPENBF_BENCH_FOREST_EYE").is_some() {
+            let ground = scene.heightfield();
+            let objects = game::viewer::leaf::objects(
+                &scene.manifest,
+                &game::viewer::foliage::records(scene),
+                ground.as_ref(),
+            );
+            let object = objects
+                .iter()
+                .find(|o| scene.manifest.leaf[o.class as usize].falling_count > 0)
+                .context("forest benchmark requires a baked falling-leaf emitter")?;
+            let at = object.matrix.w_axis.truncate();
+            let y = ground.as_ref().map_or(at.y, |g| g.height_at(at.x, at.z));
+            cam.position = glam::Vec3::new(at.x + 4.0, y + 2.0, at.z + 7.0);
+            cam.yaw = 20f32.to_radians();
+            cam.pitch = -12f32.to_radians();
+        }
+        view.cam = (
+            cam.position.x,
+            cam.position.y,
+            cam.position.z,
+            cam.yaw.to_degrees(),
+            cam.pitch.to_degrees(),
+        );
+        view.cam_set = true;
+    }
+    report["camera"] = json!(view.cam);
+    for k in 0..=v.bench_frames {
+        let t = Instant::now();
+        if k % 2 == 0 {
+            measured_tick(walk, &[core::sim::PadState::default()]);
+            gpu.step_stations(&walk.sim);
+            frame.fx.ingest_posed(walk, Some(&frame.vis));
+            drop(frame.fx.take_sounds());
+            frame.vis.update(walk, core::TICK_DT);
+            let mut points = frame.vis.fire_points(walk);
+            frame.deka_vis.fire_points(&walk.sim, &mut points);
+            frame.fx.set_repair_origins(&points);
+            frame.bolts.set_fire_points(points);
+            frame.fx.set_jet_frames(frame.vis.jet_frames(walk));
+            frame.fx.update(core::TICK_DT);
+            if let Some(w) = frame.weather.as_mut() {
+                w.update(core::TICK_DT);
+            }
+            frame.bolts.update(walk, core::TICK_DT);
+            tick_event_feed(&mut frame.feed, &walk.sim, walk.player, v.hud);
+        }
+        let update_ms = ms(t);
+        let render_start = Instant::now();
+        frame.render(&mut r, &mut gpu, walk, &view, 1.0 / 60.0)?;
+        r.wait_idle().map_err(|e| anyhow!("{e}"))?;
+        let render_ms = ms(render_start);
+        let wall = ms(t);
+        let stats = r.frame_stats();
+        frames.push(json!({"frame": k, "wall_ms": wall, "render_ms": render_ms,
+            "update_ms": update_ms, "draw_calls": stats.draw_calls,
+            "culled": stats.culled, "submitted": stats.submitted, "objects": made(),
+            "gpu_ms": r.gpu_sections(), "alive": alive(walk)}));
+    }
+    report["frames"] = json!(frames);
+    report["final_hash"] = json!(format!("{:016x}", walk.sim.hash()));
+    if let Some(path) = &v.capture_frame {
+        let (rgba, w, h) = r.capture_rgba()?;
+        image::save_buffer(path, &rgba, w, h, image::ColorType::Rgba8)?;
+    }
+    render::made::enable(false);
+    Ok(())
+}
+
+fn made() -> serde_json::Value {
+    json!(render::made::take()
+        .into_iter()
+        .map(|m| json!({
+            "kind": m.kind, "label": m.label, "bytes": m.bytes, "ms": m.ms,
+        }))
+        .collect::<Vec<_>>())
+}

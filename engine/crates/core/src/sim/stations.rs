@@ -14,7 +14,7 @@
 //! PROVISIONAL: only living entities are served; riders are absent from the
 //! world gather but their vehicles are eligible. Vehicles receive health only
 //! until seat guns have reserves. Gather order is unit slots then vehicles,
-//! capped at the PS2's 64 entities. BF2 hero refusal/regeneration awaits heroes.
+//! capped at the PS2's 64 entities. BF2 regeneration eligibility is not built.
 
 pub use crate::station_motion::StationMotion;
 
@@ -344,9 +344,13 @@ impl Sim {
             }
             gathered += 1;
             let t = type_slot(u.health.health_type);
+            let hero = self.ground_rules == crate::soldier::GroundRules::Bf2
+                && self.hero_class(u.team) == Some(u.spec.class);
             let classes = &self.weapon_classes;
             let u = &mut self.units[ui];
-            let health = give_health(&mut u.health, c.health[t]);
+            // PS2 0x369770 refuses SetHeroClass health unless its caller
+            // explicitly bypasses the check (kill-heal does; stations do not).
+            let health = !hero && give_health(&mut u.health, c.health[t]);
             let ammo = give_ammo(classes, u, c.ammo[t]);
             if health || ammo {
                 served = true;

@@ -231,3 +231,14 @@ measurement. Archived PS2 class-name readings previously failed identity
 validation; they are deliberately excluded from these findings. An original
 live census still needs validated class identity, health/human exclusion,
 assigned/waiting counts, effective arrays and consistent sampling clocks.
+
+
+## Later port rule — 2026-10-30 erratum
+
+The authored minimum/maximum census above describes the original data and the
+port rules at the time of the investigation. The maintainer removed per-class
+maximum restrictions on 2026-10-29. Current `Sim::ai_class_weights` retains a
+positive floor for every class, including those above their target share;
+`Sim::class_refusal` checks points, not class population. The team's total
+alive-AI cap still applies. This is a deliberate port rule, not a revised
+claim about the original game's allocator.

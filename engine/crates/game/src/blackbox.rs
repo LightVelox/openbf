@@ -190,6 +190,8 @@ fn target_code(t: AimTarget) -> i32 {
     match t {
         AimTarget::Unit(h) => h.index as i32,
         AimTarget::Vehicle(h) => -2 - h.index as i32,
+        // A marker beyond any vehicle's: a turret's id is no slot.
+        AimTarget::Turret(_) | AimTarget::Droid(_) => i32::MIN,
     }
 }
 
@@ -308,6 +310,7 @@ pub enum Ev {
     Fall,
     RiderDeath,
     Suicide,
+    HeroExhausted,
     Blast,
     KillFloor,
     UnderMap,
@@ -907,6 +910,7 @@ impl Ring {
                 Event::EnvDeath { unit, cause } => (
                     match cause {
                         DeathCause::Suicide => Ev::Suicide,
+                        DeathCause::HeroExhausted => Ev::HeroExhausted,
                         DeathCause::DeathRegion => Ev::DeathRegion,
                         DeathCause::Fall => Ev::Fall,
                         DeathCause::VehicleDestroyed => Ev::RiderDeath,

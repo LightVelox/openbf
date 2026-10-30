@@ -37,6 +37,9 @@ pub fn soldier_blast_sphere(stance: Stance) -> (f32, f32) {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Victim {
+    /// The blast's own attacker under HurtOwner 0: it takes a gather slot
+    /// and nothing else.
+    Owner,
     Unit(UnitHandle),
     Vehicle(VehicleHandle),
     Station(u16),
@@ -130,10 +133,19 @@ impl Sim {
             {
                 continue;
             }
+            // HurtOwner 0: the owner is gathered (he fills the cap) and
+            // then skipped, damage and push alike (B2:300612-300633).
+            let owner =
+                !e.hurt_owner && attacker.is_some_and(|a| a.index as usize == i && a.gen == u.gen);
             let (lift, w) = soldier_blast_sphere(u.soldier.stance);
             let c = u.soldier.pos + Vec3::Y * lift;
             if overlaps(c, w) {
-                gathered.push((Victim::Unit(self.handle(i)), c, w));
+                let v = if owner {
+                    Victim::Owner
+                } else {
+                    Victim::Unit(self.handle(i))
+                };
+                gathered.push((v, c, w));
                 if gathered.len() == BLAST_GATHER_MAX {
                     break;
                 }
@@ -200,7 +212,7 @@ impl Sim {
             })
             .collect();
         for (t, f) in items {
-            self.damage_item(t, e.damage * f, &e.scales, team);
+            self.damage_item(t, e.damage * f, &e.scales, team, attacker);
         }
         let attacker_is_player = attacker
             .and_then(|a| self.units.get(a.index as usize).filter(|u| u.gen == a.gen))
@@ -208,6 +220,7 @@ impl Sim {
         let desc = e.desc();
         for &(victim, c, w) in gathered.iter().rev() {
             let clear = match victim {
+                Victim::Owner => continue,
                 Victim::Station(i) => {
                     let instance = self.stations[usize::from(i)].instance;
                     crate::perception::los_seat(
@@ -249,6 +262,7 @@ impl Sim {
                 0.0
             };
             match victim {
+                Victim::Owner => {}
                 Victim::Unit(h) => {
                     if f > 0.0 {
                         let dir = (c - pos).normalize_or_zero();
@@ -487,6 +501,58 @@ mod tests {
         let want = 50.0 * (20.0 - d) / 20.0;
         let got = hp - s.unit(t).unwrap().health.cur;
         assert!((got - want).abs() < 1e-3, "{got} vs {want}");
+    }
+
+    /// `rep_mace_groundcrack_exp` (HurtOwner 0, Damage 400, DamageRadius 8,
+    /// Push 8 / PushRadius 7.5): B2 FUN_0030c8f8 leaves out the blast's
+    /// owner when HurtOwner is clear (B2:300612-300633), for the damage and
+    /// the push. Everyone else in reach, his own side included, is handled
+    /// as before. Control: the same blast with HurtOwner 1 hits and throws
+    /// him (the playtest's Mace killed by his own jump attack, 2026-10-30).
+    #[test]
+    fn a_hurt_owner_0_blast_leaves_out_its_owner_only() {
+        for hurt_owner in [false, true] {
+            let mut s = sim();
+            let owner = s.spawn(&UnitSpec::trooper(1, Vec3::ZERO)).unwrap();
+            let enemy = s
+                .spawn(&UnitSpec::trooper(0, Vec3::new(2.0, 0.0, 0.0)))
+                .unwrap();
+            let ally = s
+                .spawn(&UnitSpec::trooper(1, Vec3::new(0.0, 0.0, 2.0)))
+                .unwrap();
+            for h in [owner, enemy, ally] {
+                s.units[h.index as usize].health.max = 2000.0;
+                s.units[h.index as usize].health.cur = 2000.0;
+            }
+            let e = ExplosionClass {
+                damage: 400.0,
+                damage_inner: 0.0,
+                damage_outer: 8.0,
+                push: 8.0,
+                push_outer: 7.5,
+                hurt_owner,
+                ..Default::default()
+            };
+            s.explode(&e, Vec3::Y * 0.2, Some(owner), Some(1));
+            let o = s.unit(owner).unwrap();
+            if hurt_owner {
+                assert!(o.health.cur < 2000.0, "control: HurtOwner 1 hurts him");
+                assert!(o.soldier.stance.knocked(), "control: and throws him");
+            } else {
+                assert_eq!(o.health.cur, 2000.0, "no damage to the owner");
+                assert!(!o.soldier.stance.knocked(), "no push on the owner");
+                assert_eq!(o.soldier.vel, Vec3::ZERO, "no push on the owner");
+            }
+            assert!(
+                s.unit(enemy).unwrap().health.cur < 2000.0,
+                "the enemy is hit"
+            );
+            assert!(s.unit(enemy).unwrap().soldier.stance.knocked());
+            assert!(
+                s.unit(ally).unwrap().soldier.stance.knocked(),
+                "an ally is still pushed"
+            );
+        }
     }
 
     /// Terrain blocks a blast: a trooper behind a ridge takes nothing.

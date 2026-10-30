@@ -163,6 +163,24 @@ pub struct Clip {
 }
 
 impl Clip {
+    /// Copy one baked frame exactly, clamped to the clip. Simulation setup
+    /// uses this path so integer samples never pass through render slerp.
+    pub fn sample_frame(&self, skel: &Skeleton, frame: usize) -> Pose {
+        let bind = Pose::bind(skel);
+        if self.frames == 0 {
+            return bind;
+        }
+        let frame = frame.min(self.frames - 1);
+        Pose(
+            (0..skel.len())
+                .map(|b| match self.tracks.get(b).and_then(Option::as_ref) {
+                    Some(keys) if keys.len() == self.frames => keys[frame],
+                    _ => bind.0[b],
+                })
+                .collect(),
+        )
+    }
+
     /// Duration in seconds by the BF1 rule (frames/fps); BF2 uses (frames−1)/fps.
     pub fn duration(&self) -> f32 {
         self.frames as f32 / self.fps
@@ -303,5 +321,32 @@ mod tests {
             Vec3::new(1.0, 0.0, 0.0)
         ));
         assert!((clip.duration() - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn integer_frame_sampling_preserves_stored_key_bits_without_normalizing() {
+        let skel = two_bone_chain();
+        let key = BoneXform {
+            rotation: Quat::from_xyzw(1.5, 0.0, 0.0, 0.0),
+            translation: Vec3::new(f32::from_bits(0x3f800001), -0.0, -7.25),
+        };
+        let clip = Clip {
+            name: "raw".into(),
+            fps: 30.0,
+            frames: 2,
+            tracks: vec![Some(vec![BoneXform::IDENTITY, key]), None],
+        };
+        for frame in [1, usize::MAX] {
+            let sampled = clip.sample_frame(&skel, frame);
+            assert_eq!(
+                sampled.0[0].rotation.to_array().map(f32::to_bits),
+                key.rotation.to_array().map(f32::to_bits)
+            );
+            assert_eq!(
+                sampled.0[0].translation.to_array().map(f32::to_bits),
+                key.translation.to_array().map(f32::to_bits)
+            );
+            assert_eq!(sampled.0[1], Pose::bind(&skel).0[1]);
+        }
     }
 }

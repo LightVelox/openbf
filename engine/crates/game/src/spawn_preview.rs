@@ -83,7 +83,7 @@ pub fn shown(page: &SpawnPage) -> Option<(u8, u8)> {
 
 /// Whether `page` stands any 3-D soldier (the side preview or the line-up).
 pub fn stands(page: &SpawnPage) -> bool {
-    shown(page).is_some() || matches!(page, SpawnPage::Class { classes, .. } if *classes > 0)
+    shown(page).is_some() || matches!(page, SpawnPage::Class { classes, .. } if !classes.is_empty())
 }
 
 /// The line-up's six places on a unit ring in the PS2's UI scene
@@ -243,10 +243,18 @@ pub fn place_at(cam: &Camera, at: Vec3, yaw: f32, shrink: f32) -> Mat4 {
 #[derive(Default)]
 pub struct Preview {
     animators: Vec<Animator>,
+    cloths: Vec<PreviewCloth>,
+    cloth_meshes: std::collections::HashMap<(usize, String, usize), render::MeshHandle>,
     shown: Option<(u8, u8)>,
     /// The line-up's team and front class, and the slide: (from, t).
     lineup: Option<(u8, usize)>,
     slide: Option<(usize, f32)>,
+}
+
+#[derive(Default)]
+struct PreviewCloth {
+    body: String,
+    states: Vec<crate::cloth::State>,
 }
 
 impl Preview {
@@ -260,6 +268,58 @@ impl Preview {
         cam: &Camera,
         dt: f32,
     ) -> (Vec<SkinnedDrawCmd>, Vec<DrawCmd>) {
+        self.draws_with(vis, page, cam, dt, |_, _, _, _| None)
+    }
+
+    /// Specialized class models replace the infantry body and weapon together.
+    /// `Some(empty)` means the class has no available model, so it must not borrow
+    /// another class's infantry geometry. No companion cloth: that needs the
+    /// renderer, see [`Self::draws_live`].
+    pub fn draws_with(
+        &mut self,
+        vis: &SoldierVisuals,
+        page: Option<&SpawnPage>,
+        cam: &Camera,
+        dt: f32,
+        mut specialized: impl FnMut(u8, u8, Mat4, f32) -> Option<Vec<DrawCmd>>,
+    ) -> (Vec<SkinnedDrawCmd>, Vec<DrawCmd>) {
+        self.compose(None, vis, page, cam, dt, |_, team, class, model, dt| {
+            specialized(team, class, model, dt)
+        })
+    }
+
+    /// A live preview: specialized class models as in [`Self::draws_with`], and
+    /// infantry bodies upload their companion cloth. The CPU-only/golden entry
+    /// keeps its historical fallback and needs no renderer.
+    pub fn draws_live(
+        &mut self,
+        r: &mut render::Renderer,
+        vis: &SoldierVisuals,
+        page: Option<&SpawnPage>,
+        cam: &Camera,
+        dt: f32,
+        mut specialized: impl FnMut(&mut render::Renderer, u8, u8, Mat4, f32) -> Option<Vec<DrawCmd>>,
+    ) -> (Vec<SkinnedDrawCmd>, Vec<DrawCmd>) {
+        self.compose(Some(r), vis, page, cam, dt, |r, team, class, model, dt| {
+            r.and_then(|r| specialized(r, team, class, model, dt))
+        })
+    }
+
+    fn compose(
+        &mut self,
+        mut r: Option<&mut render::Renderer>,
+        vis: &SoldierVisuals,
+        page: Option<&SpawnPage>,
+        cam: &Camera,
+        dt: f32,
+        mut specialized: impl FnMut(
+            Option<&mut render::Renderer>,
+            u8,
+            u8,
+            Mat4,
+            f32,
+        ) -> Option<Vec<DrawCmd>>,
+    ) -> (Vec<SkinnedDrawCmd>, Vec<DrawCmd>) {
         let who = page.and_then(shown);
         let line = match page {
             Some(SpawnPage::Class {
@@ -267,7 +327,7 @@ impl Preview {
                 class,
                 classes,
                 ..
-            }) if *classes > 0 => Some((*team, *class, *classes)),
+            }) if !classes.is_empty() => Some((*team, *class, classes.as_slice())),
             _ => None,
         };
         let refused = match page {
@@ -279,7 +339,9 @@ impl Preview {
             || (line.is_some() && !same_team)
             || (line.is_none() && self.lineup.is_some())
         {
+            let cloth_meshes = std::mem::take(&mut self.cloth_meshes);
             *self = Self {
+                cloth_meshes,
                 shown: who,
                 lineup: line.map(|(team, class, _)| (team, class)),
                 ..Default::default()
@@ -288,6 +350,7 @@ impl Preview {
         let mut out = (Vec::new(), Vec::new());
         if let Some((team, class)) = who {
             self.animators.resize_with(1, Animator::default);
+            self.cloths.resize_with(1, PreviewCloth::default);
             let model = place(cam, SIDE_AT, SOLDIER_YAW);
             self.stand_nth(
                 0,
@@ -297,10 +360,13 @@ impl Preview {
                 model,
                 [colour_unit(SIDE_TINT); 3],
                 dt,
+                &mut specialized,
                 &mut out,
+                r.as_deref_mut(),
             );
         }
-        if let Some((team, pick, n)) = line {
+        if let Some((team, pick, classes)) = line {
+            let n = classes.len();
             let from = self.lineup.map_or(pick, |(_, c)| c);
             if from != pick {
                 self.slide = Some((from, 0.0));
@@ -317,14 +383,14 @@ impl Preview {
                 self.slide = None;
             }
             self.animators.resize_with(n, Animator::default);
-            for j in 0..n {
+            self.cloths.resize_with(n, PreviewCloth::default);
+            for (j, &class) in classes.iter().enumerate() {
                 let (at, colour) = lineup_at(ring_at(j, from, pick, n, t));
                 // Unseen at the back: drawn while at least half opaque
                 // (the port draws its soldiers opaque) [H].
                 if colour[3] < 0.5 {
                     continue;
                 }
-                let class = u8::try_from(j).unwrap_or(u8::MAX);
                 let model = place_at(cam, at, SOLDIER_YAW, LINEUP_SHRINK);
                 // A refused class's colour word is (0, 0, 0, 0xff): black
                 // (`FUN_0039a980`, B2:394368-394383).
@@ -333,7 +399,18 @@ impl Preview {
                 } else {
                     [colour[0], colour[1], colour[2]]
                 };
-                self.stand_nth(j, vis, team, class, model, tint, dt, &mut out);
+                self.stand_nth(
+                    j,
+                    vis,
+                    team,
+                    class,
+                    model,
+                    tint,
+                    dt,
+                    &mut specialized,
+                    &mut out,
+                    r.as_deref_mut(),
+                );
             }
         }
         out
@@ -350,13 +427,32 @@ impl Preview {
         model: Mat4,
         tint: [f32; 3],
         dt: f32,
+        specialized: &mut impl FnMut(
+            Option<&mut render::Renderer>,
+            u8,
+            u8,
+            Mat4,
+            f32,
+        ) -> Option<Vec<DrawCmd>>,
         out: &mut (Vec<SkinnedDrawCmd>, Vec<DrawCmd>),
+        mut r: Option<&mut render::Renderer>,
     ) {
+        if let Some(mut draws) = specialized(r.as_deref_mut(), team, class, model, dt) {
+            for d in &mut draws {
+                d.color[..3].iter_mut().zip(tint).for_each(|(v, t)| *v *= t);
+                d.light = render::LightPath::Iface;
+            }
+            out.1.extend(draws);
+            return;
+        }
         let Some((mut body, mut gun)) =
             vis.still_draws(&mut self.animators[k], team, class, model, dt)
         else {
             return;
         };
+        if let Some(r) = r {
+            self.cloth_draws(r, vis, k, team, class, model, dt, &mut body, &mut gun);
+        }
         let tint = |c: &mut [f32; 4]| c[..3].iter_mut().zip(tint).for_each(|(v, t)| *v *= t);
         body.iter_mut().for_each(|d| {
             tint(&mut d.color);
@@ -368,6 +464,85 @@ impl Preview {
         });
         out.0.extend(body);
         out.1.extend(gun);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn cloth_draws(
+        &mut self,
+        r: &mut render::Renderer,
+        vis: &SoldierVisuals,
+        k: usize,
+        team: u8,
+        class: u8,
+        model: Mat4,
+        dt: f32,
+        body: &mut Vec<SkinnedDrawCmd>,
+        out: &mut Vec<DrawCmd>,
+    ) {
+        let Some(sa) = vis
+            .per_class
+            .get(team as usize)
+            .and_then(|t| t.get(class as usize))
+            .and_then(|c| c.body)
+            .and_then(|b| vis.assets.get(b))
+        else {
+            return;
+        };
+        let preview = &mut self.cloths[k];
+        if preview.body != sa.asset.name {
+            preview.body = sa.asset.name.clone();
+            preview.states.clear();
+        }
+        let palette = sa
+            .asset
+            .skeleton
+            .palette(&self.animators[k].pose(&sa.asset.skeleton).locals());
+        let globals: Vec<_> = palette
+            .iter()
+            .zip(&sa.asset.skeleton.global_bind)
+            .map(|(p, b)| *p * *b)
+            .collect();
+        if preview.states.len() != sa.cloths.len() {
+            preview.states = sa
+                .cloths
+                .iter()
+                .enumerate()
+                .map(|(i, c)| crate::cloth::State::new(c, model, &globals, i as u32))
+                .collect();
+        }
+        for (i, (state, def)) in preview.states.iter_mut().zip(&sa.cloths).enumerate() {
+            state.step(def, model, &globals, dt);
+            let Some(source) = sa.meshes.get(def.raw.part) else {
+                continue;
+            };
+            let Some(material) = body.iter().find(|d| d.mesh == source.0) else {
+                continue;
+            };
+            let (texture, layer) = (material.texture, material.layer);
+            let vertices = state.vertices(def, &globals);
+            let indices: Vec<_> = def.raw.triangles.iter().flatten().copied().collect();
+            let key = (k, sa.asset.name.clone(), i);
+            let mesh = match crate::cloth::upload(
+                r,
+                self.cloth_meshes.get(&key).copied(),
+                &vertices,
+                &indices,
+            ) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("preview cloth: {e}");
+                    continue;
+                }
+            };
+            self.cloth_meshes.insert(key, mesh);
+            let mut cmd = match texture {
+                Some(t) => DrawCmd::textured(mesh, t, model),
+                None => DrawCmd::flat(mesh, [1.; 4], model),
+            };
+            cmd.layer = layer;
+            out.push(cmd);
+            body.retain(|d| d.mesh != source.0);
+        }
     }
 }
 

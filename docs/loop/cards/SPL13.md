@@ -6,7 +6,7 @@ value: 3
 phase: cleanup
 status: blocked
 deps:
-files: engine/crates/core/src/ai/behave.rs, engine/crates/core/src/ai/behave/brain.rs, engine/crates/core/src/ai/behave/position.rs, engine/crates/core/src/ai/behave/position/tests.rs, engine/crates/core/src/sim/vehicles.rs
+files: engine/crates/core/src/sim/state.rs, engine/crates/core/src/ai/behave.rs, engine/crates/core/src/ai/behave/brain.rs, engine/crates/core/src/ai/behave/position.rs, engine/crates/core/src/ai/behave/position/tests.rs, engine/crates/core/src/sim/vehicles.rs
 declares:
 needs: local-proof — restore the canonical pure_move_check helper and obtain its original exit0/PURE MOVE receipt; planner orders recipe-compliant re-split/reflow repair instead of waiving nine unmatched lines; vehicles remains its own later session
 effort:

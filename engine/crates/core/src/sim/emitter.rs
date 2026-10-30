@@ -30,6 +30,7 @@ impl Sim {
         let floor = ord.min_damage.unwrap_or(0.0);
         let unit = self.handle(i);
         let team = self.units[i].team;
+        let shooter_is_player = self.units[i].is_player;
         let origin = self.units[i].muzzle();
         let (aim, _, _) = self.units[i].aim_frame();
         // The pull itself is a shot like any other: the fire sound, the
@@ -97,7 +98,21 @@ impl Sim {
             // below are its whole effect. `analysis/re-ordnance-kinds.md` §8
             // does not state the zero-damage case; the class's own query
             // (ConeLength > 0) is what dispatches, and `Push` is its knob.
-            if hit.damage > 0.0 {
+            // A spared victim (`bolt_spares`: invincible, or a human a bot of
+            // his own team hit) or a raised saber stops the link: no damage,
+            // burn, blast or shove, and the arc still draws (as `fire_force`
+            // blocks a hero's).
+            let stopped = match victim {
+                Victim::Unit(h) => {
+                    let spared = self
+                        .unit(h)
+                        .is_some_and(|v| self.shot_spares(team, shooter_is_player, v));
+                    let incoming = (body.pos - hit.from).normalize_or_zero();
+                    spared || self.saber_deflect(h, incoming, body.pos)
+                }
+                Victim::Vehicle(_) => false,
+            };
+            if hit.damage > 0.0 && !stopped {
                 let desc = DamageDesc {
                     damage: hit.damage,
                     scales,
@@ -137,7 +152,7 @@ impl Sim {
                 if em.bf2 {
                     if let Some(e) = &ord.explosion {
                         self.explode(e, body.pos, Some(unit), Some(team));
-                        self.events.push(Event::Blast {
+                        self.events.push(Event::WeaponBlast {
                             pos: body.pos,
                             weapon_class: class as u32,
                         });
@@ -145,7 +160,7 @@ impl Sim {
                 }
             }
             // The shove (`Push`; 0 = none, and then no LCG draw either).
-            if em.push != 0.0 {
+            if em.push != 0.0 && !stopped {
                 if let Victim::Unit(h) = victim {
                     if let Some(u) = self.units.get(h.index as usize) {
                         let (_, w) = soldier_blast_sphere(u.soldier.stance);
@@ -360,7 +375,7 @@ mod tests {
         s.events
             .iter()
             .filter_map(|e| match e {
-                Event::Blast { pos, weapon_class } => Some((*pos, *weapon_class)),
+                Event::WeaponBlast { pos, weapon_class } => Some((*pos, *weapon_class)),
                 _ => None,
             })
             .collect()

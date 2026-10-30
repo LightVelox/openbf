@@ -389,6 +389,7 @@ fn pile_in_driver_cross_line_and_delayed_answers() {
                     vec![Some(game::vehicle_class::HoverClass::default().params())];
                 s.walk.sim.seat_setup = vec![Some(SeatSetup {
                     radius: 5.0,
+                    body_active: vec![],
                     boardable: vec![true; 2],
                     exit_drop: 10.0,
                     ai_size: 8,
@@ -504,6 +505,7 @@ fn everyone_out_driver_left_feedback_and_scheduled_yes_including_empty_seats() {
                 vec![Some(game::vehicle_class::HoverClass::default().params())];
             s.walk.sim.seat_setup = vec![Some(SeatSetup {
                 radius: 5.0,
+                body_active: vec![],
                 boardable: vec![true; mates + 1],
                 exit_drop: 10.0,
                 ai_size: 8,

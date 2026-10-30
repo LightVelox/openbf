@@ -531,13 +531,8 @@ impl Sim {
             let blend = self.weapon_classes[who.weapon_class]
                 .ordnance
                 .charged(spec.charge);
-            let bolt = self.free_bolt(origin, dir, blend.velocity, blend.life_span, who);
-            self.events.push(Event::Shot {
-                unit: who.owner,
-                weapon_class: who.weapon_class as u32,
-                origin,
-                dir,
-            });
+            let mut bolt = self.free_bolt(origin, dir, blend.velocity, blend.life_span, who);
+            self.note_bolt_shot(&mut bolt, origin, dir);
             self.bolts.push(bolt);
         }
     }

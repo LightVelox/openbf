@@ -790,7 +790,11 @@ impl Ctx<'_> {
         if let (Some(o), Some(f)) = (rows.get(cur.at), self.art.fonts.get(SMALL_FONT)) {
             let (dx, dy) = OPTION_INFO_TEXT;
             let w = info[2] - info[0] - 2.0 * dx;
-            for (j, line) in wrap(f, t.help(*o), w).iter().enumerate() {
+            let help = ia
+                .options
+                .population_help(*o)
+                .unwrap_or_else(|| t.help(*o).to_owned());
+            for (j, line) in wrap(f, &help, w).iter().enumerate() {
                 let y = info[1] + dy.max(4.0) + OPTION_INFO_PITCH * j as f32;
                 self.label(
                     &s,

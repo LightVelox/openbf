@@ -232,7 +232,11 @@ fn mission_files() -> Vec<std::path::PathBuf> {
 const FOUR: [&str; 4] = ["all", "imp", "rep", "cis"];
 
 fn load_classdb_all(dir: &Path, game: &str) -> game::classdb::ClassDb {
-    game::roster::load_classdb(dir, game, &FOUR).expect("class db")
+    let mut db = game::roster::load_classdb(dir, game, &FOUR).expect("class db");
+    // Class values are freshly extracted above; hero model/animation companions
+    // belong to the asset overlay, not the temporary class directory's parent.
+    db.set_assets_root(&game::assets::baked_root());
+    db
 }
 
 fn row(c: &ClassRoster) -> String {
@@ -1017,6 +1021,7 @@ fn battle_classes_hold_their_own_weapon_model() {
                     weapon_geometry: c.weapon_geometry.clone(),
                     weapon_hud: c.weapon_hud.clone(),
                     held_hud: Vec::new(),
+                    droideka_shield: None,
                     held_models: Vec::new(),
                     foley_class: c.foley_class,
                     cries: c.cries.clone(),
@@ -2057,6 +2062,14 @@ fn aim_sizes_are_the_baked_models_boxes() {
         "{}",
         rebel.consts.aim_size
     );
+    for name in ["all_hero_chewbacca", "rep_hero_yoda", "imp_hero_darthvader"] {
+        let hero = class(name);
+        let model = hero.geometry.as_deref().unwrap();
+        assert!(
+            (hero.consts.aim_size - size(model)).abs() < 1e-4,
+            "{name}: its target size must come from {model}'s noncloth box"
+        );
+    }
 }
 
 /// Card CLSE4 (`analysis/re-soldier-ai.md` 20.3), data-gated: the burst keys
@@ -2322,6 +2335,40 @@ fn every_class_kit_is_the_discs_or_explained() {
     let mut out = String::new();
     let mut counts = [0usize; 4];
     let bf2 = load_classdb_all(&dir, "bf2");
+    let saber_models: std::collections::BTreeSet<_> = bf2
+        .names()
+        .filter(|name| game::roster::is_soldier_chain(&bf2, name))
+        .filter_map(|name| {
+            let (weapon, _) = game::roster::primary_weapon(&bf2, name)?;
+            if game::roster::slot_kind(&bf2, &weapon, 0) != SlotKind::Melee {
+                return None;
+            }
+            Some(
+                bf2.prop(name, "GeometryName")
+                    .unwrap_or_else(|| panic!("{name}: melee model has no GeometryName"))
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(saber_models.len(), 14);
+    let root = bf2.assets_root().expect("explicit companion root");
+    let missing: Vec<_> = saber_models
+        .iter()
+        .filter(|model| {
+            !pak::exists(
+                root.join("side_bf2/soldiers")
+                    .join(format!("{model}.combos.ron")),
+            )
+        })
+        .collect();
+    if missing.len() == saber_models.len() {
+        eprintln!("SKIP: no BF2 saber model companions; rebake BF2 heroes");
+        return;
+    }
+    assert!(
+        missing.is_empty(),
+        "partial BF2 saber companions: {missing:?}"
+    );
     for game in ["bf1", "bf2"] {
         let db = load_classdb_all(&dir, game);
         let mut names: Vec<String> = db
@@ -2549,7 +2596,8 @@ fn only_the_cis_soldier_droids_have_a_chunk_death() {
             let Some(d) = game::roster::chunk_death(&db, c) else {
                 continue;
             };
-            assert_eq!(d.frequency, 0.6, "{game} {c}");
+            assert_eq!(db.prop_f32(c, "ChunkFrequency"), Some(0.6), "{game} {c}");
+            assert_eq!(d.frequency, game::roster::DROID_CHUNK_CHANCE, "{game} {c}");
             let look = &d.explosion.as_ref().expect(c).look;
             assert_eq!(look.effects, [effect], "{game} {c}");
             assert_eq!(look.sound, None, "{game} {c}");
@@ -2596,4 +2644,35 @@ fn only_the_cis_soldier_droids_have_a_chunk_death() {
             }
         }
     }
+}
+
+/// The maintainer: "Use the bf2 droideka shield hud icon." Both games' rows
+/// carry the BF2 class's `HUDTag`; its mesh and the layout's place for it are
+/// in the bake on a stage that has it, and the primary keeps its gun's model.
+#[test]
+fn a_droideka_shows_the_bf2_shield_in_the_secondary_row_on_both_games() {
+    let root = game::assets::baked_root();
+    if !root.join("classes/bf2_cis.ron").exists() {
+        eprintln!("SKIP: no baked classes");
+        return;
+    }
+    for game_id in ["bf1", "bf2"] {
+        let db = game::roster::load_classdb(&root.join("classes"), game_id, &["cis"]).unwrap();
+        let play = game::roster::load_classdb(&root.join("classes"), "bf2", &["cis"]).unwrap();
+        let c = if game_id == "bf1" { &play } else { &db };
+        let shield = game::droideka::shield_weapon(c, "cis_inf_droideka").unwrap();
+        assert_eq!(shield, "cis_weap_walk_droideka_shield");
+        let hud = game::roster::weapon_hud(c, &shield);
+        assert_eq!(hud.key, "hud_droideka_shield", "{game_id}");
+        assert_eq!(hud.icon, None, "{game_id}");
+    }
+    let layout = std::fs::read_to_string(root.join("common_bf2/hud/1playerhud.ron")).unwrap();
+    assert!(layout.contains("hud_droideka_shield"));
+    let baked = root.join("side_bf2/weapons/hud_droideka_shield.glb");
+    if !baked.exists() {
+        eprintln!("SKIP: the rebake's hud_droideka_shield is not in this bake");
+    }
+    assert!(root
+        .join("common_bf2/models/hud_vehicle_lasers.glb")
+        .exists());
 }

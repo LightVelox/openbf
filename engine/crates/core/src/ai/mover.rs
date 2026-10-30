@@ -402,6 +402,9 @@ pub(super) fn run(
         }
     }
 
+    if st.melee.is_some_and(|m| m.jump_tick == Some(sim.tick)) && !mv.flee && ret.is_none() {
+        pad.buttons |= buttons::JUMP;
+    }
     if mv.throwing && !mv.flee && ret.is_none() {
         pad.lx = 0;
         pad.ly = 0;

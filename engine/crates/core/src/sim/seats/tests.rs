@@ -19,6 +19,7 @@ fn world(at: Vec3, home_team: Option<u8>, neutral: bool) -> (Sim, UnitHandle, Ve
     s.hover_params = vec![Some(skiff())];
     s.seat_setup = vec![Some(SeatSetup {
         radius: R,
+        body_active: vec![],
         boardable: vec![true; 4],
         exit_drop: 10.0,
         ai_size: 1,
@@ -307,6 +308,7 @@ fn a_building_turret_seats_a_gunner_and_lets_it_out_of_its_own_box() {
     s.hover_params = vec![None];
     s.seat_setup = vec![Some(SeatSetup {
         radius: 3.0,
+        body_active: vec![],
         boardable: vec![true],
         exit_drop: 10.0,
         ai_size: 1,

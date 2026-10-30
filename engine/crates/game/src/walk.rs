@@ -298,6 +298,8 @@ pub struct ClassVisual {
     /// The class's other slots in the HUD (card GREN): `(slot, what to
     /// show)` for each weapon the unit holds besides the primary.
     pub held_hud: Vec<(u8, WeaponHud)>,
+    /// A droideka's shield in the secondary row (it is no held weapon).
+    pub droideka_shield: Option<WeaponHud>,
     /// The model each of those slots is drawn as in the hand (card WHELD):
     /// `(slot, GeometryName)`, `None` = drawn as nothing. A slot not listed
     /// draws the primary's `weapon_geometry`.
@@ -324,6 +326,7 @@ pub struct ClassVisual {
 /// on the PS2 (2.6) and are not read.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Cries {
+    pub hero: crate::heroes::HeroAudio,
     pub hurt: Option<String>,
     pub death: Option<String>,
     pub acquired: Option<String>,
@@ -379,6 +382,7 @@ impl ClassVisual {
             weapon_geometry: c.weapon_geometry.clone(),
             weapon_hud: c.weapon_hud.clone(),
             held_hud: Vec::new(),
+            droideka_shield: c.droideka_shield.clone(),
             held_models: Vec::new(),
             foley_class: c.foley_class,
             cries: c.cries.clone(),
@@ -476,6 +480,7 @@ impl TeamTemplate {
                 weapon_geometry: None,
                 weapon_hud: WeaponHud::default(),
                 held_hud: Vec::new(),
+                droideka_shield: None,
                 held_models: Vec::new(),
                 foley_class: 0,
                 cries: Default::default(),
@@ -591,6 +596,11 @@ struct Track {
 
 pub struct WalkSim {
     pub sim: Sim,
+    pub conquest_defaults: Option<crate::conquest_defaults::Defaults>,
+    pub team_size_pct: u32,
+    pub reinforcement_pct: u32,
+    /// Humans per team at the last tick (`refill_after_side_change`).
+    pub(crate) human_teams: Option<[u32; 2]>,
     pending_class_kills: std::collections::BTreeMap<String, u32>,
     /// The local player's unit — player SLOT 0 (`Sim::players[0]`).
     pub player: UnitHandle,
@@ -755,6 +765,10 @@ impl WalkSim {
         Self {
             sim,
             player,
+            conquest_defaults: None,
+            team_size_pct: 100,
+            reinforcement_pct: 100,
+            human_teams: None,
             pending_class_kills: Default::default(),
             respawn_requested: false,
             camera_blockers: CameraBlockers::default(),
@@ -876,6 +890,19 @@ impl WalkSim {
     /// none unless the pads are installed) — and the player relocated to a
     /// friendly post unless the caller pinned a spawn.
     pub fn opening_wave(&mut self, ai_per_team: [u32; 2], relocate_player: bool) {
+        self.opening_wave_with_slots(ai_per_team, relocate_player, false);
+    }
+
+    pub(crate) fn grow_roster(&mut self, additions: [u32; 2]) {
+        self.opening_wave_with_slots(additions, false, true);
+    }
+
+    fn opening_wave_with_slots(
+        &mut self,
+        ai_per_team: [u32; 2],
+        relocate_player: bool,
+        preserve_respawns: bool,
+    ) {
         if relocate_player {
             let seat = self.sim.units[self.player.index as usize].team;
             if let Some(&(pos, yaw)) = self.sim.spawn_points(seat).first() {
@@ -899,10 +926,18 @@ impl WalkSim {
             for k in 0..ai_per_team[team as usize] as usize {
                 let (pos, yaw) = points[k % points.len()];
                 if has_classes {
-                    self.sim.spawn_ai(team, pos, yaw);
+                    if preserve_respawns {
+                        self.sim.spawn_ai_roster_slot(team, pos, yaw);
+                    } else {
+                        self.sim.spawn_ai(team, pos, yaw);
+                    }
                 } else {
                     let spec = self.teams[team as usize].spec(team, pos, yaw, Controller::Ai, 0);
-                    self.sim.spawn(&spec);
+                    if preserve_respawns {
+                        self.sim.spawn_roster_slot(&spec);
+                    } else {
+                        self.sim.spawn(&spec);
+                    }
                 }
             }
         }
@@ -1010,11 +1045,12 @@ impl WalkSim {
     /// turns them into something seen or heard (effects, event sounds, bolt
     /// remnants, the message box) reads them here — once per tick, whether
     /// the frame steps none (every other frame at 60 Hz), one or several.
+    /// The mutable hook also publishes event-derived inputs for the next tick.
     pub fn advance_with(
         &mut self,
         real_dt: f32,
         pads: &[PadState],
-        mut each: impl FnMut(&WalkSim),
+        mut each: impl FnMut(&mut WalkSim),
     ) -> u32 {
         self.accum = (self.accum + real_dt).min(core::MAX_FRAME_ACCUM_SECS);
         let mut ticks = 0;
@@ -1085,6 +1121,7 @@ impl WalkSim {
         if let Some(Some(h)) = self.sim.players.first() {
             self.player = *h;
         }
+        self.refill_after_side_change();
         self.track_class_kills(kills_before);
         self.follow_backdrop();
         // The camera's zoom follows the player's (`re-zoom.md` §5): S and

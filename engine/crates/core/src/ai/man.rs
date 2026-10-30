@@ -485,7 +485,7 @@ pub fn exit_rule(
 /// Kashyyyk's recoilless turret (`YawLimits -65 65`) held its look at the
 /// limit on a target 120 deg round, 1,220 thinks of 1,281 with a target,
 /// one spell of 29 with a shot over 8 seeds.
-pub(super) fn arc_of<'a>(
+pub(crate) fn arc_of<'a>(
     sim: &'a Sim,
     u: &crate::unit::Unit,
 ) -> Option<impl Fn(Vec3) -> bool + 'a> {

@@ -147,6 +147,8 @@ pub struct ClassAnim {
     /// (weapon class, lowercase; its animation bank) per weapon slot that
     /// names one.
     pub banks: Vec<(String, String)>,
+    /// BF2 custom-animation descriptors, including explicit hero defaults.
+    pub custom: custom::Descriptors,
 }
 
 impl ClassAnim {
@@ -179,6 +181,8 @@ pub struct AnimInput {
     /// a 1.15 Wookiee walks at v / 1.15 on his longer legs.
     pub root_scale: f32,
     pub dead: bool,
+    /// BF2 hero state 0x10, simple clip 0x1a (`stand_deadhero`).
+    pub hero_dead: bool,
     /// In a hard lock (`Soldier::look_frozen`): after a get-up
     /// ([`Special::StandUp`]) or across a prone change ([`Special::ProneDown`],
     /// [`Special::ProneUp`]).
@@ -449,6 +453,7 @@ pub fn choose(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Special {
     Dead,
+    HeroDead,
     Roll,
     Jump,
     Fall,
@@ -488,6 +493,7 @@ impl Special {
     fn name(self) -> &'static str {
         match self {
             Special::Dead => "stand_death_forward",
+            Special::HeroDead => "stand_deadhero",
             Special::Roll => "diveforward",
             Special::Jump => "jump",
             Special::Fall => "fall",
@@ -536,7 +542,11 @@ pub enum Body {
 pub fn stance_of(i: &AnimInput, game: Game) -> Result<usize, Special> {
     // A body thrown by the blast that killed it flies first (card KNOCK).
     if i.dead && !i.stance.knocked() {
-        return Err(Special::Dead);
+        return Err(if i.hero_dead && game == Game::Bf2 {
+            Special::HeroDead
+        } else {
+            Special::Dead
+        });
     }
     let back = i.vel.y < 0.0;
     match i.stance {
@@ -1156,6 +1166,9 @@ pub struct Animator {
     lower: Player,
     /// The kept pose; `None` until the first update (which snaps).
     kept: Option<Pose>,
+    combo_override: bool,
+    combo_aim: bool,
+    next_aim: Option<(aim::AimKind, f32)>,
     action: Option<Action>,
     was_reloading: bool,
     set: Option<usize>,
@@ -1256,6 +1269,8 @@ impl Animator {
     /// One update: pick the two clips, advance them by `dt` and write them
     /// into the kept pose.
     pub fn step(&mut self, rig: &Rig, clips: &[Clip], skel: &Skeleton, i: &AnimInput, dt: f32) {
+        self.combo_override = false;
+        self.combo_aim = false;
         self.seat = None;
         // The facing's turn since the last update (+ = to his left).
         let turned = self.yaw.map_or(0.0, |y| wrap(i.yaw - y));
@@ -1263,7 +1278,9 @@ impl Animator {
         // One who dies after a throw lies in its rest pose, not a death clip
         // (B1 FUN_0022a0a8: ids 0x12 / 0x13 after the thrown states).
         let stance = match (stance_of(i, rig.game), self.body) {
-            (Err(Special::Dead), Some(Body::Special(sp))) if sp.thrown().is_some() => {
+            (Err(Special::Dead | Special::HeroDead), Some(Body::Special(sp)))
+                if sp.thrown().is_some() =>
+            {
                 Err(Special::Rest(sp.thrown().unwrap_or(false)))
             }
             (Ok(0), Some(Body::Special(Special::Land(b) | Special::StandUp(b)))) if i.hard_lock => {
@@ -1508,7 +1525,10 @@ impl Animator {
         };
         self.lower.apply(pose, &cx, false, snap);
         self.upper.apply(pose, &cx, true, snap);
-        let (kind, blend_in) = up.map_or((aim::AimKind::None, 0.0), |s| (s.aim, s.blend_in));
+        let (kind, blend_in) = self
+            .next_aim
+            .take()
+            .unwrap_or_else(|| up.map_or((aim::AimKind::None, 0.0), |s| (s.aim, s.blend_in)));
         self.aim.ease(&aim, kind, blend_in);
         self.step_twist(i, body, was_body, mv, dt);
     }
@@ -1563,6 +1583,12 @@ impl Animator {
         if self.seated() {
             return pose;
         }
+        if self.combo_override {
+            if self.combo_aim {
+                self.aim.apply(&mut pose, skel, 0.0);
+            }
+            return pose;
+        }
         if let Some(r) = skel.index_of("DummyRoot").and_then(|b| pose.0.get_mut(b)) {
             // About the model's up axis: the root has no parent.
             r.rotation = glam::Quat::from_rotation_y(self.twist) * r.rotation;
@@ -1584,7 +1610,10 @@ pub fn find_clip(clips: &[Clip], name: &str) -> Option<usize> {
 
 pub mod aim;
 pub mod census;
+mod combo_pose;
+pub mod custom;
 mod jump;
+mod offhand_pose;
 #[cfg(test)]
 mod tests;
 mod turn;

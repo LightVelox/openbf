@@ -10,8 +10,8 @@ files: engine/crates/game/src/viewer/walker_pose.rs, engine/crates/game/src/view
 declares:
 needs:
 effort:
-branch: codex/67-walker-aim
-resume: 2026-10-29 issue 67 assigned by maintainer; implemented on codex/67-walker-aim (baa84e9) and merged into local main as d8881a8 on top of droideka #65 (analysis/walker-aim-67.md). Parent-first visual aim, seat camera, tracers, armed-seat HUD and gun sounds exist. Original-game RAM fixture and matched PCSX2 acceptance remain unavailable; do not duplicate implementation. No push/PR authorized.
+branch:
+resume: (private workflow note omitted)
 created: 2026-10-22
 alpha: yes
 ---

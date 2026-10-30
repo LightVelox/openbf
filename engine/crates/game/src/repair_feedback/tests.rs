@@ -263,3 +263,90 @@ fn a_moving_cutters_effect_rides_the_drawn_muzzle_every_frame() {
         "the repair effect is {worst:.3} m off the drawn muzzle"
     );
 }
+
+/// A slice is a paid cutter action with zero healing, so its existing
+/// presentation consumers must not require a positive health delta.
+#[test]
+fn audit_slice_pulse_animates_emits_and_reaches_sound_consumers() {
+    for game in ["bf1", "bf2"] {
+        let Some((mut walk, mut vis, mut fx, pad)) = fixture(game) else {
+            continue;
+        };
+        walk.sim.stations.clear();
+        let class = walk
+            .sim
+            .weapon_classes
+            .iter()
+            .position(|c| c.repair.is_some())
+            .unwrap();
+        let cost = walk.sim.weapon_classes[class].heat_per_shot
+            * walk.sim.units[walk.player.index as usize].consts.energy_bar;
+        walk.sim.units[walk.player.index as usize].soldier.energy = cost;
+        // The real cutters author a loop. A synthetic one-shot name also
+        // verifies the Event::Repair route through the ordinary dispatcher.
+        walk.sim.weapon_classes[class].fire_sound = Some("audit_slice_pulse".into());
+        let vehicle = walk.sim.spawn_vehicle(&core::vehicle::VehicleSpec {
+            kind: core::vehicle::VehicleKind::Hover,
+            class: 0,
+            home_team: Some(1),
+            neutral_when_empty: true,
+            spawn_pad: None,
+            pos: Vec3::ZERO,
+            yaw: 0.0,
+            max_health: 1000.0,
+            health_type: core::weapon::HealthType::Vehicle,
+            seats: vec![core::vehicle::SeatKind::Pilot],
+        });
+        let target = walk.sim.vehicle_mut(vehicle).unwrap();
+        target.health.cur = 400.0;
+        target.aim_sphere = Some((Vec3::Y, 1.0));
+        walk.sim.slice_time = vec![2.0];
+        let rider = walk
+            .sim
+            .spawn(&UnitSpec::player_in_slot(1, 1, Vec3::X * 30.0))
+            .unwrap();
+        assert!(walk.sim.seat_unit(rider, vehicle, 0));
+        walk.step_tick(&[pad]);
+        let pulse = walk
+            .sim
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Repair {
+                    target: core::projectile::Target::Vehicle(v),
+                    amount,
+                    pos,
+                    ..
+                } if *v == vehicle => Some((*amount, *pos)),
+                _ => None,
+            })
+            .expect("paid slice pulse event");
+        assert_eq!(pulse.0, 0.0);
+        assert_eq!(walk.sim.vehicle(vehicle).unwrap().health.cur, 400.0);
+        assert!(walk.sim.vehicle(vehicle).unwrap().slice > 0.0);
+        assert!(walk.sim.units[walk.player.index as usize].soldier.energy < cost);
+        assert!(
+            active(&walk.sim, walk.player).is_some(),
+            "paid pulse remains active after its last affordable shot"
+        );
+        assert_eq!(loops(&walk.sim).len(), 1);
+        vis.note_shots(&walk);
+        vis.update(&walk, core::TICK_DT);
+        assert!(matches!(
+            vis.units[walk.player.index as usize].animator.action(),
+            Some((crate::animator::ActionKind::Shoot, _))
+        ));
+        fx.ingest(&walk);
+        assert!(
+            !fx.live().is_empty(),
+            "zero-healing slice has a muzzle effect"
+        );
+        let mut sounds = Vec::new();
+        crate::event_sounds::each(&walk, Vec3::ZERO, |name, pos| {
+            if name == "audit_slice_pulse" {
+                sounds.push(pos);
+            }
+        });
+        assert_eq!(sounds, vec![pulse.1]);
+    }
+}

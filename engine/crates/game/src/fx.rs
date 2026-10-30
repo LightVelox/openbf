@@ -49,6 +49,7 @@ mod chunks;
 pub mod draw;
 pub mod emitter;
 mod flame;
+mod force;
 mod jet;
 mod props;
 mod repair;
@@ -224,6 +225,7 @@ pub struct Library {
     pub era: Era,
     effects: HashMap<u32, Arc<EffectDef>>,
     beams: HashMap<u32, manifest::FxBeam>,
+    lightning: HashMap<u32, manifest::FxLightning>,
     /// The layers' `textures/` dirs, map first.
     texture_dirs: Vec<PathBuf>,
     model_dirs: Vec<PathBuf>,
@@ -251,9 +253,13 @@ impl Library {
     pub fn from_sets(era: Era, sets: Vec<FxSet>, rng: &mut Lcg) -> Library {
         let mut effects = HashMap::new();
         let mut beams = HashMap::new();
+        let mut lightning = HashMap::new();
         for set in sets {
             for b in set.beams {
                 beams.entry(b.hash).or_insert(b);
+            }
+            for b in set.lightning {
+                lightning.entry(b.hash).or_insert(b);
             }
             let effect_era = match set.game.as_str() {
                 "bf1" => Era::Bf1,
@@ -280,6 +286,7 @@ impl Library {
             era,
             effects,
             beams,
+            lightning,
             texture_dirs: Vec::new(),
             model_dirs: Vec::new(),
         }
@@ -306,6 +313,11 @@ impl Library {
             );
         }
         dirs.push(assets_dir.join(format!("common_{game}")));
+        // [ours] Aliased BF1 droid effects follow native layers, preserving
+        // the native effects' construction-time random variant caches.
+        if factions.contains(&"cis") {
+            dirs.push(assets_dir.join("droid_effects"));
+        }
         let mut sets = Vec::new();
         for d in &dirs {
             if let Some(set) = Self::read_set(d) {
@@ -326,6 +338,9 @@ impl Library {
         lib.model_dirs = dirs.iter().map(|d| d.join("models")).collect();
         lib.texture_dirs = dirs.iter().map(|d| d.join("textures")).collect();
         let side = assets_dir.join(format!("side_{game}"));
+        // Keep the BF1 chunk sheet apart from BF2's living SBD sheet.
+        lib.model_dirs.push(side.join("droid_chunks/weapons"));
+        lib.texture_dirs.push(side.join("droid_chunks/textures"));
         lib.model_dirs.push(side.join("weapons"));
         lib.texture_dirs.push(side.join("textures"));
         let mut vehicles = pak::read_dir(side.join("vehicles")).unwrap_or_default();
@@ -670,6 +685,7 @@ pub struct Fx {
     arcs: Vec<arc::Arc>,
     /// The sim tick last ingested; the arcs' clock.
     tick: u64,
+    force: force::State,
 }
 
 impl std::fmt::Debug for Fx {
@@ -699,10 +715,17 @@ impl Fx {
 
     /// The effect layers of the map at `map_dir` for `walk`'s two sides.
     pub fn for_walk(assets_dir: &Path, map_dir: &Path, game: &str, walk: &WalkSim) -> Fx {
-        let factions = [
+        let mut factions = vec![
             walk.teams[0].faction.as_str(),
             walk.teams[1].faction.as_str(),
         ];
+        if game.eq_ignore_ascii_case("bf2") && walk.sim.heroes.is_some() {
+            for side in ["all", "imp", "rep", "cis"] {
+                if !factions.contains(&side) {
+                    factions.push(side);
+                }
+            }
+        }
         let mut fx = Fx::load(assets_dir, map_dir, game, &factions);
         if let (Some(lib), Ok(mut db)) = (
             fx.library.as_ref(),
@@ -720,6 +743,7 @@ impl Fx {
             names.sort();
             names.dedup();
             fx.chunks = chunks::Chunks::load(&db, &names, &lib.model_dirs, lib.era);
+            fx.force = force::State::load(&db, &walk.sim);
         }
         fx
     }
@@ -901,6 +925,7 @@ impl Fx {
                 next.extend(em.geometry.child.as_deref());
             }
         }
+        names.extend(lib.lightning.values().filter_map(|b| b.texture.clone()));
         if self.water.active() {
             names.push(ripple::TEXTURE.to_owned());
         }
@@ -973,7 +998,24 @@ impl Fx {
             }
         }
         out.extend(self.beams.iter().map(props::Glow::draw));
+        if let Some(lib) = &self.library {
+            out.extend(self.force.draws(camera, |name| {
+                sheet(r, &lib.texture_dirs, &mut self.textures, name)
+            }));
+        }
         r.set_particles(out);
+    }
+
+    /// Ingest the tick using the last drawn soldier pose for chunk launch bones.
+    pub fn ingest_posed(
+        &mut self,
+        walk: &WalkSim,
+        vis: Option<&crate::soldier_vis::SoldierVisuals>,
+    ) {
+        if let Some(vis) = vis {
+            self.chunks.pose_bursts(walk, vis);
+        }
+        self.ingest(walk);
     }
 
     /// Read this tick's sim events into effects.
@@ -1021,6 +1063,7 @@ impl Fx {
         self.follow_rounds(sim);
         self.follow_repairs(sim);
         self.follow_buffs(sim);
+        self.ingest_force(sim);
         self.follow_burns(sim);
         self.flame_shots(sim);
         let baked = self.has_effects();
@@ -1067,14 +1110,26 @@ impl Fx {
                         self.explode(x, at, sim.water_under(at));
                     }
                 }
-                Event::Blast { pos, weapon_class } => {
-                    let look = sim
+                // A blade's contact (B2 FUN_00340c60 336314-336333, FUN_0031d688,
+                // FUN_0033e8b8 334744-334751): the authored effect, unriding.
+                Event::SaberContact {
+                    pos,
+                    weapon_class,
+                    deflect,
+                } if baked => {
+                    let saber = sim
                         .weapon_classes
                         .get(*weapon_class as usize)
-                        .and_then(|w| w.ordnance.explosion.as_ref())
-                        .map(|e| &e.look);
-                    if let Some(look) = look {
-                        self.explode(look, *pos, sim.water_under(*pos));
+                        .and_then(|w| w.saber.as_ref());
+                    let name = saber.and_then(|s| {
+                        if *deflect {
+                            s.deflect_effect.as_deref()
+                        } else {
+                            s.hit_effect.as_deref()
+                        }
+                    });
+                    if let Some(name) = name {
+                        self.spawn(name, Frame::at(*pos));
                     }
                 }
                 Event::BoltExpired { pos, struck } if !baked => {
@@ -1157,6 +1212,15 @@ impl Fx {
                 }
                 // A thrown grenade's fuse ran out (GREN): its explosion
                 // class's effect where it lay.
+                Event::WeaponBlast { pos, weapon_class } => {
+                    if let Some(explosion) = sim.weapon_classes[*weapon_class as usize]
+                        .ordnance
+                        .explosion
+                        .as_ref()
+                    {
+                        self.explode(&explosion.look, *pos, sim.water_under(*pos));
+                    }
+                }
                 Event::StickyBlast { pos, weapon_class } => {
                     let look = sim
                         .weapon_classes
@@ -1296,6 +1360,7 @@ impl Fx {
         self.live.retain(|e| !e.is_dead());
         self.water.update(dt);
         self.chunks.update(dt);
+        self.force.update(dt);
         for effect in &mut self.attached {
             effect.step(dt);
         }
@@ -1307,6 +1372,7 @@ impl Fx {
             + self.live.len()
             + self.arcs.len()
             + self.chunks.len()
+            + self.force_bolts()
             + self.attached.iter().filter(|a| a.live.is_some()).count()
     }
 
@@ -1324,6 +1390,7 @@ impl Fx {
         self.attached.clear();
         self.beams.clear();
         self.arcs.clear();
+        self.force.clear();
     }
 
     /// Camera-facing quads for the live effects. `quad` is the unit quad from

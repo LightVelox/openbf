@@ -91,10 +91,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         let (held, heard) = perception::scan(sim, me, st, tier);
         // Card TEAM: then what the friends near by see.
         nt.told = perception::tell(sim, me, st);
-        nt.acquired = u8::from(match super::man::arc_of(sim, u) {
-            Some(holds) => perception::choose_target_with(sim, me, st, tier, holds),
-            None => perception::choose_target(sim, me, st, tier),
-        });
+        nt.acquired = u8::from(perception::choose_target(sim, me, st, tier));
         // Card DFOCUS: a holder of a human's token at Hard / Elite makes him
         // its target (`crate::ai::dfocus`).
         if let Some(h) = crate::ai::dfocus::pick(sim, me, st) {
@@ -310,6 +307,10 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         let d = sim.live_droid(id)?;
         Some((d, perception::fireable(&c, sim.tick, tier.reaction_ticks)))
     });
+    let turret = seen.and_then(|c| {
+        let t = sim.live_turret(c.handle.turret()?)?;
+        Some((t, perception::fireable(&c, sim.tick, tier.reaction_ticks)))
+    });
     let pos = u.soldier.pos;
     let tk = Tick {
         me,
@@ -322,13 +323,15 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     // D9: the AI sniper distance table's spread, every tick (the gunner's).
     let seen_at = enemy
         .map(|e| e.capsule().center())
-        .or(droid.map(|(d, _)| d.pos));
+        .or(droid.map(|(d, _)| d.pos))
+        .or(turret.map(|(t, _)| t.centre()));
     gunner_foot::range_table(&tk, st, seen_at);
     // Card GRAI: the weapon for this target, once a think (the gunner's).
     if thinking {
-        match droid {
-            Some((d, _)) => super::arsenal::think_droid(sim, &tk, st, d),
-            None => super::arsenal::think(sim, &tk, st, enemy),
+        match (droid, turret) {
+            (Some((d, _)), _) => super::arsenal::think_droid(sim, &tk, st, d),
+            (_, Some((t, _))) => super::arsenal::think_turret(sim, &tk, st, t),
+            _ => super::arsenal::think(sim, &tk, st, enemy),
         }
     }
 
@@ -570,6 +573,8 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     // placeholder).
     let aim = if let Some((d, ready)) = droid {
         AimRequest::Droid(d, ready)
+    } else if let Some((t, ready)) = turret {
+        AimRequest::Turret(t, ready)
     } else {
         match (enemy.zip(seen), memory, corner, route_leg) {
             // A seen enemy: the gunner's own aim point (its lead point under the
@@ -682,6 +687,29 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
     // least, and the 2 s after which it is given up.
     let free =
         ret.is_none() && flee.is_none() && boarding.is_none() && item.is_none() && st.cmd.is_none();
+    let melee_goal = if free
+        && wc.saber.is_some()
+        && !st.arm.spare
+        && st.arm.pick.is_none_or(|slot| slot == u.weapon_slot)
+    {
+        enemy.filter(|e| e.mount.is_none()).map(|target| {
+            let state = st
+                .melee
+                .get_or_insert_with(|| super::super::melee::MeleeBrain::begin(me, sim.tick));
+            super::super::melee::goal(sim, me, u, target, state)
+        })
+    } else {
+        None
+    };
+    if melee_goal.is_some() {
+        super::tactic::release(st, sim.tick);
+        st.hold = None;
+        st.fight.mode = 0;
+        st.route = None;
+        st.want_stance = 0;
+    } else if wc.saber.is_none() {
+        st.melee = None;
+    }
     // Card TPOS: hidden at its position a bot does not see its target - the
     // hide phase's point - and it keeps the position while it remembers it
     // (without this the fight lapsed 2 s into the hide and the bot walked
@@ -711,7 +739,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
             .ride
             .and_then(|r| r.board)
             .is_some_and(|vh| super::man::is_turret(sim, vh));
-    match fight.filter(|_| free) {
+    match fight.filter(|_| free && melee_goal.is_none()) {
         Some((e, r)) => fight_position(sim, &tk, st, e, r, thinking, &mut nt),
         None if !free || st.hold.is_none_or(|h| sim.tick >= h.until) => {
             if st.fight.mode == FightState::TAKE {
@@ -741,7 +769,7 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
         (WalkAsk::HOLD, Some(h)) => Some(h.goal),
         _ => goal,
     };
-    let mv = MoveRequest {
+    let mut mv = MoveRequest {
         kind: walk_kind,
         goal,
         arrive,
@@ -774,6 +802,15 @@ fn chain(sim: &Sim, me: UnitHandle, st: &mut AiState) -> (PadState, NavTick) {
                 super::arsenal::Armed::Thrown(..)
             ),
     };
+    if let Some(goal) = melee_goal {
+        mv.kind = WalkAsk::LEG;
+        mv.goal = Some(goal);
+        mv.arrive = None;
+        mv.post = None;
+        mv.in_range = false;
+        mv.hold = None;
+        mv.throwing = false;
+    }
     // The mover: the move sticks, the stance, the roll and the jump. It
     // answers whether the bot stands at its post.
     let moved = mover::run(sim, &tk, st, &mv, &mut pad, &mut nt);

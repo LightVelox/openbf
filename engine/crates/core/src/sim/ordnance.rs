@@ -80,6 +80,9 @@ impl Sim {
             if self.cloak_input(i, Some(k), held, blocked) {
                 continue;
             }
+            if self.force_input(i, Some(k), held, blocked) {
+                continue;
+            }
             let remote = self.remote_input(i, Some(k), held, blocked);
             let input = FireInput {
                 held: held && !remote,
@@ -153,6 +156,21 @@ impl Sim {
         }
     }
 
+    /// Bind presentation identity at the event producer, before rounds can be
+    /// removed or become indistinguishable from another pellet's physics.
+    pub(super) fn note_bolt_shot(&mut self, bolt: &mut Bolt, origin: Vec3, dir: Vec3) {
+        bolt.visual_shot = Some(crate::projectile::VisualShot {
+            tick: self.tick,
+            event: self.events.len(),
+        });
+        self.events.push(Event::Shot {
+            unit: bolt.owner,
+            weapon_class: bolt.weapon_class as u32,
+            origin,
+            dir,
+        });
+    }
+
     pub(super) fn soldier_shots(&mut self, i: usize, held_slot: Option<usize>, shots: &[ShotSpec]) {
         if shots.is_empty() {
             return;
@@ -188,6 +206,14 @@ impl Sim {
             }
             if self.weapon_classes[stage].turret.is_some() {
                 self.place_turret(i, stage, spec.charge);
+                continue;
+            }
+            if self.weapon_classes[stage].saber_throw.is_some() {
+                self.launch_saber_throw(i, held_slot, stage);
+                continue;
+            }
+            if self.weapon_classes[stage].force.is_some() {
+                self.fire_force(i, stage, spec.charge);
                 continue;
             }
             if self.weapon_classes[stage].ability.is_some() {
@@ -312,12 +338,7 @@ impl Sim {
                 st.lock_target = None;
                 st.lock_held = 0.0;
             }
-            self.events.push(Event::Shot {
-                unit,
-                weapon_class: stage as u32,
-                origin,
-                dir,
-            });
+            self.note_bolt_shot(&mut bolt, origin, dir);
             self.launch_round(bolt, true);
             // The tracer rides the SAME ray the primary round took - it draws
             // no extra LCG step (the PS2 spawns both from one packet).

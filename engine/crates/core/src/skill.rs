@@ -420,6 +420,14 @@ pub struct Tier {
     pub hunts: bool,
 }
 
+/// [ours] PROVISIONAL: the share of its skill a bot on foot's aim tracker
+/// reads (its acceleration clamp and damping, [`Skill::tracker_for`]),
+/// every tier and both teams alike. The PS2's law swings onto a new target
+/// in 7-20 ticks at skills 14-20; the port's old law took 70-90, about what
+/// the PS2's does at skills 4-7, a third of the skill (simulated: 0.35 fits
+/// the old swing at skills 11-20 best). Every other skill term is the bot's own.
+pub const TRACKER_SHARE: f32 = 0.35;
+
 /// Everything the AI reads off its integer skill, computed once per think.
 ///
 /// Every curve here is the RE's (`analysis/re-ai-difficulty.md` §4.1 —
@@ -513,6 +521,12 @@ impl Skill {
             grenade_chance: t,
             dodge_chance: lerp(0.0, 0.2),
         }
+    }
+
+    /// The skill a bot on foot's aim tracker reads: [`TRACKER_SHARE`] of its
+    /// own, rounded, floored at 1.
+    pub fn tracker_skill(self) -> Skill {
+        Skill::from_level(((f32::from(self.level) * TRACKER_SHARE).round() as u8).max(1))
     }
 
     /// The aim tracker's `(A, B)` = (acceleration clamp, damping), HALVED for
@@ -716,6 +730,16 @@ mod tests {
         // Skill 0 (a player, a dummy) is never a bot's: it clamps to the
         // worst bot rather than dividing by zero anywhere downstream.
         assert!(Skill::from_level(0).spread_mult > 2.9);
+    }
+
+    #[test]
+    fn the_foot_tracker_reads_a_share_of_the_skill() {
+        for (s, t) in [(1, 1), (2, 1), (11, 4), (14, 5), (17, 6), (20, 7)] {
+            let k = Skill::from_level(s).tracker_skill();
+            assert_eq!(k.level, t, "skill {s}");
+        }
+        let k = Difficulty::Normal.skill().tracker_skill();
+        assert_eq!(k.tracker_for(true), Skill::from_level(6).tracker_for(true));
     }
 
     #[test]

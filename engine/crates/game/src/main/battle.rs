@@ -139,7 +139,13 @@ fn team_templates(
             // TABLE the AI mix and the spawn-select both read.
             let mut names: Vec<(String, usize)> = Vec::new();
             let mut team = 0usize;
-            rosters.map(|r| {
+            let mut hero_classes = [None; 2];
+            let templates = rosters.map(|mut r| {
+                // Heroes Off: no hero class at all (Session Options).
+                if b.heroes.is_some() {
+                    hero_classes[team] =
+                        game::heroes::append(&mut r, &b.classes_dir, b.mission.as_ref(), team);
+                }
                 let mut table = Vec::new();
                 let mut visuals = Vec::new();
                 for c in &r.classes {
@@ -166,7 +172,11 @@ fn team_templates(
                 sim.classes[team] = table;
                 team += 1;
                 game::walk::TeamTemplate::from_roster(&r, &sim.classes[team - 1][0], visuals)
-            })
+            });
+            if let Some(rules) = b.heroes {
+                game::heroes::install_with(sim, hero_classes, rules);
+            }
+            templates
         }
         Err(e) => {
             eprintln!("class data unavailable ({e:#}); using built-in BF1 troopers");
@@ -251,6 +261,16 @@ pub(super) fn stats_pages(
 
 /// Build the walk/battle sim for a loaded scene per the CLI flags.
 pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim {
+    make_walk_with_counts(scene, b, None)
+}
+
+/// The same construction order with explicit opening AI counts for the
+/// benchmark's total-combatant fixture (a human replaces one AI slot).
+pub(super) fn make_walk_with_counts(
+    scene: &game::assets::Scene,
+    b: &BattleSetup,
+    counts: Option<[u32; 2]>,
+) -> WalkSim {
     let mut sim = core::sim::Sim::empty(b.seed);
     // The tier is set BEFORE `setup_conquest` spawns anyone: every bot takes
     // its skill at spawn (D2).
@@ -261,13 +281,26 @@ pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim
     sim.ground_rules = core::soldier::GroundRules::for_game(&scene.manifest.source_game);
     sim.item_pool = game::roster::item_pool(&scene.manifest.source_game, &scene.manifest.map);
     sim.cheats = b.cheats;
-    sim.battle = core::battle::Battle::new(match &b.mission {
-        _ if b.tickets_set => [b.tickets, b.tickets],
-        Some(m) => m
-            .tickets()
-            .map(|n| core::sim::scale_reinforcements(n, b.ticket_pct)),
-        None => [core::sim::scale_reinforcements(b.tickets, b.ticket_pct); 2],
-    });
+    // Map defaults belong to a conquest (a mission); a plain map walk has none.
+    // The mission carries the game's unique key (bf1_nab2), not the manifest's
+    // world name (naboo2).
+    let map_defaults = b
+        .mission
+        .as_ref()
+        .and_then(|m| game::conquest_defaults::for_map(&m.map, m.era.as_deref() == Some("cw")));
+    let defaults = b.team_size_pct.and(map_defaults);
+    let resolved = defaults.map(|d| d.scaled(b.team_size_pct.unwrap_or(100), b.ticket_pct));
+    let tickets = if b.tickets_set {
+        [b.tickets; 2]
+    } else if let Some(d) = resolved {
+        d.tickets
+    } else {
+        b.mission
+            .as_ref()
+            .map_or([b.tickets; 2], |m| m.tickets())
+            .map(|n| core::sim::scale_reinforcements(n, b.ticket_pct))
+    };
+    sim.battle = core::battle::Battle::new(tickets);
     sim.time_limit = (b.time_limit > 0).then(|| b.time_limit * 60);
     if let Some(m) = &b.mission {
         sim.ai_alive_cap = m.ai_alive_cap;
@@ -276,6 +309,9 @@ pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim
     // --ai-cap wins over the mission, and applies with or without one.
     if let Some(cap) = b.ai_cap {
         sim.ai_alive_cap = cap;
+    }
+    if let Some(d) = resolved {
+        sim.team_combatants = Some(d.combatants);
     }
     let teams = team_templates(scene, b, &mut sim);
     let seat = usize::from(b.player_team.min(1));
@@ -287,6 +323,10 @@ pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim
         game::layout::nav_graph(&scene.manifest, &scene.dir),
         b.player_team,
     );
+    // Only a battle that uses percentages can change them in the pause menu.
+    walk.conquest_defaults = defaults;
+    walk.team_size_pct = b.team_size_pct.unwrap_or(100);
+    walk.reinforcement_pct = b.ticket_pct;
     // Model collision: the scene has already had its mode layer applied (see
     // `Scene::collision_world` — building it earlier misses every BF2 conquest
     // instance).
@@ -295,13 +335,18 @@ pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim
     if b.targets {
         walk.spawn_dummy_targets();
     }
-    // --mission implies a conquest setup: AI counts from the mission unless
-    // --ai overrides them.
-    let ai_counts: Option<[u32; 2]> = match (b.ai, &b.mission) {
-        (Some(n), _) => Some([n, n]),
-        (None, Some(m)) => Some([m.initial_ai(0, seat == 0), m.initial_ai(1, seat == 1)]),
-        (None, None) => None,
-    };
+    // Percentages use the map's combatant slots. A bench's explicit counts
+    // win, then --ai; legacy CLI launches without percentages use authored
+    // mission counts.
+    let ai_counts = counts.or(if let Some(n) = b.ai {
+        Some([n; 2])
+    } else if let Some(d) = resolved {
+        Some(d.initial_ai(b.player_team))
+    } else {
+        b.mission
+            .as_ref()
+            .map(|m| [m.initial_ai(0, seat == 0), m.initial_ai(1, seat == 1)])
+    });
     let mut vehicle_classes: Vec<String> = Vec::new();
     let mut layout = game::layout::MapLayout::from_manifest(&scene.manifest);
     // The mission owns the command-post roster, the posts it kills, the
@@ -384,9 +429,20 @@ pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim
             let tickets = [0, 1].map(|t| walk.sim.battle.teams[t].tickets());
             let bf2 = m.source_game == "bf2";
             walk.music = Some(game::music::BattleMusic::new(&m.music, bf2, tickets));
+            let names = [0u8, 1].map(|team| {
+                walk.sim.hero_class(team).and_then(|class| {
+                    walk.teams[usize::from(team)]
+                        .class(class)
+                        .cries
+                        .hero
+                        .music
+                        .clone()
+                })
+            });
+            walk.music.as_mut().unwrap().set_hero_music(names);
         }
         println!(
-            "conquest: {} posts, the player on team {} ({}), AI {}/{}, tickets {}/{}, alive-AI cap {}, difficulty {}, omni {:.0} m",
+            "conquest: {} posts, the player on team {} ({}), AI {}/{}, tickets {}/{}, alive-AI limit {}/{}, difficulty {}, omni {:.0} m",
             layout.cps.len(),
             seat + 1,
             walk.teams[seat].faction,
@@ -394,7 +450,8 @@ pub(super) fn make_walk(scene: &game::assets::Scene, b: &BattleSetup) -> WalkSim
             counts[1],
             walk.sim.battle.teams[0].tickets(),
             walk.sim.battle.teams[1].tickets(),
-            walk.sim.ai_alive_cap,
+            walk.sim.ai_limit(0),
+            walk.sim.ai_limit(1),
             walk.sim.difficulty.label(),
             walk.sim.omni_radius,
         );
@@ -450,6 +507,7 @@ pub(super) fn hud_model(
         .controlled_guided(walk.player)
         .and_then(|r| Some((r, walk.sim.guided_class(r)?)));
     let on_foot = me.alive && me.mount.is_none() && droid.is_none() && guided.is_none();
+    let (stamina, stamina_max) = me.stamina_bar();
     let (hp, hp_max, energy, energy_max) = match (guided, droid) {
         (Some((r, c)), _) => (r.health, c.health, r.energy, c.energy),
         // [ours] Flying a droid, the stamina bar runs down its 90 s.
@@ -459,12 +517,7 @@ pub(super) fn hud_model(
             d.time_left(),
             core::remote::LIFETIME,
         ),
-        (None, None) => (
-            me.health.cur,
-            me.health.max,
-            me.soldier.energy,
-            me.consts.energy_bar,
-        ),
+        (None, None) => (me.health.cur, me.health.max, stamina, stamina_max),
     };
     let spawn = spawn_model(walk, feed).and_then(|s| s.page);
     let slot = me.spec.player_slot.map_or(0, usize::from);
@@ -487,6 +540,24 @@ pub(super) fn hud_model(
         bleed: [b.teams[0].bleed_per_sec, b.teams[1].bleed_per_sec],
         hp,
         hp_max,
+        hero: walk.sim.is_hero(walk.player),
+        hero_offer: walk.sim.hero_offer(slot).map(|(class, seconds)| {
+            let name = feed
+                .class_names(me.team)
+                .get(usize::from(class))
+                .cloned()
+                .unwrap_or_else(|| {
+                    walk.teams[usize::from(me.team.min(1))]
+                        .class(class)
+                        .label
+                        .clone()
+                });
+            (
+                feed.text_by_hash(0xadd5_467c, "Play as %s?")
+                    .replacen("%s", &name, 1),
+                seconds,
+            )
+        }),
         energy,
         energy_max,
         weapon,
@@ -625,7 +696,8 @@ pub(super) fn spawn_model(
     // respawn reads; each name is the disc's (`EventFeed::class_names`), else
     // the roster's label.
     let team = &walk.teams[usize::from(me.team.min(1))];
-    let has_table = !walk.sim.classes[usize::from(me.team.min(1))].is_empty();
+    let classes = walk.sim.spawn_class_indices(slot, me.team);
+    let choice = walk.sim.spawn_class_choice(slot, me.team);
     let names = feed.class_names(me.team);
     Some(ui::spawn::SpawnModel {
         team_names: [walk.teams[0].faction.clone(), walk.teams[1].faction.clone()],
@@ -633,18 +705,16 @@ pub(super) fn spawn_model(
         tickets: [b.teams[0].tickets(), b.teams[1].tickets()],
         posts,
         selected,
-        classes: if !has_table {
-            Vec::new()
-        } else if names.len() == team.classes.len() {
-            names.to_vec()
-        } else {
-            team.classes.iter().map(|c| c.label.clone()).collect()
-        },
-        selected_class: walk
-            .sim
-            .spawn_choice
-            .get(slot)
-            .map_or(0, |c| usize::from(*c)),
+        classes: classes
+            .iter()
+            .map(|&c| {
+                names
+                    .get(c)
+                    .cloned()
+                    .unwrap_or_else(|| team.classes[c].label.clone())
+            })
+            .collect(),
+        selected_class: classes.iter().position(|&c| Some(c) == choice).unwrap_or(0),
         countdown,
         screen,
         page,
@@ -724,6 +794,7 @@ mod tests {
             targets: false,
             ai: Some(0),
             ai_cap: None,
+            team_size_pct: None,
             tickets: 250,
             tickets_set: false,
             ticket_pct: 100,
@@ -734,6 +805,7 @@ mod tests {
             mission: None,
             mission_file: None,
             player_team: 0,
+            heroes: Some(core::sim::heroes::HeroRules::default()),
         };
         let mut walk = make_walk(&scene, &setup);
         assert_eq!(walk.vehicle_classes, ["fixture_dish"]);
@@ -761,5 +833,183 @@ mod tests {
         walk.sim.vehicles[h.index as usize].health.cur = 75.0;
         assert_eq!(feed.target(&walk.sim, 0).unwrap().health_fraction, 0.25);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+    #[test]
+    fn instant_action_real_map_uses_ratios_tickets_and_one_human_slot() {
+        let assets = game::assets::baked_root();
+        let path = assets.join("bf1_nab2");
+        if !path.join("manifest.ron").exists() {
+            eprintln!("SKIP: no real bake");
+            return;
+        }
+        let mut scene = game::assets::load_scene(&path).unwrap();
+        scene.apply_mode_layer("con");
+        let mut setup = BattleSetup {
+            seed: 42,
+            difficulty: Default::default(),
+            spawn: (0.0, 0.0),
+            spawn_set: false,
+            targets: false,
+            ai: None,
+            ai_cap: None,
+            team_size_pct: Some(100),
+            tickets: 250,
+            tickets_set: false,
+            ticket_pct: 100,
+            time_limit: 0,
+            cheats: Default::default(),
+            teams: None,
+            classes_dir: assets.join("classes"),
+            mission: None,
+            mission_file: None,
+            player_team: 1,
+            heroes: Some(core::sim::heroes::HeroRules::default()),
+        };
+        // Resolve missions independently of the bake location.
+        setup.mission = Some(
+            game::mission::MissionDef::load(&std::path::PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../missions/bf1_nab2_con.ron"
+            )))
+            .unwrap(),
+        );
+        assert_eq!(scene.manifest.map, "naboo2");
+        assert_eq!(setup.mission.as_ref().unwrap().map, "bf1_nab2");
+        let mut walk = make_walk(&scene, &setup);
+        assert_eq!(walk.sim.team_combatants, Some([19, 21]));
+        assert_eq!(
+            (
+                walk.sim.battle.teams[0].alive(),
+                walk.sim.battle.teams[1].alive()
+            ),
+            (19, 21)
+        );
+        assert_eq!((walk.sim.ai_limit(0), walk.sim.ai_limit(1)), (19, 20));
+        assert_eq!(
+            walk.sim
+                .units
+                .iter()
+                .filter(|u| u.is_player && u.alive)
+                .count(),
+            1
+        );
+        let d = game::conquest_defaults::for_map("bf1_nab2", false).unwrap();
+        assert_eq!(walk.sim.battle.teams.map(|t| t.tickets()), d.tickets);
+        let before = walk.sim.battle.teams.map(|t| t.tickets());
+        walk.set_team_size_percent(50);
+        assert_eq!(walk.sim.battle.teams.map(|t| t.alive()), [10, 11]);
+        assert_eq!(walk.sim.battle.teams.map(|t| t.tickets()), before);
+        let pending: Vec<_> = walk
+            .sim
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| !u.alive && u.respawn_at.is_some())
+            .map(|(i, u)| (i, u.gen, u.respawn_at))
+            .collect();
+        walk.set_team_size_percent(100);
+        assert_eq!((walk.sim.ai_limit(0), walk.sim.ai_limit(1)), (19, 20));
+        assert_eq!(
+            walk.sim.battle.teams.map(|t| t.alive()),
+            [10, 11],
+            "raising the cap must not bypass respawn waves"
+        );
+        walk.set_team_size_percent(150);
+        assert_eq!(walk.sim.team_combatants, Some([29, 32]));
+        for (i, gen, at) in pending {
+            let u = &walk.sim.units[i];
+            assert_eq!((u.gen, u.respawn_at), (gen, at));
+            assert!(!u.alive);
+        }
+        assert_eq!(walk.sim.battle.teams.map(|t| t.tickets()), before);
+        // The human changes side: his old team gets a bot in his slot.
+        let roster = |w: &WalkSim, t: u8| {
+            w.sim
+                .units
+                .iter()
+                .filter(|u| !u.is_player && u.team == t && (u.alive || u.respawn_at.is_some()))
+                .count() as u32
+        };
+        walk.step_tick(&[core::sim::PadState::default()]);
+        assert_eq!(roster(&walk, 1), walk.sim.ai_limit(1));
+        let p = walk.player.index as usize;
+        walk.sim.units[p].team = 0;
+        walk.sim.units[p].spec.team = 0;
+        walk.step_tick(&[core::sim::PadState::default()]);
+        assert_eq!(walk.sim.ai_limit(1), 32);
+        assert_eq!(
+            roster(&walk, 1),
+            32,
+            "the old team refills the human's slot"
+        );
+        // A plain map walk (no mission) takes no map defaults, even with a
+        // percentage set: the scene folder's name must not start a conquest.
+        setup.mission = None;
+        setup.ai = Some(0);
+        let walk = make_walk(&scene, &setup);
+        assert_eq!(walk.conquest_defaults, None);
+        assert_eq!(walk.sim.team_combatants, None);
+        assert_eq!(walk.sim.battle.teams.map(|t| t.tickets()), [250; 2]);
+    }
+
+    /// Session Options' Heroes row reaches the battle: Off installs no
+    /// hero (no class appended, no manager); On installs the session's rules.
+    #[test]
+    fn heroes_off_installs_nothing_and_on_carries_the_session_rules() {
+        let assets = game::assets::baked_root();
+        let path = assets.join("bf2_cor1");
+        let missions =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../missions"));
+        if !path.join("manifest.ron").exists() || !missions.join("bf2_cor1_con_cw.ron").exists() {
+            eprintln!("SKIP: no real BF2 bake or missions");
+            return;
+        }
+        let mut scene = game::assets::load_scene(&path).unwrap();
+        scene.apply_mode_layer("con");
+        let mission =
+            game::mission::MissionDef::load(&missions.join("bf2_cor1_con_cw.ron")).unwrap();
+        let mut session = ui::shell::SessionOptions::default();
+        let mut walks = Vec::new();
+        for on in [false, true] {
+            session.heroes = on;
+            session.hero_unlock = 5;
+            session.hero_unlock_val = 42;
+            session.hero_respawn = -1;
+            let setup = BattleSetup {
+                seed: 42,
+                difficulty: Default::default(),
+                spawn: (0.0, 0.0),
+                spawn_set: false,
+                targets: false,
+                ai: None,
+                ai_cap: None,
+                team_size_pct: Some(100),
+                tickets: 250,
+                tickets_set: false,
+                ticket_pct: 100,
+                time_limit: 0,
+                cheats: Default::default(),
+                teams: Some(mission.factions()),
+                classes_dir: assets.join("classes"),
+                mission: Some(mission.clone()),
+                mission_file: None,
+                player_team: 0,
+                heroes: game::heroes::rules(&session),
+            };
+            walks.push(make_walk(&scene, &setup));
+        }
+        let (off, on) = (&walks[0], &walks[1]);
+        assert!(off.sim.heroes.is_none(), "Off: no manager");
+        assert_eq!(off.sim.hero_class(0), None);
+        for t in 0..2 {
+            assert_eq!(
+                on.sim.classes[t].len(),
+                off.sim.classes[t].len() + 1,
+                "Off: no hero class"
+            );
+        }
+        let rules = on.sim.heroes.as_ref().unwrap().rules;
+        assert_eq!(rules.unlock, core::sim::heroes::HeroUnlock::Timer(42));
+        assert_eq!(rules.respawn_ticks, None);
     }
 }

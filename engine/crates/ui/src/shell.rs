@@ -800,6 +800,9 @@ impl Opt {
 /// The session's option values (§2.3's fields and defaults).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionOptions {
+    /// Every conquest map/era's defaults (`game::conquest_defaults::TABLE`):
+    /// the Team size / Reinforcements help averages over all of them.
+    pub population_table: &'static [crate::population::Entry],
     pub num_bots: i32,
     /// The AI tier, 1 Easy, 2 Normal, 3 Hard, 4 Elite (the profile's;
     /// [`DIFFICULTY_LEVELS`]). A named deviation: the PS2's `iDifficulty` is
@@ -827,21 +830,25 @@ pub struct SessionOptions {
 }
 
 impl Default for SessionOptions {
-    /// The PS2's values (§2.3, menuref "Session Options" table [M]): 16 AI,
+    /// Conquest population is map-relative (maintainer, 2026-10-29): 100%.
+    /// Unsupported modes retain the PS2's values (§2.3): 16 AI,
     /// Normal (ours: 2 = Normal, the port's default tier), 100 %, timers Off,
-    /// CTF 5, Hunt 5 min / 50, Assault 180; Heroes Off, Unlock Points, first
-    /// to 10 points, Best Player, Timer 90 s (`so_hero`,
-    /// `sheets/hero_all_steps.png`).
+    /// CTF 5, Hunt 5 min / 50, Assault 180; Unlock Points, first to 10
+    /// points, Best Player, Timer 90 s (`so_hero`,
+    /// `sheets/hero_all_steps.png`). [ours] Heroes On (the PS2's is Off;
+    /// maintainer 2026-10-30: "Make heroes on by default in instant
+    /// action").
     fn default() -> Self {
         SessionOptions {
-            num_bots: 16,
+            population_table: &[],
+            num_bots: 100,
             difficulty: 2,
-            heroes: false,
+            heroes: true,
             hero_unlock: 3,
             hero_unlock_val: 10,
             hero_assign: 1,
             hero_respawn: 90,
-            con_numbots: 16,
+            con_numbots: 100,
             con_mult: 100,
             con_timer: 0,
             ctf_numbots: 16,
@@ -856,6 +863,23 @@ impl Default for SessionOptions {
 }
 
 impl SessionOptions {
+    /// The Team size / Reinforcements help: what an average match over every
+    /// map looks like at the current percentages (two lines).
+    pub fn population_help(&self, option: Opt) -> Option<String> {
+        let team = match option {
+            Opt::NumBots => self.num_bots,
+            Opt::ConNumBots | Opt::ConMult => self.con_numbots,
+            _ => return None,
+        } as u32;
+        let summary = crate::population::summary(self.population_table, team, self.con_mult as u32);
+        let [team_note, ticket_note] = crate::population::notes(summary);
+        Some(if option == Opt::ConMult {
+            ticket_note
+        } else {
+            team_note
+        })
+    }
+
     /// The group's rows; Heroes Off hides the other hero rows (main.f8).
     pub fn rows(&self, g: Group) -> Vec<Opt> {
         match g {
@@ -883,12 +907,13 @@ impl SessionOptions {
         let clamp = |v: i32, lo: i32, hi: i32| v.clamp(lo, hi);
         match o {
             Opt::NumBots => {
-                self.num_bots = clamp(self.num_bots + d, 0, MAX_BOTS);
-                // A change copies into every mode's count (pc 12-29; menuref:
-                // Global 10 -> Conquest, CTF and Assault read 10).
+                self.num_bots = clamp(
+                    self.num_bots + 10 * d,
+                    10,
+                    crate::population::MAX_TEAM_PCT as i32,
+                );
+                // The supported mode shares the global population percentage.
                 self.con_numbots = self.num_bots;
-                self.ctf_numbots = self.num_bots;
-                self.ass_numbots = self.num_bots;
             }
             // `[ours]` the four tiers, a step per press, clamped like the
             // other rows (L1/R1 go to the ends). The PS2's row toggles
@@ -910,7 +935,14 @@ impl SessionOptions {
                     (v, _) => (v + d).max(0),
                 }
             }
-            Opt::ConNumBots => self.con_numbots = clamp(self.con_numbots + d, 0, MAX_BOTS),
+            Opt::ConNumBots => {
+                self.con_numbots = clamp(
+                    self.con_numbots + 10 * d,
+                    10,
+                    crate::population::MAX_TEAM_PCT as i32,
+                );
+                self.num_bots = self.con_numbots;
+            }
             Opt::ConMult => self.con_mult = clamp(self.con_mult + 10 * d, 10, 500),
             Opt::ConTimer => self.con_timer = clamp(self.con_timer + 5 * d, 0, 60),
             Opt::CtfNumBots => self.ctf_numbots = clamp(self.ctf_numbots + d, 0, MAX_BOTS),
@@ -1278,8 +1310,19 @@ impl IaTexts {
         };
         let num = self.get("ifs.mp.createopts.numbots");
         match o {
-            Opt::NumBots => pieces(num, &[&n(v.num_bots)]),
-            Opt::ConNumBots => pieces(num, &[&n(v.con_numbots)]),
+            Opt::NumBots | Opt::ConNumBots => {
+                let pct = if o == Opt::NumBots {
+                    v.num_bots
+                } else {
+                    v.con_numbots
+                } as u32;
+                vec![
+                    Piece::Text("Team size: ".into()),
+                    Piece::Left,
+                    Piece::Text(format!(" {pct}% ")),
+                    Piece::Right,
+                ]
+            }
             Opt::CtfNumBots => pieces(num, &[&n(v.ctf_numbots)]),
             Opt::AssNumBots => pieces(num, &[&n(v.ass_numbots)]),
             Opt::AiDifficulty => {
@@ -1331,10 +1374,14 @@ impl IaTexts {
                 };
                 pieces(self.get("ifs.mp.heroopts.respawntimer"), &[&value, unit])
             }
-            Opt::ConMult => pieces(
-                self.get("ifs.mp.create.opt.reinforcements"),
-                &[&n(v.con_mult)],
-            ),
+            Opt::ConMult => {
+                vec![
+                    Piece::Text("Reinforcements: ".into()),
+                    Piece::Left,
+                    Piece::Text(format!(" {}% ", v.con_mult)),
+                    Piece::Right,
+                ]
+            }
             Opt::ConTimer => pieces(self.get("ifs.mp.create.opt.timer"), &[&off(v.con_timer)]),
             Opt::CtfTimer => pieces(self.get("ifs.mp.create.opt.timer"), &[&off(v.ctf_timer)]),
             Opt::HunTimer => pieces(self.get("ifs.mp.create.opt.timer"), &[&n(v.hun_timer)]),

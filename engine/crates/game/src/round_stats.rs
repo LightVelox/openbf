@@ -4,7 +4,7 @@
 //! by [`screens`].
 //!
 //! - **Points, kills** by the feed's rules for the viewer (BF2's table,
-//!   `event_feed::points`): an AI kill 1, a human 2, a team kill -2 and one
+//!   `event_feed::points`): an AI kill 1, a human 2, a hero 5, a team kill -2 and one
 //!   kill less, killing oneself or dying to the world -1; a post's capture 5
 //!   to the soldier longest in its region and 2 to the others there.
 //!   Deaths are the sim's.
@@ -22,7 +22,7 @@
 //!   most deaths of their lists); the first unit of the most wins a tie; none
 //!   with 0. Camper (a time), Survivalist, Public Enemy and Dead Eye are not
 //!   tracked and stay blank.
-//! - Not tracked: hero points and head shots (0, what the PS2 shows), the
+//! - Not tracked: head shots (0), the
 //!   medals (none in a round, every career count 0 "Green"), the rank
 //!   ("Private", the first).
 
@@ -36,6 +36,8 @@ use ui::stats::{clock, Award, Career, Medal, StatRow, StatsScreens, StatsTexts, 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UnitRound {
     pub points: i32,
+    /// Subtotal earned while playing the hero (PS2 stats+0x1fe).
+    pub hero_points: i32,
     pub kills: i32,
     pub posts: u32,
     pub team_kills: u32,
@@ -50,6 +52,19 @@ pub struct UnitRound {
     /// Who killed him, and whom he killed: unit index → times.
     pub killed_by: BTreeMap<usize, u32>,
     pub killed: BTreeMap<usize, u32>,
+}
+
+impl UnitRound {
+    pub fn ordinary_points(&self) -> i32 {
+        self.points - self.hero_points
+    }
+
+    fn score(&mut self, amount: i32, hero: bool) {
+        self.points += amount;
+        if hero {
+            self.hero_points += amount;
+        }
+    }
 }
 
 /// The round so far, per unit (`Sim::units` order).
@@ -73,25 +88,25 @@ impl RoundStats {
             return;
         };
         let human = d.is_player;
+        let hero = sim.hero_class(k.team) == Some(k.spec.class);
         let same_team = k.team == d.team;
         self.died(v);
         let me = self.unit(s);
         if s == v {
             me.kills -= 1;
-            me.points += points::SUICIDE;
+            me.score(points::SUICIDE, hero);
             return;
         }
         if same_team {
             me.kills -= 1;
-            me.points += points::TEAM_KILL;
+            me.score(points::TEAM_KILL, hero);
             me.team_kills += 1;
         } else {
             me.kills += 1;
-            me.points += if human {
-                points::KILL_HUMAN
-            } else {
-                points::KILL_AI
-            };
+            me.score(
+                points::kill(human, sim.hero_class(d.team) == Some(d.spec.class)),
+                hero,
+            );
             me.spree += 1;
             me.best_spree = me.best_spree.max(me.spree);
         }
@@ -100,10 +115,14 @@ impl RoundStats {
     }
 
     /// `Event::EnvDeath`: the world killed him.
-    pub fn env_death(&mut self, unit: UnitHandle) {
+    pub fn env_death(&mut self, sim: &Sim, unit: UnitHandle) {
         let i = unit.index as usize;
         self.died(i);
-        self.unit(i).points += points::SUICIDE;
+        let u = &sim.units[i];
+        self.unit(i).score(
+            points::SUICIDE,
+            sim.hero_class(u.team) == Some(u.spec.class),
+        );
     }
 
     fn died(&mut self, i: usize) {
@@ -112,14 +131,17 @@ impl RoundStats {
 
     /// A capture credited to unit `i`: `first` when he was longest in the
     /// region.
-    pub fn capture(&mut self, i: usize, first: bool) {
+    pub fn capture(&mut self, i: usize, first: bool, hero: bool) {
         let u = self.unit(i);
         u.posts += 1;
-        u.points += if first {
-            points::CAPTURE
-        } else {
-            points::CAPTURE_ASSIST
-        };
+        u.score(
+            if first {
+                points::CAPTURE
+            } else {
+                points::CAPTURE_ASSIST
+            },
+            hero,
+        );
     }
 
     /// `Event::VehicleDestroyed` by `killer`, of a vehicle of `team`.
@@ -279,7 +301,10 @@ pub fn screens(
                             label("ifs.stats.points", "Player Points"),
                             r.points.to_string(),
                         ),
-                        (label("ifs.stats.hero_points", "Hero Points"), "0".into()),
+                        (
+                            label("ifs.stats.hero_points", "Hero Points"),
+                            r.hero_points.to_string(),
+                        ),
                         (label("ifs.stats.kills", "Kills"), r.kills.to_string()),
                         (label("ifs.stats.deaths", "Deaths"), u.deaths.to_string()),
                         (String::new(), String::new()),
@@ -448,8 +473,8 @@ mod tests {
         r.kill(sim, b[1], a[1]);
         r.kill(sim, a[1], a[0]);
         r.kill(sim, b[0], b[0]);
-        r.env_death(b[1]);
-        r.capture(b[1].index as usize, true);
+        r.env_death(sim, b[1]);
+        r.capture(b[1].index as usize, true, false);
         let ru = |h: UnitHandle| r.units[h.index as usize].clone();
         let human = |h: UnitHandle| sim.units[h.index as usize].is_player;
         let kill_pts = |h: UnitHandle| {

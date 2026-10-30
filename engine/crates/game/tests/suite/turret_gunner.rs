@@ -350,6 +350,7 @@ fn world(map: &str, factions: [&str; 2], geometry: &str) -> Option<World> {
         weapon_geometry: None,
         weapon_hud: Default::default(),
         held_hud: Vec::new(),
+        droideka_shield: None,
         held_models: Vec::new(),
         foley_class: 0,
         cries: Default::default(),

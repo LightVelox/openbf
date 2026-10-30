@@ -2,7 +2,7 @@
 
 
 
-Implementation on `codex/67-walker-aim`, based on `79275f6`; worktree `E:/Projects/openbf-walker-aim`. Source stays separate from droidekas (#65). No push or PR is authorized.
+Implementation on the walker-aim branch, based on `79275f6`; worktree `E:/Projects/openbf-walker-aim`. Source stays separate from droidekas (#65). No push or PR is authorized.
 
 
 
@@ -217,7 +217,7 @@ Release was rebuilt successfully from the isolated walker branch and copied to `
 
 Replaced `E:/Projects/openbf/dist/openbf.exe` successfully only after those checks. `dist/openbf_data` profile/playtest file lengths and modification times are unchanged. No staged executable remains. Receipt: `E:/Projects/openbf/engine/artifacts/walker67/controls-followup/pack-receipt.json`.
 
-Source remains uncommitted on `codex/67-walker-aim` in `E:/Projects/openbf-walker-aim`. Droideka #65 remains in its own worktree/branch and is not included in this executable's source. Current shared baked assets were packed as requested. No push or PR was made. This handoff fixes the demonstrated riding controls and camera origin; it does not close the unperformed original-game acceptance or the provisional camera/aiming gaps listed above.
+Source remains uncommitted on the walker-aim branch in `E:/Projects/openbf-walker-aim`. Droideka #65 remains in its own worktree/branch and is not included in this executable's source. Current shared baked assets were packed as requested. No push or PR was made. This handoff fixes the demonstrated riding controls and camera origin; it does not close the unperformed original-game acceptance or the provisional camera/aiming gaps listed above.
 
 ## Seat camera, tracers, crosshair and gun sounds follow-up, 2026-10-29
 
@@ -251,7 +251,7 @@ The unit test `walk::walker_view::tests::camera_matches_paused_geonosis_main_gun
 
 ### Merge with the droideka work
 
-`codex/67-walker-aim` (`baa84e9`, based on `79275f6`) is merged into local `main` on top of the droideka commit `8bea4fd` (#65) by the commit that adds this section. Only two conflicts appeared, both additive: `main/windowed.rs` keeps both `play_shield_loops` and `walker_fire_loops`, and `sounds.rs` keeps both the `Shield` and `WalkerFire` loop sources. `battle.rs`, `lib.rs` and `vehicle_pads.rs` merged automatically; the combined tree passes the counts above, so walkers and droidekas now share one executable.
+The walker-aim branch (`baa84e9`, based on `79275f6`) is merged into local `main` on top of the droideka commit `8bea4fd` (#65) by the commit that adds this section. Only two conflicts appeared, both additive: `main/windowed.rs` keeps both `play_shield_loops` and `walker_fire_loops`, and `sounds.rs` keeps both the `Shield` and `WalkerFire` loop sources. `battle.rs`, `lib.rs` and `vehicle_pads.rs` merged automatically; the combined tree passes the counts above, so walkers and droidekas now share one executable.
 
 Final pack receipt follows below.
 
@@ -267,7 +267,7 @@ The maintainer reports considerable shake while riding. The newest black box `di
 
 The gunner camera used the turret node's walk-animated parent as its anchor and up axis. The camera consequently took the leg animation's pitch and roll, even as its gun look was steady. The camera now takes the same authored turret mount in the bind pose, retaining the seat's aim, camera offsets, tilt and FOV. Walker drawing, the gunner, muzzle/effect frames and simulation continue to use the actual animated pose. This deliberately removes the mount's gait motion from the camera; it is a stabilization tradeoff, not a claim of exact original-game camera motion.
 
-`main_gunner_camera_stays_steady_while_the_mount_walks` uses the actual Geonosis AT-TE rig. It changes walk-pose pitch, roll and clip time, verifies that the drawn turret actually moves while the camera remains steady, and checks that mouse aim still moves the camera. Work is isolated on `codex/seat-camera-integrated`, based on merged `a71b44d`; the primary checkout's uncommitted, overlapping alternative camera work is not overwritten.
+`main_gunner_camera_stays_steady_while_the_mount_walks` uses the actual Geonosis AT-TE rig. It changes walk-pose pitch, roll and clip time, verifies that the drawn turret actually moves while the camera remains steady, and checks that mouse aim still moves the camera. Work is isolated on a seat-camera branch, based on merged `a71b44d`; the primary checkout's uncommitted, overlapping alternative camera work is not overwritten.
 
 Checks: actual-asset walker control tests 3 passed, walker pose tests 10 passed, rider suite 5 passed, game all-target Clippy passed, release build succeeded and `git diff --check` passed. No new code comments were added. The remaining original-game camera-motion comparison is unperformed.
 

@@ -10,7 +10,7 @@
 
 use super::input::{buttons, PadState};
 use super::state::{Call, DeathCause, Event, Sim, LETHAL_LANDING_SPEED};
-use crate::ai::{self, AiState};
+use crate::ai;
 use crate::collision::{Capsule, AIR_STEP, STEP_HEIGHT};
 use crate::projectile::TERRAIN_RAY_STEP;
 use crate::soldier::{GroundRules, Stance};
@@ -118,9 +118,14 @@ impl Sim {
     pub fn step(&mut self, pads: &[PadState]) {
         let dt = TICK_DT;
         self.events.clear();
+        self.shot_flights.clear();
         // The hulls where their vehicles are (card VHULL): a caller may have
         // moved one, or installed a new world, since the last tick.
         self.sync_hulls();
+        // Existing hero lives drain before this tick's replacements/spawns.
+        self.tick_hero_health(dt);
+        let hero_pads = self.step_heroes(pads);
+        let pads = hero_pads.as_deref().unwrap_or(pads);
 
         // Confirmed pause-menu Respawn runs inside the tick so its death
         // event reaches every normal observer (re-spawn-flow §7/§6).
@@ -137,6 +142,11 @@ impl Sim {
         // 0a. The spawn screen's CLASS choice, before the respawn loop below
         //     can act on it.
         self.spawn_select(pads);
+        if let Some(counts) = self.team_combatants {
+            // A human may have switched teams on the spawn screens.
+            self.set_combatants(counts);
+        }
+
         // 0a'. Issue #28: a live human's use press at a friendly post opens
         //      the class screen; while it is up his soldier gets no pad.
         self.class_change_open(pads);
@@ -189,7 +199,7 @@ impl Sim {
                     .iter()
                     .filter(|o| o.alive && !o.is_player && o.team == team)
                     .count() as u32;
-                if alive_ai >= self.ai_alive_cap {
+                if alive_ai >= self.ai_limit(team) {
                     self.units[i].respawn_at = Some(self.tick + 5 * u64::from(TICK_HZ));
                     continue;
                 }
@@ -239,7 +249,8 @@ impl Sim {
         crate::ai::team::board(self);
         // 1a'''. Card TOKN: the human players' hit tokens, before the thinks.
         crate::ai::tokn::deal(self);
-        let mut ai_updates: Vec<(usize, AiState, PadState, ai::NavTick)> = Vec::new();
+        let mut ai_updates = std::mem::take(&mut self.ai_updates);
+        ai_updates.clear();
         // Card TEAM: the unit grid answers "who is near" for the thinks, which
         // read a sim no one moves until the write-back.
         self.unit_grid.build(&self.units);
@@ -247,7 +258,7 @@ impl Sim {
             if u.alive && u.controller == Controller::Ai {
                 let mut st = u.ai;
                 let (p, nt) = ai::think(self, self.handle(i), &mut st);
-                ai_updates.push((i, st, p, nt));
+                ai_updates.push((i, u.gen, u.mount, st, p, nt));
             }
         }
         self.unit_grid.clear();
@@ -262,7 +273,7 @@ impl Sim {
         // Publish only after every scratch AiState has been written back, so
         // neither index ordering can erase a receiver's pending target.
         let mut wait_calls = Vec::new();
-        for (i, mut st, p, nt) in ai_updates {
+        for (i, _, _, mut st, p, nt) in ai_updates.iter().copied() {
             if self.ground_rules == GroundRules::Bf1 {
                 if let Some(w) = st.ride.and_then(|r| r.pickup) {
                     let previous = self.units[i].ai.ride.and_then(|r| r.pickup);
@@ -452,6 +463,7 @@ impl Sim {
             }
         }
 
+        self.force_locks(&mut unit_pads);
         let guided_pads = self.guided_pads(&mut unit_pads);
         let droid_pads = if self.droids.is_empty() {
             Vec::new()
@@ -467,6 +479,18 @@ impl Sim {
             self.switch_pass(&unit_pads);
             self.ai_use_pass();
         }
+        // A pad belongs to the controller/seat that computed it. Boarding
+        // happens after the thinks: a foot cloak/repair press must not become
+        // a new seat's gun trigger (nor its movement become driving input).
+        // Same-seat updates still reach the weapon's ordinary carry state.
+        for &(i, gen, mount, _, _, _) in &ai_updates {
+            let u = &self.units[i];
+            if u.gen != gen || u.controller != Controller::Ai || u.mount != mount {
+                unit_pads[i] = PadState::default();
+            }
+        }
+        ai_updates.clear();
+        self.ai_updates = ai_updates;
 
         // 2. BF1 aim assist on each player slot's sticks (FUN_0025fea8 via
         //    core::aim_assist) toward LAST tick's magnet, then this tick's
@@ -525,6 +549,7 @@ impl Sim {
             .map(|(i, _)| (i, (self.units[i].soldier.yaw, self.units[i].soldier.pitch)))
             .collect();
 
+        self.saber_inputs(&mut unit_pads);
         // 3. Movement.
         for (i, pad_i) in unit_pads.iter_mut().enumerate() {
             // The contact accumulator is per TICK, so it is cleared for every
@@ -594,6 +619,8 @@ impl Sim {
                     }
                     let stamina_cheat = self.cheats.infinite_stamina;
                     let mut consts = self.units[i].consts;
+                    self.saber_constants(i, &mut consts);
+                    self.force_constants(i, &mut consts);
                     // The zoom press and its cancels, then the turn: zoomed,
                     // the yaw and pitch rates are divided by the weapon's
                     // turn divisor (`re-zoom.md` §4, §6).
@@ -610,6 +637,7 @@ impl Sim {
                         ceiling: self.fly_ceiling,
                         human: self.units[i].is_player,
                     };
+                    self.saber_gravity(i);
                     self.units[i]
                         .soldier
                         .step_looking(dt, pad_i, &consts, rules, look, env);
@@ -788,6 +816,7 @@ impl Sim {
             }
         }
 
+        self.saber_hits();
         // 4. Weapons → bolts.
         let mut shots = Vec::new();
         // A lagged press: its unit and the turned aim, put back after it fires.
@@ -835,6 +864,7 @@ impl Sim {
             // state is not blocked here yet.)
             let blocked = matches!(self.units[i].soldier.stance, Stance::Roll | Stance::Jump)
                 || self.units[i].soldier.no_fire()
+                || self.units[i].choked.is_some()
                 || self.units[i].droideka.as_ref().is_some_and(|d| d.no_fire());
             // A soldier with more slots than the one in its hands (GREN):
             // the channels decide whether FIRE reaches the primary.
@@ -867,6 +897,15 @@ impl Sim {
             }
             let remote = self.remote_input(i, None, fire_held, blocked);
             fire_held &= !remote;
+            if self.weapon_classes[self.units[i].weapon_class]
+                .saber
+                .is_some()
+            {
+                continue;
+            }
+            if self.force_input(i, None, fire_held, blocked) {
+                continue;
+            }
             if self.tick_repair_weapon(i, None, fire_held, blocked, dt) {
                 continue;
             }
@@ -977,6 +1016,7 @@ impl Sim {
         // 5. Bolt flight + impacts (in spawn order): first what each bolt
         //    passes through on this tick's flight (issue #41).
         self.tick_cloaks(dt);
+        self.tick_saber_throws();
         self.fly_missiles(dt);
         self.fly_shells(dt);
         self.fly_bolts(dt);
@@ -1118,6 +1158,26 @@ impl Sim {
                 if let Some(t) = cap.ray_hit(start, d, best) {
                     best = best.min(t);
                 }
+            }
+        }
+        // An auto-turret or remote droid is a body on the PS2's aim ray as on
+        // a bolt's flight (its `p_-so_sphere`, mask soldier + ordnance): the
+        // shot flies to the one the reticle is on. Its owner's own bolts pass
+        // it, so his reticle's ray does too.
+        let items = self
+            .turrets
+            .iter()
+            .filter(|t| t.owner.index != me.index)
+            .map(|t| (t.centre(), crate::autoturret::RADIUS))
+            .chain(
+                self.droids
+                    .iter()
+                    .filter(|o| o.owner.index != me.index)
+                    .map(|o| (o.pos, crate::remote::RADIUS)),
+            );
+        for (at, radius) in items {
+            if let Some(t) = crate::unit::ray_sphere(start, d, at, radius).filter(|&t| t < best) {
+                best = t;
             }
         }
         if best >= AIM_RAY_LENGTH {

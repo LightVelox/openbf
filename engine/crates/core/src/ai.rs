@@ -98,6 +98,7 @@ mod gunner_foot;
 pub mod hover_drive;
 mod items;
 pub mod man;
+mod melee;
 mod mover;
 pub mod proxy;
 mod ride;
@@ -115,7 +116,7 @@ pub mod walker_drive;
 pub mod why;
 
 pub(crate) use abilities::input as ability_input;
-pub use arsenal::{droid_suited, vehicle_bonus};
+pub use arsenal::{droid_suited, item_suited, vehicle_bonus};
 pub use avoid::ROUND_MAX;
 pub use behave::think;
 pub use command::CmdState;

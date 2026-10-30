@@ -338,6 +338,38 @@ impl Commander {
         if !self.gating {
             self.calls_asked.clear();
         }
+        // Hero manager lines use the same 2-D voice queue as the commander.
+        for event in &sim.events {
+            use core::sim::Event;
+            let (unit, class, phase) = match *event {
+                Event::HeroOffered { unit, class } => (unit, Some(class), 0),
+                Event::Respawn { unit } => (unit, None, 1),
+                Event::Kill { victim, .. } | Event::EnvDeath { unit: victim, .. } => {
+                    (victim, None, 2)
+                }
+                _ => continue,
+            };
+            let Some(u) = sim
+                .units
+                .get(unit.index as usize)
+                .filter(|u| u.gen == unit.gen)
+            else {
+                continue;
+            };
+            let class = class.unwrap_or(u.spec.class);
+            if sim.hero_class(u.team) != Some(class) {
+                continue;
+            }
+            let hero = &teams[usize::from(u.team.min(1))].class(class).cries.hero;
+            let name = match phase {
+                0 => &hero.offer,
+                1 => &hero.spawned,
+                _ => &hero.defeated,
+            };
+            if let Some(name) = name {
+                self.queue.ask(Line::commander(name));
+            }
+        }
         for e in &sim.events {
             let core::sim::Event::Call { unit, call } = *e else {
                 continue;

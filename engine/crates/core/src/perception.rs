@@ -61,20 +61,31 @@ pub const HYSTERESIS: f32 = 10.0;
 pub enum Foe {
     Unit(UnitHandle),
     Droid(u64),
+    /// A dispensed auto-turret by its id (an armed building: the scan's
+    /// `FUN_002e3aa0` asks `FUN_002a7c30` alive, finite health, hostile, then
+    /// the weapon choice; `analysis/re-portable-turret.md` 10).
+    Turret(u64),
 }
 
 impl Foe {
     pub fn unit(self) -> Option<UnitHandle> {
         match self {
             Foe::Unit(h) => Some(h),
-            Foe::Droid(_) => None,
+            Foe::Droid(_) | Foe::Turret(_) => None,
+        }
+    }
+
+    pub fn turret(self) -> Option<u64> {
+        match self {
+            Foe::Turret(id) => Some(id),
+            Foe::Unit(_) | Foe::Droid(_) => None,
         }
     }
 
     pub fn droid(self) -> Option<u64> {
         match self {
             Foe::Droid(id) => Some(id),
-            Foe::Unit(_) => None,
+            Foe::Unit(_) | Foe::Turret(_) => None,
         }
     }
 
@@ -124,6 +135,10 @@ impl Contact {
             Foe::Unit(h) => {
                 eat(&h.index.to_le_bytes());
                 eat(&h.gen.to_le_bytes());
+            }
+            Foe::Turret(id) => {
+                eat(b"T");
+                eat(&id.to_le_bytes());
             }
             Foe::Droid(id) => {
                 eat(b"DROID");
@@ -432,6 +447,18 @@ pub fn scan(sim: &Sim, me: UnitHandle, st: &mut AiState, tier: Tier) -> (u8, u8)
             cand.push((d2, (1, d.id), Foe::Droid(d.id), d.pos));
         }
     }
+    let turret_reach = turret_view_distance(tier.view_mult).min(scan_radius(sim, u));
+    for t in &sim.turrets {
+        if t.team == u.team || !t.alive() || !turret_admitted(sim, u, t) {
+            continue;
+        }
+        let at = t.centre();
+        let off = at - eye;
+        let d2 = off.dot(off);
+        if in_cone(view, off, d2, sim.omni_radius) && d2 < turret_reach * turret_reach {
+            cand.push((d2, (2, t.id), Foe::Turret(t.id), at));
+        }
+    }
     cand.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
     // The unit's own target is always ray-tested first, so a firefight never
     // loses its target to five closer bodies it has not shot at yet.
@@ -500,11 +527,27 @@ pub fn droid_view_distance(view_mult: f32) -> f32 {
     (20.0 * crate::remote::RADIUS + 30.0) * view_mult * VIS
 }
 
-/// Whether `h` is still there to be remembered: a live unit, or a live droid.
+/// [`view_distance`] for an auto-turret: `(20·bound_radius + 30) × mult × vis`
+/// × 10 for an armed building (B2 `FUN_002e3910`, `re-ai-difficulty.md` 5.1).
+pub fn turret_view_distance(view_mult: f32) -> f32 {
+    (20.0 * crate::autoturret::RADIUS + 30.0) * view_mult * VIS * 10.0
+}
+
+/// The PS2's scan radius (B2 `FUN_002a9d90`): the longest range of the unit's
+/// weapons + 5 × its top speed. The soldier's own sight is the port's and
+/// stays as it is; this only keeps [`turret_view_distance`]'s long reach.
+fn scan_radius(sim: &Sim, u: &crate::unit::Unit) -> f32 {
+    let range = |c: usize| sim.weapon_classes.get(c).map_or(0.0, |w| w.ai_range[2]);
+    let held = u.held.iter().map(|h| range(h.class));
+    held.fold(range(u.weapon_class), f32::max) + 5.0 * u.consts.max_speed
+}
+
+/// Whether `h` is still there to be remembered: a live unit, droid or turret.
 pub fn alive(sim: &Sim, h: Foe) -> bool {
     match h {
         Foe::Unit(h) => sim.unit(h).is_some(),
         Foe::Droid(id) => sim.live_droid(id).is_some(),
+        Foe::Turret(id) => sim.live_turret(id).is_some(),
     }
 }
 
@@ -514,6 +557,7 @@ pub fn foe_motion(sim: &Sim, h: Foe) -> Option<(Vec3, Vec3)> {
     match h {
         Foe::Unit(h) => sim.unit(h).map(|o| (o.capsule().center(), o.soldier.vel)),
         Foe::Droid(id) => sim.live_droid(id).map(|d| (d.pos, d.vel)),
+        Foe::Turret(id) => sim.live_turret(id).map(|t| (t.centre(), t.vel)),
     }
 }
 
@@ -527,6 +571,16 @@ fn droid_admitted(sim: &Sim, u: &crate::unit::Unit, d: &crate::remote::Droid) ->
         || sim
             .droid_class(d)
             .is_some_and(|c| crate::ai::droid_suited(sim, u, c))
+}
+
+/// [`droid_admitted`] for an auto-turret: a soldier takes an armed building
+/// through the weapon choice too (B2 `FUN_002ac8f8` kinds 8 and 9 ->
+/// `FUN_002ac200` -> `FUN_002abee0` -> `FUN_002ab590`).
+fn turret_admitted(sim: &Sim, u: &crate::unit::Unit, t: &crate::autoturret::Turret) -> bool {
+    u.mount.is_some()
+        || sim.turret_class(t).is_some_and(|c| {
+            crate::ai::item_suited(sim, u, c.body.max_health, c.health_type as u32)
+        })
 }
 
 /// Card TEAM: a friend this near passes on what it sees (m; the bot
@@ -658,6 +712,18 @@ fn hear(st: &mut AiState, h: Foe, tick: u64, pos: Vec3, told: bool) -> bool {
     true
 }
 
+/// Common admission for every target choice, including focus and threat
+/// preferences: the one-second human spawn grace and the current turret arc.
+pub(crate) fn target_admitted(sim: &Sim, me: UnitHandle, contact: &Contact) -> bool {
+    contact
+        .handle
+        .unit()
+        .is_none_or(|h| !crate::ai::dfocus::just_spawned(sim, h))
+        && sim.unit(me).is_some_and(|u| {
+            crate::ai::man::arc_of(sim, u).is_none_or(|holds| holds(contact.last_pos))
+        })
+}
+
 /// Target choice over the memory (design decision 3): nearest-first with the
 /// originals' +10 hysteresis and 1.5 s minimum interval, plus the tier's
 /// PRESSURE weight for human targets.
@@ -704,13 +770,7 @@ pub fn choose_target_with(
             base - 10.0 * c.age_s(tick)
         }
     };
-    // `[ours]` A human in his first second alive is nobody's target.
-    let open = |c: &Contact| {
-        keep(c.last_pos)
-            && c.handle
-                .unit()
-                .is_none_or(|h| !crate::ai::dfocus::just_spawned(sim, h))
-    };
+    let open = |c: &Contact| keep(c.last_pos) && target_admitted(sim, me, c);
     let mut best: Option<(f32, Foe)> = None;
     for c in st.contacts.iter().flatten().filter(|c| open(c)) {
         let s = score(c);
@@ -1582,5 +1642,51 @@ mod tests {
         assert_ne!(with_target, with_contact, "the target is state");
         s.units[a.index as usize].ai.last_switch = 7;
         assert_ne!(s.hash(), with_target, "last_switch is state");
+    }
+    #[test]
+    fn audit_whole_brain_preferences_respect_spawn_grace() {
+        for tier in [
+            Difficulty::Easy,
+            Difficulty::Normal,
+            Difficulty::Hard,
+            Difficulty::Elite,
+        ] {
+            for proxy in [None, Some(crate::ai::proxy::Strength::Good.profile())] {
+                let mut sim = Sim::empty(31);
+                sim.heightfield = Some(crate::heightfield::Heightfield {
+                    size: 2,
+                    unit: 4000.0,
+                    offset_x: 2000.0,
+                    offset_z: 2000.0,
+                    heights: vec![0.0; 4],
+                });
+                sim.team_difficulty[0] = Some(tier);
+                let bot = sim
+                    .spawn(&UnitSpec {
+                        controller: Controller::Ai,
+                        ..UnitSpec::trooper(0, Vec3::ZERO)
+                    })
+                    .unwrap();
+                sim.unit_mut(bot).unwrap().proxy_human = proxy;
+                let human = sim
+                    .spawn(&UnitSpec::player_in_slot(0, 1, Vec3::new(0.0, 0.0, -15.0)))
+                    .unwrap();
+                crate::ai::dfocus::upkeep(&mut sim);
+                for tick in [
+                    0,
+                    crate::ai::dfocus::UNTARGETED - 1,
+                    crate::ai::dfocus::UNTARGETED,
+                ] {
+                    sim.tick = tick;
+                    let mut st = AiState::default();
+                    crate::ai::think(&sim, bot, &mut st);
+                    assert_eq!(
+                        st.target,
+                        (tick == crate::ai::dfocus::UNTARGETED).then_some(human.into()),
+                        "tier={tier:?} proxy={proxy:?} tick={tick}"
+                    );
+                }
+            }
+        }
     }
 }

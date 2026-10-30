@@ -444,7 +444,8 @@ fn a_baked_bf1_soldier_carries_its_sets() {
 
 /// A baked BF2 soldier carries its family's sets: the super battle droid's
 /// one set (sbdroid, rifle) with its own upper clips over `human_rifle` legs,
-/// a clone's five `human` sets, the masks and the `sanm` facts.
+/// a clone's six `human` sets (including shared saber locomotion), the masks
+/// and the `sanm` facts.
 #[test]
 fn a_baked_bf2_soldier_carries_its_sets() {
     let (Some((sbd, sbd_glb)), Some((clone, clone_glb))) = (
@@ -470,7 +471,7 @@ fn a_baked_bf2_soldier_carries_its_sets() {
         assert_eq!(s.bf2_animations.len(), bf2::PAIRS);
     }
     // The bake is reproducible: the same file from a second run (the sets
-    // come out of a hash map; five of them here).
+    // come out of a hash map; six of them here).
     assert_eq!(
         baked_sets("bf2", "REP", "rep_inf_ep3trooper").unwrap().0,
         clone
@@ -492,9 +493,18 @@ fn a_baked_bf2_soldier_carries_its_sets() {
     );
     assert_eq!(
         clone.bf2[0].sets.keys().collect::<Vec<_>>(),
-        ["bazooka", "melee", "pistol", "rifle", "tool"]
+        ["bazooka", "melee", "pistol", "rifle", "sabre", "tool"]
     );
     assert_eq!(clone.bf2[0].family, "human");
+    let sabre = &clone.bf2[0].sets["sabre"];
+    assert_eq!(
+        name(&clone, sabre[pair * 2]),
+        "human_sabre_stand_runforward_full"
+    );
+    assert_eq!(
+        name(&clone, sabre[pair * 2 + 1]),
+        "human_sabre_stand_runforward_full"
+    );
     let bazooka = &clone.bf2[0].sets["bazooka"];
     assert!(name(&clone, bazooka[pair * 2]).starts_with("human_bazooka_stand_runforward"));
     assert_eq!(

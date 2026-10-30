@@ -10,9 +10,15 @@
 # A job already running when play starts keeps running (it is niced and CPU-weighted).
 #
 # Env: HEAVY_SLOTS (3), HEAVY_TIMEOUT seconds (3600), HEAVY_MEM (16G), HEAVY_LOCKS (lock dir).
+# HEAVY_WARM=1 (and no CARGO_TARGET_DIR set): build in a persistent per-slot target,
+# ~/.cache/openbf-warm/slot<N>, so a new worktree reuses compiled dependencies instead of
+# building from scratch. Not for builds whose binary is run from engine/target (the game).
 set -euo pipefail
 
-LOCKS=${HEAVY_LOCKS:-"$(cd "$(dirname "$0")/.." && pwd)/engine/artifacts/loop"}
+# The whole body is read before it runs, so editing this file never breaks a job waiting in it.
+main() {
+
+    LOCKS=${HEAVY_LOCKS:-"$(cd "$(dirname "$0")/.." && pwd)/engine/artifacts/loop"}
 SLOTS=${HEAVY_SLOTS:-3}
 GPU=0
 if [ "${1:-}" = "--gpu" ]; then GPU=1; shift; fi
@@ -44,6 +50,11 @@ while :; do
     sleep 5
 done
 
+if [ "${HEAVY_WARM:-0}" = 1 ] && [ -z "${CARGO_TARGET_DIR:-}" ]; then
+    export CARGO_TARGET_DIR="$HOME/.cache/openbf-warm/slot${got:-1}"
+    mkdir -p "$CARGO_TARGET_DIR"
+fi
+
 if [ "$GPU" = 1 ]; then
     exec 7>"$LOCKS/gpu.lock"
     flock -s 7
@@ -51,3 +62,6 @@ fi
 
 systemd-run --user --scope -q -p MemoryMax="${HEAVY_MEM:-16G}" -p MemorySwapMax=0 -p CPUWeight=30 \
     nice -n 12 timeout "${HEAVY_TIMEOUT:-3600}" "$@"
+}
+main "$@"
+exit

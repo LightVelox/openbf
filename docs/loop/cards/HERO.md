@@ -1,6 +1,6 @@
 ---
 id: HERO
-title: Heroes and lightsabers (M4, PLAN §Heroes): playable BF2 heroes and BF1 AI heroes on all content, killable, BF2's hero health pool from the disc with no time drain and kill-heal — the saber combat, the hero spawn/possession flow
+title: Heroes and lightsabers (M4, PLAN §Heroes): playable BF2 heroes and BF1 AI heroes on all content, killable, BF2's hero health pool from the disc with conquest time/damage drain and kill-heal — the saber combat, the hero spawn/possession flow
 milestone: M4
 value: 2
 phase: re
@@ -17,9 +17,13 @@ defer: post-alpha
 tries: 1
 ---
 
+## Current health decision — 2026-10-30
+
+Regular BF2 conquest now keeps the original time drain, damage and kill healing in the saber-shaped health pool. This supersedes the earlier no-drain policy; zero drain remains configurable. The broader BF1 and other-mode acceptance below is unchanged.
+
 ## Why
 The maintainer (INBOX 2026-09-28 (d)): heroes and lightsabers have no card. PLAN §Heroes: playable BF2 heroes and AI BF1 heroes on
-all content; always killable; BF2's hero health pool from the disc, shrinking only from damage, regenerating on kills.
+all content; always killable; BF2's hero health pool from the disc. The 2026-10-30 decision restores time/damage drain and kill healing for regular BF2 conquest.
 
 ## Acceptance
 - RE ([O]): hero spawn/possession flow (BF2), NPC hero behaviour (BF1), the disc's hero health and kill-heal values,
@@ -65,4 +69,4 @@ None of these pointers supplies the still-owed saber melee/block/throw derivatio
 Questions, not facts: does an AI hero ever appear in BF2 single player (sample at least 240 s); what a dead hero does
 (animation, fade, any pickup dropped); the "Play as X?" prompt's layout, countdown and buttons; the unlock points, offer
 time and respawn time; whether the PS2 drains hero health over time, and how fast. A drain would be a fact about the PS2
-only: this card's rule (no time drain, the maintainer) stands. Combo data -> COMBO; blade, block, throw -> SABR.
+only: the 2026-10-30 decision now restores the verified drain for regular BF2 conquest. Combo data -> COMBO; blade, block, throw -> SABR.

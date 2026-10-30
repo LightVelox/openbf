@@ -285,7 +285,8 @@ fn the_aim_tracker_steers_and_slews() {
     assert_ne!(st.aim_dir, first, "the tracker moved");
 
     // A target 90° off the facing: the first tick SLEWS 30° toward it and
-    // zeroes the rate, rather than accelerating across.
+    // zeroes the rate, then takes the one tracker step of the same call
+    // (at most `aim_accel`·dt² further, under 1°).
     // 60° off the facing — inside the 77.5° cone, so it IS perceived,
     // and more than the tracker's 30° slew step.
     let (sim, a) = build(Some(Vec3::new(-17.32, 0.0, -10.0)));
@@ -294,12 +295,17 @@ fn the_aim_tracker_steers_and_slews() {
     let facing = sim.unit(a).unwrap().aim_frame().0;
     think(&sim, a, &mut st);
     assert!(st.target.is_some(), "60 deg off is inside the cone");
-    let cos = st.aim_dir.dot(facing).clamp(-1.0, 1.0);
+    let deg = st.aim_dir.dot(facing).clamp(-1.0, 1.0).acos().to_degrees();
     assert!(
-        (cos - SLEW_COS).abs() < 1e-3,
-        "slewed exactly 30 deg: cos {cos}"
+        (30.0..31.0).contains(&deg),
+        "slewed 30 deg plus one step: {deg}"
     );
-    assert_eq!(st.aim_vel, Vec3::ZERO, "a slew zeroes the rate");
+    let dt = crate::TICK_DT;
+    assert!(
+        st.aim_vel.length() <= 14.0 * dt + 1e-4,
+        "the slew zeroed the rate before the step: {}",
+        st.aim_vel.length()
+    );
 
     // With NO target the tracker is idle and the travel facing is
     // untouched.
@@ -308,6 +314,55 @@ fn the_aim_tracker_steers_and_slews() {
     think(&sim, a, &mut st);
     assert_eq!(st.aim_dir, Vec3::ZERO);
     assert_eq!(st.aim_vel, Vec3::ZERO);
+}
+
+/// D9's tracker law is the PS2's (B2 `FUN_002a83e0`, B1 `FUN_00236700`):
+/// the "reach it next tick" acceleration is clamped and the damping is
+/// subtracted after the clamp. The port's earlier law clamped the sum
+/// `(dir − ad)/dt − av·damping`; it lagged a turning target by about 1.1°
+/// at skill 20 and took over 2 s to settle a 10° step. The PS2's lags under
+/// 0.1° and settles the step inside 0.5° in 20 ticks at skill 17 and up.
+#[test]
+fn the_aim_tracker_clamps_the_reach_then_damps() {
+    let dt = crate::TICK_DT;
+    let at = |ang: f32| Vec3::new(-ang.sin(), 0.0, -ang.cos());
+    let angle = |a: Vec3, b: Vec3| a.dot(b).clamp(-1.0, 1.0).acos().to_degrees();
+    for level in [17u8, 20] {
+        let k = crate::skill::Skill::from_level(level);
+        let (accel, damping) = k.tracker_for(true);
+        // A target swinging round at 0.4 rad/s: the lag after 5 s.
+        let (mut ad, mut av) = (at(0.0), Vec3::ZERO);
+        let mut lag = 0.0f32;
+        for t in 0..300 {
+            let want = at(0.4 * t as f32 * dt);
+            (ad, av) = track_step(ad, av, want, accel, damping, dt);
+            if t >= 150 {
+                lag = lag.max(angle(ad, want));
+            }
+        }
+        assert!(
+            lag < 0.1,
+            "skill {level}: lag {lag} deg on a turning target"
+        );
+        // A 10° step: inside 0.5° from tick 20 on (the old law took 73).
+        let want = at(10f32.to_radians());
+        let (mut ad, mut av) = (at(0.0), Vec3::ZERO);
+        for t in 0..90 {
+            (ad, av) = track_step(ad, av, want, accel, damping, dt);
+            if t >= 20 {
+                let off = angle(ad, want);
+                assert!(off < 0.5, "skill {level}: {off} deg off at tick {t}");
+            }
+        }
+    }
+    // The damping is outside the clamp: far from the target at speed, the
+    // step is the clamped reach minus `av·damping`.
+    let (accel, damping) = (2.0, 1.5);
+    let av = Vec3::new(-1.0, 0.0, 0.0);
+    let (_, next) = track_step(at(0.0), av, at(0.4), accel, damping, dt);
+    let reach = ((at(0.4) - at(0.0)) / dt - av) / dt;
+    let want = av + (reach.normalize() * accel - av * damping) * dt;
+    assert!((next - want).length() < 1e-5, "{next} vs {want}");
 }
 
 /// Accuracy against range under the Phase C aim model (D9/D10): the
@@ -605,18 +660,27 @@ fn a_bf1_bot_presses_a_single_shot_weapon_every_fourth_tick() {
     let _style = crate::ai::tests::all_stand();
     use crate::soldier::GroundRules::Bf1;
     let (shots, cmds) = tap_run(Bf1, 20, 300, |c| c.shot_delay = [0.1, 0.1]);
-    // The weapon's own byte reads the pad: down, down, up, up.
-    let first = cmds.iter().position(|&c| c == 1).expect("a press");
+    // The weapon's own byte reads the pad: down, down, up, up. From the
+    // second think on: in the first the error is still near its 1.5 m
+    // no-target floor, its point swings over 2° a tick at 8 m, and the
+    // gun, which follows it inside a tick (the PS2's tracker), can be off
+    // the aim tolerance for a tick.
+    let first = (20..cmds.len()).find(|&i| cmds[i] == 1).expect("a press");
     for (i, w) in cmds[first..].as_chunks::<4>().0.iter().take(40).enumerate() {
         assert_eq!(*w, [1, 2, -1, 0], "cycle {i}");
     }
     // Every shot is a fresh press, so none comes sooner than the fourth
     // tick; a tick off the aim tolerance may stretch a gap.
+    let shots: Vec<u64> = shots.into_iter().filter(|&t| t > first as u64).collect();
     let gaps: Vec<u64> = shots.windows(2).map(|w| w[1] - w[0]).collect();
     assert!(gaps.iter().all(|&g| g >= 4), "gaps {gaps:?}");
     let on_beat = gaps.iter().filter(|&&g| g == 4).count();
     assert!(on_beat * 10 >= gaps.len() * 9, "gaps {gaps:?}");
-    assert!(shots.len() >= 60, "fired {}", shots.len());
+    assert!(
+        shots.len() >= 55,
+        "fired {} after the first think",
+        shots.len()
+    );
 
     let (shots, cmds) = tap_run(Bf1, 20, 900, |c| c.zoom_max = 6.0);
     let gaps: Vec<u64> = shots.windows(2).map(|w| w[1] - w[0]).collect();

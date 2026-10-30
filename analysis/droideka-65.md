@@ -1,6 +1,6 @@
 # Droideka, issue #65 - what the port does and where it rests (cards DEKU, DEKS, DEKD, DEKF)
 
-Implementation notes for `codex/65-droideka`. The RE is `re-droideka-unit.md` [O] (which corrects
+Implementation notes for the droideka branch (issue #65). The RE is `re-droideka-unit.md` [O] (which corrects
 `re-droideka.md`); this file only records what the code takes from it, the disc values read on top of it this pass,
 the rules that are ours, and what stays open. Tags as in the RE: [V] read in the decomp or on the disc, [M] measured,
 [D] derived, [H] hypothesis, OURS = a port decision with no original behind it.
@@ -22,7 +22,7 @@ Decided and followed:
   pairs; its geometry is not a soldier geometry.
 - The AI (DEKF, RE section 5): the form order defaults to roll; a fight writes deploy; leaving the fight writes
   roll. A fight starts from sight only within 10 m, or when hit in the last second, never against a flyer.
-  Deployed, in the fight, shield down and over half -> raise it. It never lowers it.
+  Deployed, in the fight, shield down and shield charge over half capacity -> raise it (independent of health). It never lowers it.
 - The player: the crouch / roll-stance press folds and unfolds; the secondary press toggles the shield; fire is
   blocked in fold, ball and unfold (RE section 6).
 - Unlocks: the existing `unlock_points` path, read from the class's `PointsToUnlock` like any other class
@@ -51,18 +51,16 @@ Every name above exists in the baked `names.ron` of bf2_kam1, bf1_nab1 and bf2_g
 
 PROVISIONAL [H] or OURS, each named so it can be replaced when read:
 
-- Bubble: the shape-0 mesh and the specular table are not decoded. The port draws an additive camera-facing
-  hemisphere (16 x 8) with a white texel in the disc colour, alpha 128 when the eye is inside Radius (the 0x68
-  record's 0.5). SpecularColor's role is unread.
+- Bubble: see "The bubble" below; one layer of the sphere is OURS.
 - Camera: the ball uses CROUCH [H]; the SPLIT* sections are unused (no split screen).
 - Sounds not played: the footsteps (no play site found, as the walkers' VSN2 gap); the shield weapon's FireSound
   `cis_droideka_shield_on` (the infinite-ammo fire path does not run [H]).
-- HUD: no droideka shield meter.
+- HUD: the shield charge is the stamina bar and BF2's `hud_droideka_shield` the secondary row, on both games (the maintainer, 2026-10-30; OURS for the bar). The primary shows the repeater's `hud_vehicle_lasers`.
 - Death: BF1's five CHUNKSECTIONs are not spawned (chunk models not baked).
 - From the sim and draw stages: recover order deploys (RE: walk out of a stuck spot); the AI clears SPRINT and
   ACTION; the legs offset is not drawn; ball spin drives the roll clip time; the ball lean is a model rotation;
   ordnance prims are bind-pose spheres; BF1's untagged prims follow one rule; droideka voices are exempt; the walk
-  uses the human yaw and mouse turn; the player spawns deployed; energy idles; the barrels alternate [H];
+  uses the human yaw and mouse turn; the player spawns deployed; the ball jump's energy is not shown; the disc's sprint-button ball boost is fed by no button (the maintainer, 2026-10-30: no sprint in either form); the barrels alternate [H];
   explosions spend the shield first [H] (RE section 8); the ball snaps to the floor; no crash damage.
 - RE section 8 items stay open: explosion damage flags, aimer alternation, BF1's fold button, the evade dodge-roll,
   first-person `droidekafp`.
@@ -84,3 +82,20 @@ After:
   shielded, folding, folded, rolling, unfolding and bursting, and a player droideka walking and firing, shielding,
   folding, rolling about 11 m and unfolding, with the camera switching section (walk eye about 3.0 m over the feet,
   ball about 2.0 m).
+
+## Audit clarification — 2026-10-30
+
+Droidekas deliberately have no zoom option. Their shield AI tests remaining
+shield charge, not soldier health. These are intended behaviors; these
+audit fixes preserve both.
+
+## The bubble - 2026-10-30
+
+BF1 `FUN_00388ee8` / BF2 `FUN_0046e378` (records `FUN_0046e7e0`), mesh BF2 `FUN_0046ce30`, timing BF2 `FUN_00460030`. All [V] unless tagged.
+
+- Mesh: a procedural whole sphere, 24 x 8 quads (15 and 22.5 degree steps), its pole along the camera's back axis, turned with the camera. No UVs, no authored texture: the `fx__` record's `Texture` (`cis_inf_droideka_shield`) and `ScrollRate` are read only by the shape-1 branch (BF1 NAB1_H's `fambaa_shield`), so nothing scrolls on the droideka. Key 0xb28af6f4 = 1.5 has no reader found.
+- Pass 0: flat colour under vertex alpha 255 sin^6(theta), ALPHA 0x48 (Cs.As + Cd), Gouraud, depth tested, no depth write. Inside the unscaled radius: flat, ALPHA 0x68 FIX 0x40 (Cs.0.5 + Cd). Bytes halved `(b + 1) >> 1`: BF2's rim adds up to 48 80 96 and the inside adds 24 40 48 (measured on the port's frames, shield up minus down).
+- Pass 1: the shared `specular` table, `s = 16 / 255`, `t = 0.5 + 0.5 d` (`render::spec_texcoord`), in `SpecularColor` 216 240 255, Cs + Cd.
+- No ripple, flash or pulse on a hit, and the look reads no charge: only the sound's gain does. A hit's own impact effect is the existing `Surface::Shield` path, unchanged.
+- [H] and open: VU1 0x2da-0x2fd reads literally as 255 + c(b - 255), a warm rim; the BF1 frame `bf1_yav1_cp2_viaduct_viaduct_spawn` measures (33, 57, 66) against c.b's (36, 60, 72), so the port takes c.b. Whether back faces draw is unread: OURS draws one layer (the half toward the camera, or ahead of it from inside), which that frame's falloff fits. BF2's colours are predicted from the same code, not measured on a clean BF2 frame.
+- No Shield record exists on BF2's Polis Massa, Mygeeto or Hoth maps: a scan of every LVL's `fx__` finds three, `fambaa_shield` and the two `DroidekaShield`.

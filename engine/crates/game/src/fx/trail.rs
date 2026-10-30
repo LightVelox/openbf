@@ -26,8 +26,8 @@ pub(super) struct Rounds {
 }
 
 impl Rounds {
-    /// Match each survivor once using its next age and position, so collinear shots
-    /// and identical pellets retain separate visual identities without sim state.
+    /// Producer identity distinguishes native identical rounds. Unannotated
+    /// fixtures match each survivor once by its next age and position.
     /// A missile is the exception: the steering law turns it BEFORE it moves
     /// (`Sim::fly_missiles`, card UORD), so `pos + vel dt` is not where the
     /// next tick's read finds it. Its
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn collinear_rounds_keep_separate_trails_and_retire_independently() {
-        for age in [0.0, 0.1] {
+        for (age, tagged_identical) in [(0.0, false), (0.1, false), (0.0, true)] {
             let root = crate::assets::baked_root();
             let common = root.join("common_bf1");
             if !common.join("effects.ron").exists() {
@@ -281,6 +281,8 @@ mod tests {
             w.ordnance.impact.as_mut().unwrap().trail = Some(crate::fx::BF1_IMPACT.into());
             let wc = sim.add_weapon_class(w);
             let first = Bolt {
+                visual_shot: tagged_identical
+                    .then_some(core::projectile::VisualShot { tick: 0, event: 0 }),
                 pos: Vec3::ZERO,
                 vel: Vec3::NEG_Z * 10.0,
                 remaining: 5.0,
@@ -300,8 +302,12 @@ mod tests {
             };
             let mut second = first.clone();
             second.age = age;
-            second.pos = Vec3::NEG_Z;
-            assert_eq!(crate::bolt_vis::key(&first), crate::bolt_vis::key(&second));
+            if tagged_identical {
+                second.visual_shot = Some(core::projectile::VisualShot { tick: 0, event: 1 });
+            } else {
+                second.pos = Vec3::NEG_Z;
+                assert_eq!(crate::bolt_vis::key(&first), crate::bolt_vis::key(&second));
+            }
             sim.bolts = vec![first, second];
             fx.follow_rounds(&sim);
             let ids: Vec<_> = fx.live.iter().filter_map(|e| e.round).collect();
@@ -319,8 +325,15 @@ mod tests {
             fx.follow_rounds(&sim);
             let attached: Vec<_> = fx.live.iter().filter(|e| e.round.is_some()).collect();
             assert_eq!(attached.len(), 1);
-            assert_eq!(attached[0].round, Some(ids[1]));
+            assert_eq!(
+                attached[0].round,
+                Some(ids[1]),
+                "surviving second round lost native trail identity"
+            );
             assert_eq!(attached[0].frame.pos, sim.bolts[0].pos);
+            if tagged_identical {
+                eprintln!("tagged identical rounds preserve the second native trail after the first retires");
+            }
         }
     }
 
@@ -342,6 +355,7 @@ mod tests {
         });
         let wc = sim.add_weapon_class(w);
         let mut bolt = Bolt {
+            visual_shot: None,
             pos: Vec3::ZERO,
             vel: Vec3::NEG_Z * 40.0,
             remaining: 4.0,

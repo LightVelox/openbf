@@ -52,8 +52,27 @@ pub enum Target {
     Shield(UnitHandle),
 }
 
+/// Presentation identity of one emitted Shot event. The tick is the step's
+/// input tick; Sim.tick advances before the caller sees that step's events.
+/// Physics and deterministic hashes never read this annotation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VisualShot {
+    pub tick: u64,
+    pub event: usize,
+}
+
+/// A new round's own predicted or actual endpoint after its first flight step.
+/// Retained for presentation even when the round expires inside that step.
+#[derive(Clone, Copy, Debug)]
+pub struct ShotFlight {
+    pub shot: VisualShot,
+    pub end: Vec3,
+}
+
 #[derive(Clone, Debug)]
 pub struct Bolt {
+    /// Presentation provenance, excluded from physics and the sim hash.
+    pub visual_shot: Option<VisualShot>,
     pub pos: Vec3,
     pub vel: Vec3,
     /// Seconds of flight left (+0x3c): LifeSpan, scaled by the hit fraction.
@@ -389,6 +408,7 @@ impl Bolt {
             life_span * (best_t / total)
         };
         Bolt {
+            visual_shot: None,
             pos: origin,
             vel: dir * speed,
             remaining,

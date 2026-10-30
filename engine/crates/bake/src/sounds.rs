@@ -16,6 +16,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+mod repairs;
+
 /// The RON's two structs live in the `manifest` crate: ONE definition,
 /// deriving `Serialize` for this side and `Deserialize` for `game::sounds`,
 /// which reads the file back and cannot depend on this crate (game/Cargo.toml
@@ -254,6 +256,7 @@ pub fn bake_sounds(sound_lvl: &str, outdir: &str, core_lvl: Option<&str>) -> Res
         eprintln!("sounds: {sound_lvl}: {late} late + {absent} absent Layer entries dropped");
     }
     let props = flatten(&raw, &core);
+    repairs::tantive_female_aliases(Path::new(sound_lvl), &banks, &props, &mut samples)?;
     let odd_frequency = banks
         .iter()
         .flat_map(|b| b.samples.iter())

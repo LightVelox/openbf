@@ -47,6 +47,7 @@ fn world(pilot_gun: bool) -> (Sim, UnitHandle, VehicleHandle) {
     s.add_weapon_class(WeaponClass::bf1_rifle());
     s.seat_setup = vec![Some(SeatSetup {
         radius: 5.0,
+        body_active: vec![],
         boardable: vec![true; 4],
         exit_drop: 10.0,
         ai_size: 1,
@@ -440,6 +441,7 @@ fn dish_world() -> (Sim, VehicleHandle) {
     g.framed = true;
     s.seat_setup = vec![Some(SeatSetup {
         radius: 3.0,
+        body_active: vec![],
         boardable: vec![true],
         exit_drop: 15.0,
         ai_size: 1,
@@ -808,4 +810,117 @@ fn wheel_up_cycles_backward_and_passengers_do_not_cycle_to_other_passengers() {
     s.vehicle_mut(v).unwrap().seats[2].kind = SeatKind::Passenger(0);
     s.vehicle_mut(v).unwrap().seats[3].kind = SeatKind::Passenger(1);
     assert_eq!(s.next_seat(p), Some(0));
+}
+
+#[test]
+fn audit_boarding_does_not_reinterpret_a_cloak_press() {
+    use crate::unit::Controller;
+    let (mut sim, _, vehicle) = world(true);
+    let cloak = sim.add_weapon_class(WeaponClass {
+        cloak: Some(crate::cloak::CloakClass {
+            energy_cost: 40.0,
+            energy_drain: 17.0,
+            delay: 0.3,
+            linger: 1.0,
+            moving: 1.0,
+            still: 1.0,
+            fast_speed: 9.5,
+            slow_speed: 6.5,
+            fade_in: 0.6,
+            fade_out: 0.9,
+            flicker: 0.6,
+            flicker_interval: [5.0, 10.0],
+        }),
+        ..WeaponClass::default()
+    });
+    let actor = sim
+        .spawn(&UnitSpec {
+            controller: Controller::Ai,
+            weapon_class: cloak,
+            ..UnitSpec::trooper(0, Vec3::new(0.0, 2.0, 0.0))
+        })
+        .unwrap();
+    sim.unit_mut(actor).unwrap().soldier.energy = 100.0;
+    assert!(sim.unit(actor).unwrap().mount.is_none());
+    assert!(sim.unit(actor).unwrap().ai.target.is_none());
+    sim.add_cp(
+        crate::sim::tests::sphere_cp("far", Vec3::new(0.0, 0.0, 100.0), 8.0, true),
+        Some(1),
+    );
+    let u = sim.unit_mut(actor).unwrap();
+    u.ai.target_cp = Some(0);
+    u.ai.next_think = 100;
+    u.ai.ride = Some(crate::ai::RideState {
+        board: Some(vehicle),
+        ..Default::default()
+    });
+    // The whole tick computes a legitimate cloak FIRE while still on foot,
+    // boards through ai_use_pass, then dispatches weapons in the new seat.
+    sim.step(&[PadState::default()]);
+    assert_eq!(sim.unit(actor).unwrap().mount.unwrap().vehicle, vehicle);
+    assert!(
+        !sim.events
+            .iter()
+            .any(|e| matches!(e, Event::Shot { unit, .. } if *unit == actor)),
+        "the foot cloak press became a seat shot"
+    );
+    assert_eq!(sim.nav_stats.unperceived_shots, 0);
+}
+
+#[test]
+fn audit_simultaneous_expired_rounds_keep_distinct_presentation_endpoints() {
+    let (mut sim, player, vehicle) = world(true);
+    assert!(sim.seat_unit(player, vehicle, 0));
+    let class = &mut sim.weapon_classes[0];
+    class.shots_per_salvo = 2;
+    class.pitch_spread = 0.0;
+    class.yaw_spread = 0.0;
+    class.ordnance.life_span = crate::TICK_DT * 0.25;
+    let (speed, life) = (class.ordnance.velocity, class.ordnance.life_span);
+    let mut witnessed = false;
+    for _ in 0..30 {
+        sim.step(&[pad(buttons::FIRE)]);
+        let shots: Vec<_> = sim
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(event, e)| match e {
+                Event::Shot { origin, dir, .. } => Some((event, *origin, *dir)),
+                _ => None,
+            })
+            .collect();
+        if shots.is_empty() {
+            continue;
+        }
+        assert_eq!(
+            shots.len(),
+            2,
+            "the real weapon emits its two simultaneous rounds"
+        );
+        assert_eq!(sim.shot_flights.len(), 2);
+        assert!(
+            sim.bolts.is_empty(),
+            "both rounds expired inside their first tick"
+        );
+        assert_ne!(sim.shot_flights[0].shot, sim.shot_flights[1].shot);
+        for (event, origin, dir) in shots {
+            let flight = sim
+                .shot_flights
+                .iter()
+                .find(|f| f.shot.event == event)
+                .unwrap();
+            assert_eq!(flight.shot.tick, sim.tick - 1);
+            assert!(flight.end.abs_diff_eq(origin + dir * (speed * life), 1e-4));
+        }
+        // Presentation annotations do not change the deterministic game state.
+        let hash = sim.hash();
+        sim.shot_flights[0].end += Vec3::X * 100.0;
+        assert_eq!(sim.hash(), hash);
+        let old_tick = sim.tick - 1;
+        sim.step(&[pad(0)]);
+        assert!(sim.shot_flights.iter().all(|f| f.shot.tick != old_tick));
+        witnessed = true;
+        break;
+    }
+    assert!(witnessed, "the mounted weapon never emitted a salvo");
 }

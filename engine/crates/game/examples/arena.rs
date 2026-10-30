@@ -18,8 +18,8 @@
 //!   With no posts there are no spawn points, so it is a ONE-LIFE fight and
 //!   the run ends at `ticks` or when a team is wiped out. `omni_radius` 10 m
 //!   (the BF2 value) — no manifest to read it from.
-//! - **a map key** — `round_to_outcome`'s conquest setup at 16 v 16 with the
-//!   idle player, the same map for every tier so the rows compare. The setup
+//! - **a map key** — `round_to_outcome`'s conquest setup, kept at 16 v 16
+//!   (the sweep now plays each map's own sizes) with the idle player, the same map for every tier so the rows compare. The setup
 //!   below is COPIED from `round_to_outcome::run_map`, not shared: cargo
 //!   examples cannot import each other. `SWEEP_SLOT0=bot` makes slot 0 a bot
 //!   here too (the sweep's default; see `slot0_is_bot` for why this example's

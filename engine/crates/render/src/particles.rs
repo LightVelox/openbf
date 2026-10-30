@@ -41,6 +41,8 @@ use crate::grass::GrassVertex;
 use crate::{Camera, Renderer, TextureHandle};
 use glam::Vec3;
 
+mod trail;
+
 /// A particle's shape in world units (see the module doc).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParticleShape {
@@ -61,6 +63,19 @@ pub enum ParticleShape {
     Ribbon {
         /// (point, half-width, U).
         points: Vec<(Vec3, f32, f32)>,
+    },
+    /// Shared native modes 4/5: rounded head, tapered body and the
+    /// nose-on mirrored cap, using the laser ribbon's UVs and alpha.
+    CappedRibbon {
+        head: Vec3,
+        head_half: f32,
+        tail: Vec3,
+        tail_half: f32,
+    },
+    /// Swept blade sections: origin, tip, authored half-width and color.
+    Trail {
+        sections: Vec<(Vec3, Vec3, f32, [u8; 4])>,
+        length: f32,
     },
     /// A model drawn as world-space triangles (three per triangle, its UVs):
     /// the muzzle flash (card FXMF, `analysis/re-muzzle-flash.md` §4 — the
@@ -234,6 +249,35 @@ pub fn particle_vertices(d: &ParticleDraw, camera: &Camera) -> Vec<GrassVertex> 
                 out.extend([a, b, c, c, b, e]);
             }
         }
+        ParticleShape::CappedRibbon {
+            head,
+            head_half,
+            tail,
+            tail_half,
+        } => {
+            out.extend(
+                crate::bolt::ribbon(
+                    *head,
+                    *head_half,
+                    *tail,
+                    *tail_half,
+                    camera.position,
+                    right,
+                    d.color[3],
+                )
+                .into_iter()
+                .map(|v| {
+                    vtx(
+                        v.pos,
+                        v.uv,
+                        [color[0], color[1], color[2], gs_unit(v.alpha)],
+                    )
+                }),
+            );
+        }
+        ParticleShape::Trail { sections, length } => {
+            out = trail::vertices(sections, *length, camera)
+        }
     }
     out
 }
@@ -299,7 +343,9 @@ pub(crate) fn build(bolts: &[BoltDraw], particles: &[ParticleDraw], camera: &Cam
                 if p.texture.is_some()
                     || matches!(
                         p.shape,
-                        ParticleShape::Streaks { .. } | ParticleShape::Beam(_)
+                        ParticleShape::Streaks { .. }
+                            | ParticleShape::Beam(_)
+                            | ParticleShape::Trail { .. }
                     )
                 {
                     push(
@@ -353,6 +399,31 @@ mod tests {
             texture: Some(TextureHandle(0)),
             additive: true,
         }
+    }
+
+    #[test]
+    fn a_capped_ribbon_keeps_authored_half_width_and_full_white() {
+        let d = draw(
+            ParticleShape::CappedRibbon {
+                head: Vec3::new(0.0, 1.0, -5.0),
+                head_half: 0.064,
+                tail: Vec3::new(0.0, -0.04, -5.0),
+                tail_half: 0.08,
+            },
+            Vec3::ZERO,
+        );
+        let vertices = particle_vertices(&d, &Camera::default());
+        assert_eq!(vertices.len(), 15, "cap plus body fan");
+        assert!(vertices.iter().all(|v| v.color == [1.0; 4]));
+        assert!(vertices
+            .iter()
+            .any(|v| v.uv[0] == 0.0 && v.position[1] > 1.0));
+        let tail: Vec<_> = vertices.iter().filter(|v| v.uv[0] > 0.99).collect();
+        assert_eq!(tail.len(), 4);
+        assert!(tail
+            .iter()
+            .all(|v| (v.position[0].abs() - 0.08).abs() < 1e-6));
+        assert!(tail.iter().all(|v| (v.position[1] + 0.04).abs() < 1e-6));
     }
 
     /// Camera at the origin looking down −Z: right = +X, up = +Y. An

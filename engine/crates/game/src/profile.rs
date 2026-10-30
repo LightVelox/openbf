@@ -85,8 +85,11 @@ pub struct Settings {
     pub keyboard_bindings: crate::kbm::Bindings,
     #[serde(default, deserialize_with = "controller_bindings")]
     pub controller_bindings: input::Mapping,
-    /// Alive-AI cap override (None = the mission's authentic cap).
-    pub ai_alive_cap: Option<u32>,
+    /// Map-relative population and reinforcement settings. Legacy absolute caps are ignored.
+    #[serde(default = "hundred", deserialize_with = "bounded_team_pct")]
+    pub team_size_pct: u32,
+    #[serde(default = "hundred", deserialize_with = "percent_setting")]
+    pub reinforcement_pct: u32,
     pub last_map: Option<String>,
     pub last_mode: Option<String>,
     pub last_teams: Option<[String; 2]>,
@@ -105,7 +108,8 @@ impl Default for Settings {
             invert_y: false,
             keyboard_bindings: crate::kbm::Bindings::default(),
             controller_bindings: input::Mapping::default(),
-            ai_alive_cap: None,
+            team_size_pct: 100,
+            reinforcement_pct: 100,
             last_map: None,
             last_mode: None,
             last_teams: None,
@@ -223,6 +227,19 @@ impl Profile {
         self.career.hits += hits;
         self.career.captures += captures;
     }
+}
+
+fn bounded_team_pct<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    use serde::Deserialize;
+    u32::deserialize(d).map(|n| n.clamp(10, ui::population::MAX_TEAM_PCT))
+}
+
+fn percent_setting<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    u32::deserialize(d).map(|n| n.clamp(10, 500))
+}
+
+fn hundred() -> u32 {
+    100
 }
 
 #[cfg(test)]
@@ -439,5 +456,30 @@ mod tests {
         assert!(path.with_extension("ron.bad").exists());
         unsafe { std::env::remove_var("OPENBF_PROFILE") };
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn legacy_absolute_cap_does_not_become_a_percent() {
+        let serialized = ron::to_string(&super::Settings::default()).unwrap();
+        assert!(serialized.contains("team_size_pct:100,"));
+        let legacy = serialized
+            .replace("team_size_pct:100,", "")
+            .replace("reinforcement_pct:100,", "")
+            .replace("last_map:None", "ai_alive_cap:Some(16),last_map:None");
+        let loaded: super::Settings = ron::from_str(&legacy).unwrap();
+        assert_eq!((loaded.team_size_pct, loaded.reinforcement_pct), (100, 100));
+    }
+    #[test]
+    fn saved_percentages_are_bounded_before_the_menu_reads_them() {
+        let serialized = ron::to_string(&super::Settings::default()).unwrap();
+        assert!(serialized.contains("team_size_pct:100,"));
+        assert!(serialized.contains("reinforcement_pct:100,"));
+        let extreme = serialized
+            .replace("team_size_pct:100", "team_size_pct:0")
+            .replace("reinforcement_pct:100", "reinforcement_pct:4294967295");
+        let loaded: super::Settings = ron::from_str(&extreme).unwrap();
+        assert_eq!((loaded.team_size_pct, loaded.reinforcement_pct), (10, 500));
+        let high = serialized.replace("team_size_pct:100", "team_size_pct:500");
+        let loaded: super::Settings = ron::from_str(&high).unwrap();
+        assert_eq!(loaded.team_size_pct, ui::population::MAX_TEAM_PCT);
     }
 }

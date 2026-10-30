@@ -27,6 +27,7 @@
 //! gain, bus, pitch and duration. Fixed positional takes use the same rate
 //! product and floor as other positional starts; preparation needs no mixer.
 
+mod hero;
 mod playback;
 mod walker;
 
@@ -470,6 +471,7 @@ enum LoopSource {
     /// (`crate::bolt_vis::key`).
     Ordnance(crate::bolt_vis::Key),
     Repair(core::unit::UnitHandle, usize),
+    Hero(core::unit::UnitHandle, u32),
     Shield(core::unit::UnitHandle),
     WalkerFire(core::unit::UnitHandle, usize),
 }
@@ -531,6 +533,8 @@ pub struct SoundLib {
     /// Each station's ambient handle: sounding until this time on the
     /// library's clock, by station index (card PWST, [`SoundLib::station_ambient`]).
     station_voices: HashMap<u16, Cry>,
+    hero_voices: HashMap<(core::unit::UnitHandle, u32), Cry>,
+    hero_blades: Vec<hero::BladeVoice>,
     /// Weighted-pick state (audio-only randomness; never touches the sim).
     seed: u32,
     pub played: u64,
@@ -801,6 +805,8 @@ impl SoundLib {
             ambient: HashMap::new(),
             cries: HashMap::new(),
             station_voices: HashMap::new(),
+            hero_voices: HashMap::new(),
+            hero_blades: Vec::new(),
             seed: 0x1234_5678,
             played: 0,
             handed: None,

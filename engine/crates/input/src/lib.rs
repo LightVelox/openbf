@@ -104,11 +104,11 @@ impl Mapping {
                 ),
                 (
                     Button::DPadLeft,
-                    buttons::SQUAD_AT_EASE | buttons::SPAWN_POST_LEFT,
+                    buttons::SQUAD_AT_EASE | buttons::SPAWN_POST_LEFT | buttons::HERO_ACCEPT,
                 ),
                 (
                     Button::DPadRight,
-                    buttons::SQUAD_FOLLOW | buttons::SPAWN_POST_RIGHT,
+                    buttons::SQUAD_FOLLOW | buttons::SPAWN_POST_RIGHT | buttons::HERO_DECLINE,
                 ),
                 // The spawn-class bits are PROVISIONAL (lead placeholder, no
                 // RE) and read by the sim only while the player is dead, so
@@ -1024,8 +1024,14 @@ mod tests {
         let of = |gb: Button| m.table.iter().find(|(b, _)| *b == gb).map(|(_, x)| *x);
         assert_eq!(of(Button::DPadUp), Some(SQUAD_MOVE_OUT | SPAWN_POST_UP));
         assert_eq!(of(Button::DPadDown), Some(SQUAD_HOLD | SPAWN_POST_DOWN));
-        assert_eq!(of(Button::DPadLeft), Some(SQUAD_AT_EASE | SPAWN_POST_LEFT));
-        assert_eq!(of(Button::DPadRight), Some(SQUAD_FOLLOW | SPAWN_POST_RIGHT));
+        assert_eq!(
+            of(Button::DPadLeft),
+            Some(SQUAD_AT_EASE | SPAWN_POST_LEFT | HERO_ACCEPT)
+        );
+        assert_eq!(
+            of(Button::DPadRight),
+            Some(SQUAD_FOLLOW | SPAWN_POST_RIGHT | HERO_DECLINE)
+        );
         assert_eq!(of(Button::RightThumb), Some(ZOOM));
         assert_eq!(of(Button::LeftTrigger), Some(SWITCH_SECONDARY));
         assert_eq!(

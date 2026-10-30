@@ -326,6 +326,9 @@ pub struct SeatSetup {
     /// Per ring seat: may a soldier take it — PilotType `vehicle` (B1
     /// FUN_0020b1b0) or BF2's `vehicleself`.
     pub boardable: Vec<bool>,
+    /// Whether each seated soldier has a collision body. BF2 requires a
+    /// pilot pose and IsPilotExposed (FUN_0024de60), independently of entry.
+    pub body_active: Vec<bool>,
     /// The exit's ground ray: 10 m (B1 FUN_0020b918) / 15 m (B2 FUN_0024ba68).
     pub exit_drop: f32,
     /// The class's `AISizeType` mask (RE_LOG "The six type bits": SOLDIER 1,

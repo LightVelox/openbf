@@ -33,6 +33,7 @@ fn world(bf2: bool, fall: TurretFall) -> (Sim, UnitHandle) {
     s.hover_params = vec![None];
     s.seat_setup = vec![Some(SeatSetup {
         radius: 3.0,
+        body_active: vec![],
         boardable: vec![true],
         exit_drop: 15.0,
         ai_size: 1,

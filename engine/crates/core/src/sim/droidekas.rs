@@ -95,24 +95,48 @@ impl Unit {
         self.droideka_form() == Some(Form::Ball)
     }
 
+    /// What the stamina bar reads, (value, full). The maintainer: "The
+    /// droideka stamina bar is how much shield is left."
+    pub fn stamina_bar(&self) -> (f32, f32) {
+        match (&self.droideka, self.droideka_class()) {
+            (Some(d), Some(c)) => (d.shield.points, c.shield.max),
+            _ => (self.soldier.energy, self.consts.energy_bar),
+        }
+    }
+
     pub fn droideka_eye(&self) -> Option<Vec3> {
         let c = self.droideka_class()?;
         Some(self.soldier.pos + c.eye)
     }
 }
 
+/// Shared authored pitch clamp; droidekas never divide look by zoom.
+fn droideka_pitch(
+    class: &DroidekaClass,
+    pitch: f32,
+    pad: &PadState,
+    mouse_scale: f32,
+    dt: f32,
+) -> f32 {
+    let (lo, hi) = class.pitch_limits;
+    let pitch = (pitch + PadState::axis(pad.ry) * class.max_pitch_speed * dt).clamp(lo, hi);
+    if pad.has_look() {
+        (pitch + pad.look().1 * mouse_scale).clamp(lo, hi)
+    } else {
+        pitch
+    }
+}
+
 impl Sim {
-    pub(super) fn step_droideka(&mut self, i: usize, pad: &PadState, dt: f32) {
-        let Some(class) = self.units[i].spec.droideka.clone() else {
-            return;
-        };
-        let Some(mut deka) = self.units[i].droideka.take() else {
-            return;
-        };
-        let human = matches!(self.units[i].controller, Controller::Player { .. });
+    /// The same edge/headroom inputs for real motion and between-tick look.
+    fn droideka_input(&self, i: usize, pad: &PadState) -> Option<Input> {
+        let u = self.units.get(i)?;
+        let deka = u.droideka.as_ref()?;
+        let class = u.droideka_class()?;
+        let human = matches!(u.controller, Controller::Player { .. });
         let prev = deka.prev_buttons;
         let edge = |b: u32| pad.buttons & b != 0 && prev & b == 0;
-        let walk_room = capsule_of(&class, Form::Walk, self.units[i].soldier.pos);
+        let walk_room = capsule_of(class, Form::Walk, u.soldier.pos);
         let cramped = deka.form() == Form::Ball
             && !self.collision.is_empty()
             && self
@@ -123,27 +147,32 @@ impl Sim {
                 })
                 .length_squared()
                 > 1e-6;
-        let input = Input {
+        Some(Input {
             fwd: PadState::axis(pad.ly),
             strafe: PadState::axis(pad.lx),
             turn: PadState::axis(pad.rx),
             fold: edge(buttons::ROLL_STANCE),
             shield: edge(buttons::SECONDARY_FIRE),
             jump: edge(buttons::JUMP),
-            boost: pad.pressed(buttons::SPRINT),
+            // The maintainer: no sprint in ball or walking form. The discs'
+            // ball boost stays in the integrator, but no button reaches it.
+            boost: false,
             human,
             cramped,
-        };
-        deka.prev_buttons = pad.buttons;
-        deka.alive = self.units[i].alive;
-        if self.units[i].controller == Controller::Ai {
-            deka.order = crate::ai::droideka::form_order(&self.units[i].ai);
+        })
+    }
+
+    pub(super) fn droideka_look_preview(&self, i: usize, pad: &PadState) -> Option<(f32, f32)> {
+        let u = self.units.get(i)?;
+        let class = u.droideka_class()?;
+        let mut deka = u.droideka.as_deref()?.clone();
+        let input = self.droideka_input(i, pad)?;
+        deka.alive = u.alive;
+        if u.controller == Controller::Ai {
+            deka.order = crate::ai::droideka::form_order(&u.ai);
         }
-        let look = self.units[i].look_scale();
-        let u = &mut self.units[i];
-        let (lo, hi) = class.pitch_limits;
-        u.soldier.pitch =
-            (u.soldier.pitch + PadState::axis(pad.ry) * class.max_pitch_speed * dt).clamp(lo, hi);
+        let scale = u.soldier.mouse_scale();
+        let pitch = droideka_pitch(class, u.soldier.pitch, pad, scale, crate::TICK_DT);
         let mut body = Body {
             pos: u.soldier.pos,
             vel: u.soldier.vel,
@@ -151,10 +180,43 @@ impl Sim {
             grounded: u.soldier.grounded,
         };
         if pad.has_look() {
-            let (lx, ly) = pad.look();
-            let k = look * u.soldier.mouse_scale();
-            deka.turn_body(&mut body, lx * k);
-            u.soldier.pitch = (u.soldier.pitch + ly * k).clamp(lo, hi);
+            deka.turn_body(&mut body, pad.look().0 * scale);
+        }
+        // Run the actual walk/ball/boost integrator on scratch state. No
+        // soldier turn-factor approximation can reproduce these state laws.
+        deka.step(crate::TICK_DT, &input, class, &mut body);
+        Some((body.yaw, pitch))
+    }
+
+    pub(super) fn step_droideka(&mut self, i: usize, pad: &PadState, dt: f32) {
+        let Some(class) = self.units[i].spec.droideka.clone() else {
+            return;
+        };
+        let Some(input) = self.droideka_input(i, pad) else {
+            return;
+        };
+        let Some(mut deka) = self.units[i].droideka.take() else {
+            return;
+        };
+        deka.prev_buttons = pad.buttons;
+        deka.alive = self.units[i].alive;
+        if self.units[i].controller == Controller::Ai {
+            deka.order = crate::ai::droideka::form_order(&self.units[i].ai);
+        }
+        let u = &mut self.units[i];
+        // Native droideka control has no zoom path. Its look always uses the
+        // authored walk/ball rates, including while ZOOM is held.
+        u.zoom = None;
+        let mouse_scale = u.soldier.mouse_scale();
+        u.soldier.pitch = droideka_pitch(&class, u.soldier.pitch, pad, mouse_scale, dt);
+        let mut body = Body {
+            pos: u.soldier.pos,
+            vel: u.soldier.vel,
+            yaw: u.soldier.yaw,
+            grounded: u.soldier.grounded,
+        };
+        if pad.has_look() {
+            deka.turn_body(&mut body, pad.look().0 * mouse_scale);
         }
         let from = capsule_of(&class, deka.form(), body.pos);
         let report = deka.step(dt, &input, &class, &mut body);

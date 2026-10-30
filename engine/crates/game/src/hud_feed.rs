@@ -88,6 +88,12 @@ pub fn weapon_rows(walk: &crate::walk::WalkSim) -> [Option<HudWeapon>; 2] {
         c.and_then(|c| me.weapon.rounds(c)),
         c.map_or(1.0, |c| fill(me.weapon.clip, c.rounds_per_clip)),
     ));
+    // A droideka's secondary is its shield, an infinite weapon: the charge
+    // is on the stamina bar (the maintainer, 2026-10-30).
+    if me.droideka.is_some() {
+        let shield = visual.droideka_shield.as_ref();
+        return [primary, shield.map(|h| row(h, None, 1.0))];
+    }
     // The secondary channel's current weapon: the grenade row (GREN).
     let secondary = me
         .cur1

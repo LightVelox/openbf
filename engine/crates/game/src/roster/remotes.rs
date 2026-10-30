@@ -138,10 +138,6 @@ fn destruct(db: &ClassDb, name: &str) -> Destruct {
 }
 
 fn guided_weapon(db: &ClassDb, name: &str, src: &dyn PropSource, ord: &str) -> Result<WeaponClass> {
-    anyhow::ensure!(
-        db.prop_f32(name, "MedalsTypeToUnlock") == Some(2.0),
-        "{name}: only the infantry award launcher is built, not vehicle or hero ones"
-    );
     let osrc = ClassSrc { db, class: ord };
     let mut class = core::guided::GuidedClass::from_props(&osrc);
     class.explosion = osrc

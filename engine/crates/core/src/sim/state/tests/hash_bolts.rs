@@ -1,10 +1,12 @@
-//! HASH: independently perturb every serialized bolt scalar and hit payload.
+//! HASH: independently perturb every physics bolt scalar and hit payload.
+//! Presentation provenance is deliberately excluded, with a null control below.
 use super::*;
 use crate::projectile::{Hit, Target};
 use crate::vehicle::VehicleHandle;
 
 fn bolt() -> Bolt {
     Bolt {
+        visual_shot: None,
         pos: Vec3::new(1.0, 2.0, 3.0),
         vel: Vec3::new(4.0, 5.0, 6.0),
         remaining: 0.5,
@@ -32,6 +34,13 @@ fn every_bolt_field_and_hit_payload_changes_sim_hash() {
     s.bolts.push(original.clone());
     let base = s.hash();
     assert_ne!(empty, base);
+    s.bolts[0].visual_shot = Some(crate::projectile::VisualShot { tick: 12, event: 3 });
+    assert_eq!(
+        s.hash(),
+        base,
+        "presentation provenance is not physics state"
+    );
+    s.bolts[0] = original.clone();
     macro_rules! changes {
         ($($field:ident $(.$axis:ident)? = $value:expr),+ $(,)?) => {
             $(

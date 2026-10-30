@@ -130,6 +130,10 @@ pub struct HudModel {
     pub bleed: [f32; 2],
     pub hp: f32,
     pub hp_max: f32,
+    /// The hero's saber-shaped health bar replaces ordinary health.
+    pub hero: bool,
+    /// Localised offer message and seconds remaining.
+    pub hero_offer: Option<(String, f32)>,
     /// Sprint stamina 0..energy_max.
     pub energy: f32,
     pub energy_max: f32,
@@ -240,10 +244,27 @@ pub fn feed(hud: &mut Hud, m: &HudModel, has_mesh: &dyn Fn(&str) -> bool) {
     // Health and stamina: shown while alive.
     if alive {
         let frac = if m.hp_max > 0.0 { m.hp / m.hp_max } else { 0.0 };
-        put("player1.health", EventValue::Number(m.hp.max(0.0)));
+        let health = if m.hero {
+            "player1.hero.health"
+        } else {
+            "player1.health"
+        };
+        put(health, EventValue::Number(m.hp.max(0.0)));
         put(
-            "player1.healthFraction",
+            if m.hero {
+                "player1.hero.healthFraction"
+            } else {
+                "player1.healthFraction"
+            },
             EventValue::Number(frac.clamp(0.0, 1.0)),
+        );
+        put(
+            if m.hero {
+                "player1.healthDisable"
+            } else {
+                "player1.hero.healthDisable"
+            },
+            EventValue::None,
         );
         let e = if m.energy_max > 0.0 {
             m.energy / m.energy_max
@@ -254,6 +275,23 @@ pub fn feed(hud: &mut Hud, m: &HudModel, has_mesh: &dyn Fn(&str) -> bool) {
             "player1.energyFraction",
             EventValue::Number(e.clamp(0.0, 1.0)),
         );
+    }
+
+    if let Some((message, seconds)) = &m.hero_offer {
+        put(
+            "player1.heroSelect.message",
+            EventValue::Text(message.clone()),
+        );
+        put(
+            "player1.heroSelect.timer",
+            EventValue::Number(seconds.max(0.0)),
+        );
+        put(
+            "player1.heroSelect.timerFraction",
+            EventValue::Number((seconds / 30.0).clamp(0.0, 1.0)),
+        );
+    } else {
+        put("player1.heroSelect.disable", EventValue::None);
     }
 
     // The weapon in hand (row 1) and the secondary channel's (row 2: the
@@ -466,12 +504,43 @@ pub fn feed(hud: &mut Hud, m: &HudModel, has_mesh: &dyn Fn(&str) -> bool) {
     };
     hide(
         hud,
+        "hud.gate.hero_offer",
+        m.hero_offer.is_some(),
+        &["player1.heroSelect.disable"],
+        &[
+            "player1.heroSelect.message",
+            "player1.heroSelect.timer",
+            "player1.heroSelect.timerFraction",
+        ],
+    );
+    hide(
+        hud,
+        "hud.gate.ordinary_health",
+        alive && !m.hero,
+        &["player1.healthDisable"],
+        &["player1.health", "player1.healthFraction"],
+    );
+    hide(
+        hud,
+        "hud.gate.hero_health",
+        alive && m.hero,
+        &["player1.hero.healthDisable"],
+        &["player1.hero.health", "player1.hero.healthFraction"],
+    );
+    hide(
+        hud,
         "hud.gate.alive",
         alive,
-        &["player1.healthDisable", "player1.energyDisable"],
+        &[
+            "player1.healthDisable",
+            "player1.hero.healthDisable",
+            "player1.energyDisable",
+        ],
         &[
             "player1.health",
             "player1.healthFraction",
+            "player1.hero.health",
+            "player1.hero.healthFraction",
             "player1.energyFraction",
         ],
     );
@@ -764,6 +833,8 @@ mod tests {
             bleed: [0.0; 2],
             hp: 320.0,
             hp_max: 400.0,
+            hero: false,
+            hero_offer: None,
             energy: 55.0,
             energy_max: 100.0,
             weapon: None,

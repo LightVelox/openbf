@@ -65,6 +65,35 @@ fn an_isolated_caster_does_not_get_its_own_boost() {
 }
 
 #[test]
+fn hero_refuses_officer_buffs_and_poison_without_changing_regular_recipients() {
+    let (mut sim, owner, class) = setup(Ability {
+        enemies: true,
+        poison: (10.0, 20.0),
+        ..boost()
+    });
+    sim.ground_rules = crate::soldier::GroundRules::Bf2;
+    sim.heroes = Some(crate::sim::heroes::Heroes::new([Some(1), Some(1)]));
+    let ally = sim
+        .spawn(&UnitSpec {
+            class: 1,
+            ..UnitSpec::trooper(0, Vec3::Z * 5.0)
+        })
+        .unwrap();
+    let enemy = sim
+        .spawn(&UnitSpec {
+            class: 1,
+            ..UnitSpec::trooper(1, Vec3::NEG_Z * 5.0)
+        })
+        .unwrap();
+    let regular = sim.spawn(&UnitSpec::trooper(0, Vec3::X * 5.0)).unwrap();
+    sim.fire_ability(owner.index as usize, class);
+    assert!(!sim.unit(ally).unwrap().buffs.active());
+    assert!(!sim.unit(enemy).unwrap().buffs.active());
+    assert!(sim.unit(regular).unwrap().buffs.active());
+    assert!(sim.unit(owner).unwrap().buffs.active());
+}
+
+#[test]
 fn walls_block_the_area_query_and_do_not_enable_self_boost() {
     let (mut sim, owner, class) = setup(boost());
     let ally = sim.spawn(&UnitSpec::trooper(0, Vec3::Z * -5.0)).unwrap();

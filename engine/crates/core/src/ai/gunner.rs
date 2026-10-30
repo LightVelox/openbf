@@ -28,7 +28,7 @@
 //! own aim, `FUN_00236700`, B1:191963-191967); and it sees from its muzzle
 //! (`perception::scan`).
 
-use super::gunner_foot::{charge, droid_aim, fire_discipline, seen_aim, tap, Meter};
+use super::gunner_foot::{charge, droid_aim, fire_discipline, seen_aim, tap, turret_aim, Meter};
 use super::state::AiState;
 use super::AIM_TOLERANCE;
 use crate::fmath;
@@ -76,10 +76,17 @@ pub(super) fn aim(
     let droid = seen
         .and_then(|c| c.handle.droid())
         .and_then(|id| sim.live_droid(id));
+    let turret = seen
+        .and_then(|c| c.handle.turret())
+        .and_then(|id| sim.live_turret(id));
     let point = enemy
         .map(|e| seen_aim(sim, me, st, s.eye, e, wc.ordnance.velocity, wc))
-        .or_else(|| droid.map(|d| droid_aim(sim, me, st, s.eye, d, wc.ordnance.velocity, wc)));
-    let centre = enemy.map(|e| e.capsule().center()).or(droid.map(|d| d.pos));
+        .or_else(|| droid.map(|d| droid_aim(sim, me, st, s.eye, d, wc.ordnance.velocity, wc)))
+        .or_else(|| turret.map(|t| turret_aim(sim, me, st, s.eye, t, wc)));
+    let centre = enemy
+        .map(|e| e.capsule().center())
+        .or(droid.map(|d| d.pos))
+        .or(turret.map(|t| t.centre()));
     let at = point.or(idle);
 
     if let (Look::Seat, Some(t)) = (look, s.gun.turn) {

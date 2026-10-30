@@ -263,6 +263,7 @@ fn vehicle_scene(
     sim.unit_mut(owner).unwrap().soldier.pos = Vec3::new(20.0, 0.0, 2.5);
     sim.seat_setup = vec![Some(SeatSetup {
         radius: 1.5,
+        body_active: vec![],
         boardable: vec![true; 2],
         exit_drop: 10.0,
         ai_size: 1,
@@ -427,5 +428,25 @@ fn the_cutter_repairs_friendly_vehicles_at_the_disc_rate() {
             assert_eq!(rises, expected, "bf2={bf2} {case}");
             assert_eq!(sim.vehicle(vh).unwrap().slice, 0.0);
         }
+    }
+}
+
+#[test]
+fn audit_paid_slice_pulses_emit_zero_healing_feedback() {
+    for (bf2, secondary) in [(false, true), (true, false)] {
+        let (mut sim, owner, vh, _) = vehicle_scene(bf2, secondary, 1, 1);
+        let before = sim.unit(owner).unwrap().soldier.energy;
+        sim.fire_repair(owner.index as usize, 1, Target::Vehicle(vh));
+        assert_eq!(sim.vehicle(vh).unwrap().slice, 0.5);
+        assert_eq!(sim.vehicle(vh).unwrap().health.cur, 400.0);
+        assert!(sim.unit(owner).unwrap().soldier.energy < before);
+        assert!(sim.events.iter().any(|e| matches!(e,
+            Event::Repair { unit, target: Target::Vehicle(v), amount, .. }
+            if *unit == owner && *v == vh && *amount == 0.0)));
+        sim.events.clear();
+        sim.unit_mut(owner).unwrap().soldier.energy = 0.0;
+        sim.fire_repair(owner.index as usize, 1, Target::Vehicle(vh));
+        assert_eq!(sim.vehicle(vh).unwrap().slice, 0.5);
+        assert!(sim.events.is_empty(), "unpaid pulse emits no action");
     }
 }

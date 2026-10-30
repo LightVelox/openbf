@@ -550,6 +550,7 @@ impl Sim {
                     gen: u.gen,
                 };
                 self.events.push(Event::Despawn { unit: h });
+                self.retire_saber_flights(i);
                 self.unseat_unit(h);
                 // Phase D: a bot the no-overspawn rule sheds must not come back
                 // carrying the order it had (it comes back from its `UnitSpec`).
@@ -577,18 +578,43 @@ impl Sim {
     /// alive; a PLAYER taking the last slots sheds AI — core::battle). Feet
     /// snapped to the terrain. Returns None if refused.
     pub fn spawn(&mut self, spec: &UnitSpec) -> Option<UnitHandle> {
+        self.spawn_with_slot_policy(spec, false)
+    }
+
+    /// Add a roster slot without taking a dead unit's pending respawn slot.
+    pub fn spawn_roster_slot(&mut self, spec: &UnitSpec) -> Option<UnitHandle> {
+        self.spawn_with_slot_policy(spec, true)
+    }
+
+    fn spawn_with_slot_policy(
+        &mut self,
+        spec: &UnitSpec,
+        preserve_respawns: bool,
+    ) -> Option<UnitHandle> {
         if !self.admit(spec.team, spec.is_player()) {
             return None;
         }
         // A dead unit a player slot still holds is that player's (its next
         // life, or the spawn screens' held soldier, card SSELA): not free.
         let held = |i: usize| self.players.iter().flatten().any(|p| p.index as usize == i);
-        let slot = (0..self.units.len()).find(|&i| !self.units[i].alive && !held(i));
+        let slot = (0..self.units.len()).find(|&i| {
+            !self.units[i].alive
+                && !held(i)
+                && (!preserve_respawns || self.units[i].respawn_at.is_none())
+        });
         let gen = match slot {
             Some(i) => self.units[i].gen + 1,
             None => 1,
         };
         let mut unit = spec.build(gen, &self.weapon_classes);
+        if self.weapon_classes[unit.weapon_class].saber.is_some()
+            || unit
+                .held
+                .iter()
+                .any(|held| self.weapon_classes[held.class].saber.is_some())
+        {
+            self.melee_lcg_active = true;
+        }
         // D2: "every bot receives the tier's skill at spawn" — enforced HERE
         // so it holds for every spawn path (the class table's `spawn_ai`, the
         // team template's, a test's hand-built spec), and mirrored into the
@@ -658,6 +684,7 @@ impl Sim {
         t.alive_players = t.alive_players.saturating_sub(1);
         debug_assert!(t.invariant_holds());
         self.events.push(Event::Despawn { unit: h });
+        self.retire_saber_flights(i);
         self.unseat_unit(h);
         self.class_change_life_ended(h);
         // Phase D: the orders this slot gave go with it (`on_unit_died` reads
@@ -722,6 +749,7 @@ impl Sim {
         let t = &mut self.battle.teams[usize::from(team.min(1))];
         t.alive_players = t.alive_players.saturating_sub(1);
         self.events.push(Event::Despawn { unit: h });
+        self.retire_saber_flights(i);
         self.unseat_unit(h);
         self.class_change_life_ended(h);
         crate::squad::on_unit_died(self, h);
@@ -762,15 +790,23 @@ impl Sim {
     /// alive takes one unit off its class's weight; a class at or past its
     /// share keeps only the floor, so sixteen riflemen or sixteen droidekas
     /// can happen and almost never do. [ours] (the maintainer 2026-10-29) a
-    /// class's authored `max` (BF2 `SetupTeams`, the droideka's 4) does not
-    /// cap the roll: it only refuses a human (`class_refusal`).
+    /// class's authored `max` (BF2 `SetupTeams`, the droideka's 4) caps
+    /// neither AI rolls nor human selection. Human refusal checks points only.
     pub fn ai_class_weights(&self, team: u8) -> Vec<f32> {
         let table = &self.classes[usize::from(team.min(1))];
-        let cap = self.ai_alive_cap.max(1) as f32;
-        let parts: f32 = (0..table.len()).map(class_share).sum();
-        let floor = CLASS_FLOOR * cap / table.len().max(1) as f32;
+        let cap = self.ai_limit(team).max(1) as f32;
+        let hero = self.hero_class(team).map(usize::from);
+        let ordinary = table.len() - usize::from(hero.is_some());
+        let parts: f32 = (0..table.len())
+            .filter(|c| Some(*c) != hero)
+            .map(class_share)
+            .sum();
+        let floor = CLASS_FLOOR * cap / ordinary.max(1) as f32;
         (0..table.len())
             .map(|c| {
+                if Some(c) == hero {
+                    return 0.0;
+                }
                 let alive = self
                     .units
                     .iter()
@@ -785,7 +821,7 @@ impl Sim {
     }
 
     /// Which class the team's NEXT AI spawn takes: one draw of the sim's LCG
-    /// over [`Sim::ai_class_weights`]. Class 0 when every class is full.
+    /// over [`Sim::ai_class_weights`]. Class 0 only for an empty or zero-weight table.
     pub fn ai_class(&mut self, team: u8) -> u8 {
         let w = self.ai_class_weights(team);
         let total: f32 = w.iter().sum();
@@ -810,6 +846,21 @@ impl Sim {
     /// Spawn one AI of the team's next class at `pos`/`yaw`. `None` (and no
     /// cursor advance) when the battle refuses the spawn.
     pub fn spawn_ai(&mut self, team: u8, pos: Vec3, yaw: f32) -> Option<UnitHandle> {
+        self.spawn_ai_with_slot_policy(team, pos, yaw, false)
+    }
+
+    /// Grow a team's roster while preserving every pending respawn and its wave.
+    pub fn spawn_ai_roster_slot(&mut self, team: u8, pos: Vec3, yaw: f32) -> Option<UnitHandle> {
+        self.spawn_ai_with_slot_policy(team, pos, yaw, true)
+    }
+
+    fn spawn_ai_with_slot_policy(
+        &mut self,
+        team: u8,
+        pos: Vec3,
+        yaw: f32,
+        preserve_respawns: bool,
+    ) -> Option<UnitHandle> {
         let t = usize::from(team.min(1));
         if self.classes[t].is_empty() {
             return None;
@@ -823,7 +874,7 @@ impl Sim {
             c,
             self.bot_skill(team),
         );
-        let h = self.spawn(&spec)?;
+        let h = self.spawn_with_slot_policy(&spec, preserve_respawns)?;
         self.ai_spawned[t] += 1;
         Some(h)
     }
@@ -838,9 +889,26 @@ impl Sim {
     /// one who never picked still draws a node from the flat list of every
     /// post's ([`Sim::spawn_points`]).
     pub(crate) fn respawn_slot(&mut self, i: usize) {
+        self.respawn_slot_with_class(i, None);
+    }
+
+    pub(in crate::sim) fn respawn_slot_with_class(&mut self, i: usize, forced: Option<u8>) {
         let team = self.units[i].team;
         let is_player = self.units[i].is_player;
         let slot = self.units[i].spec.player_slot.map(usize::from);
+        let forced =
+            forced.filter(|c| usize::from(*c) < self.classes[usize::from(team.min(1))].len());
+        let player_class = if let Some(s) =
+            slot.filter(|_| forced.is_none() && !self.classes[usize::from(team.min(1))].is_empty())
+        {
+            let Some(class) = self.spawn_class_choice(s, team) else {
+                return;
+            };
+            self.spawn_choice[s] = class as u8;
+            Some(class)
+        } else {
+            None
+        };
         let chosen = slot.and_then(|s| self.spawn_post_choice.get(s).copied().flatten());
         let points = if let (Some(s), Some(chosen)) = (slot, chosen) {
             // The PS2 writes the kept-or-nearest post back to the member.
@@ -877,29 +945,30 @@ impl Sim {
         .then(|| self.ai_class(old.team));
         let base = self.bot_skill(old.team);
         let table = &self.classes[usize::from(old.team.min(1))];
-        let spec = match old.player_slot.filter(|_| !table.is_empty()) {
-            Some(slot) => {
-                let c = self
-                    .spawn_choice
-                    .get(usize::from(slot))
-                    .copied()
-                    .unwrap_or(0);
-                let c = usize::from(c).min(table.len() - 1);
-                table[c].spec(old.team, pos, yaw, old.controller, c as u8, base)
-            }
-            None => match ai_class {
-                // [ours] A proxy with a class picks it, as a player does (the
-                // draw above is still spent).
-                Some(c) => {
-                    let c = self.units[i]
-                        .proxy_human
-                        .and_then(|p| p.class)
-                        .filter(|&k| usize::from(k) < table.len())
-                        .unwrap_or(c);
-                    table[usize::from(c)].spec(old.team, pos, yaw, old.controller, c, base)
+        let spec = if let Some(class) = forced.filter(|c| usize::from(*c) < table.len()) {
+            table[usize::from(class)].spec(old.team, pos, yaw, old.controller, class, base)
+        } else {
+            match old.player_slot.filter(|_| !table.is_empty()) {
+                Some(_) => {
+                    let c = player_class.expect("unforced player class resolved before admission");
+                    table[c].spec(old.team, pos, yaw, old.controller, c as u8, base)
                 }
-                None => UnitSpec { pos, yaw, ..old },
-            },
+                None => match ai_class {
+                    // [ours] A proxy with a class picks it, as a player does (the
+                    // draw above is still spent).
+                    Some(c) => {
+                        let c = self.units[i]
+                            .proxy_human
+                            .and_then(|p| p.class)
+                            .filter(|&k| {
+                                usize::from(k) < table.len() && Some(k) != self.hero_class(old.team)
+                            })
+                            .unwrap_or(c);
+                        table[usize::from(c)].spec(old.team, pos, yaw, old.controller, c, base)
+                    }
+                    None => UnitSpec { pos, yaw, ..old },
+                },
+            }
         };
         let mut unit = spec.build(gen, &self.weapon_classes);
         // An AI respawn re-derives the tier's skill (D2): a difficulty change
@@ -1010,16 +1079,9 @@ impl Sim {
             if rose & POST != 0 {
                 self.spawn_post_push(s, team, body, bits);
             }
-            let n = self.classes[usize::from(team.min(1))].len() as u32;
-            if n == 0 || rose & CLASS == 0 {
-                continue;
+            if rose & CLASS != 0 {
+                self.move_spawn_class(s, team, rose & buttons::SPAWN_CLASS_NEXT != 0);
             }
-            let c = u32::from(self.spawn_choice[s]).min(n - 1);
-            self.spawn_choice[s] = if rose & buttons::SPAWN_CLASS_NEXT != 0 {
-                ((c + 1) % n) as u8
-            } else {
-                ((c + n - 1) % n) as u8
-            };
         }
     }
 
@@ -1068,6 +1130,11 @@ impl Sim {
             SpawnStage::Map if accept => {
                 if self.spawn_post_selected(s).is_some() {
                     self.spawn_stage[s] = SpawnStage::Class;
+                    // The hero's owner finds the hero chosen (FUN_00396a00
+                    // selects its row on entry); any class stays his to pick.
+                    if let Some(hero) = self.owned_hero_class(s, team) {
+                        self.spawn_choice[s] = hero;
+                    }
                     // The arm is shared with the map's push (`SD+0x25`,
                     // `FUN_0039a058`): a push held into the class screen
                     // steps only after it is let go.
@@ -1124,25 +1191,82 @@ impl Sim {
     fn class_carousel_step(&mut self, s: usize, team: u8, bits: u32) {
         let next = bits & (buttons::SPAWN_CLASS_NEXT | buttons::SPAWN_POST_LEFT) != 0;
         let prev = bits & CAROUSEL != 0 && !next;
-        let n = self.classes[usize::from(team.min(1))].len() as u32;
+        if let Some(class) = self.spawn_class_choice(s, team) {
+            self.spawn_choice[s] = class as u8;
+        }
         let mut k = self.class_carousel[s];
         if k.armed {
             // Let go: re-armed (B2:393680-393682).
             if !(next || prev) {
                 k.armed = false;
             }
-        } else if (next || prev) && k.slide == 0 && n > 0 {
-            let c = u32::from(self.spawn_choice[s]).min(n - 1);
-            self.spawn_choice[s] = if next {
-                ((c + 1) % n) as u8
-            } else {
-                ((c + n - 1) % n) as u8
-            };
+        } else if (next || prev) && k.slide == 0 {
+            self.move_spawn_class(s, team, next);
             k.armed = true;
             k.slide = CLASS_SLIDE_TICKS;
         }
         k.slide = k.slide.saturating_sub(1);
         self.class_carousel[s] = k;
+    }
+
+    /// Classes shown to this member. BF2 0x0039a888/0x00399dd8 exposes
+    /// the hero row only to the team's current hero owner.
+    pub fn spawn_class_indices(&self, s: usize, team: u8) -> Vec<usize> {
+        (0..self.classes[usize::from(team.min(1))].len())
+            .filter(|&class| self.spawn_class_available(s, team, class))
+            .collect()
+    }
+
+    /// Class membership, shared by the carousel, UI and unforced respawn.
+    /// Ordinary unlock costs remain the separate confirmation refusal.
+    pub fn spawn_class_available(&self, s: usize, team: u8, class: usize) -> bool {
+        if class >= self.classes[usize::from(team.min(1))].len() {
+            return false;
+        }
+        if self.hero_class(team).map(usize::from) != Some(class) {
+            return true;
+        }
+        let Some(member) = self.players.get(s).copied().flatten() else {
+            return false;
+        };
+        self.units
+            .get(member.index as usize)
+            .is_some_and(|u| u.gen == member.gen && u.team == team)
+            && self.heroes.as_ref().is_some_and(|heroes| {
+                let state = &heroes.teams[usize::from(team)];
+                state.unlocked && state.owner == Some(member.index)
+            })
+    }
+
+    /// The selected raw class index, falling back to the first visible row
+    /// if the old hero reservation ended or a mission's table shrank.
+    pub fn spawn_class_choice(&self, s: usize, team: u8) -> Option<usize> {
+        let n = self.classes[usize::from(team.min(1))].len();
+        let c =
+            usize::from(self.spawn_choice.get(s).copied().unwrap_or(0)).min(n.saturating_sub(1));
+        if self.spawn_class_available(s, team, c) {
+            Some(c)
+        } else {
+            (0..n).find(|&class| self.spawn_class_available(s, team, class))
+        }
+    }
+
+    fn move_spawn_class(&mut self, s: usize, team: u8, next: bool) {
+        let classes = self.spawn_class_indices(s, team);
+        if classes.is_empty() {
+            return;
+        }
+        let selected = self.spawn_class_choice(s, team);
+        let c = classes
+            .iter()
+            .position(|&c| Some(c) == selected)
+            .unwrap_or(0);
+        let pick = if next {
+            (c + 1) % classes.len()
+        } else {
+            (c + classes.len() - 1) % classes.len()
+        };
+        self.spawn_choice[s] = classes[pick] as u8;
     }
 
     /// Card SSELB: player slot `s`'s points ([`Sim::spawn_points`]).
@@ -1194,6 +1318,11 @@ impl Sim {
     /// whose team fields its max; here a class is never full, for players or
     /// bots.
     pub fn class_refusal(&self, s: usize, team: u8, class: usize) -> Option<ClassRefusal> {
+        if self.hero_class(team).map(usize::from) == Some(class)
+            && !self.spawn_class_available(s, team, class)
+        {
+            return Some(ClassRefusal::HeroUnavailable);
+        }
         let cost = i64::from(self.spawn_cost(s, team, class));
         let points = i64::from(self.spawn_points.get(s).copied().unwrap_or(0));
         (cost != 0 && points < cost).then(|| ClassRefusal::Points((cost - points) as u32))

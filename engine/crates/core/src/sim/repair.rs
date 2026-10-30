@@ -131,6 +131,29 @@ impl Sim {
                 }
             }
         }
+        // A standing auto-turret takes the shot its health type does (the
+        // amount table is by the target's type, B2 `FUN_00346fa0` 339872, and
+        // this class's is Building), a friend's only: it always has a team.
+        for t in self
+            .turrets
+            .iter()
+            .filter(|t| t.alive() && t.team == u.team)
+        {
+            let Some(c) = self.turret_class(t) else {
+                continue;
+            };
+            if repair.health[c.health_type as usize] <= 0.0 || t.health >= c.body.max_health {
+                continue;
+            }
+            let sphere = (t.centre(), crate::autoturret::RADIUS);
+            if let Some(score) =
+                self.repair_candidate(u, wc, sphere, (Some(t.team), None, HullFilter::All))
+            {
+                if best.is_none_or(|(old, _)| score < old) {
+                    best = Some((score, Target::Turret(t.id)));
+                }
+            }
+        }
         for (vh, v) in self.alive_vehicles() {
             // Issue #35: a player's cutter slices an enemy vehicle with riders.
             let enemy = v.team.is_some_and(|t| t != u.team);
@@ -186,6 +209,7 @@ impl Sim {
             }
             self.units[i].soldier.energy -= cost;
         }
+        let mut sliced = false;
         let (pos, amount) = match target {
             Target::Station(si) => {
                 let s = &self.stations[usize::from(si)];
@@ -201,17 +225,20 @@ impl Sim {
                     .vehicle(vh)
                     .is_some_and(|v| v.team.is_some_and(|t| t != team))
                 {
+                    let pos = self.vehicle(vh).unwrap().pos;
                     let step = self.weapon_classes[class].shot_delay[0];
                     self.slice_vehicle(i, vh, step);
-                    return;
+                    sliced = true;
+                    (pos, 0.0)
+                } else {
+                    let Some(v) = self.vehicle_mut(vh) else {
+                        return;
+                    };
+                    let before = v.health.cur;
+                    v.health.cur = (v.health.cur + repair.health[v.health.health_type as usize])
+                        .min(v.health.max);
+                    (v.pos, v.health.cur - before)
                 }
-                let Some(v) = self.vehicle_mut(vh) else {
-                    return;
-                };
-                let before = v.health.cur;
-                v.health.cur =
-                    (v.health.cur + repair.health[v.health.health_type as usize]).min(v.health.max);
-                (v.pos, v.health.cur - before)
             }
             Target::Building(bi) => {
                 let Some(t) = self.building_turrets.get(usize::from(bi)) else {
@@ -220,14 +247,26 @@ impl Sim {
                 let (pos, amount) = (t.sphere().0, repair.health[t.repair_kind() as usize]);
                 (pos, self.repair_building(bi, amount))
             }
+            Target::Turret(id) => {
+                let Some(k) = self.turrets.iter().position(|t| t.id == id) else {
+                    return;
+                };
+                let Some(c) = self.turret_class(&self.turrets[k]) else {
+                    return;
+                };
+                let (gain, max) = (repair.health[c.health_type as usize], c.body.max_health);
+                let t = &mut self.turrets[k];
+                let before = t.health;
+                t.health = (t.health + gain).min(max);
+                (t.centre(), t.health - before)
+            }
             Target::Unit(_)
             | Target::Mine(_)
             | Target::Droid(_)
-            | Target::Turret(_)
             | Target::Guided(_)
             | Target::Shield(_) => return,
         };
-        if amount > 0.0 {
+        if amount > 0.0 || sliced {
             self.events.push(Event::Repair {
                 unit: self.handle(i),
                 weapon_class: class as u32,

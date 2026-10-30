@@ -1185,6 +1185,7 @@ pub(crate) fn heavy_scene(first: WeaponClass, second: WeaponClass) -> (Sim, Unit
     sim.hover_params = vec![Some(skiff())];
     sim.seat_setup = vec![Some(SeatSetup {
         radius: 5.0,
+        body_active: vec![],
         boardable: vec![true; 1],
         exit_drop: 10.0,
         ai_size: 8,
@@ -1578,10 +1579,10 @@ fn a_bot_does_not_stand_for_a_throw_at_a_vehicle_it_cannot_make() {
 /// them, a 3 m step aside every 1.5 s, as a position's lean step would.)
 #[test]
 fn a_bot_stands_for_a_throw_at_soldiers_from_the_tick_it_is_picked() {
-    // 13 m, not 12: since the aim error turns every tick the 12 m
-    // run's picks all come up standing (10-12 m alike); 13-20 m each have one
-    // in a step, the case this test needs.
-    for d in [13.0, 20.0] {
+    // 15 and 20 m: which distances have a pick come up in a step (the case
+    // this test needs) moves with the aim tracker's swing
+    // (`skill::TRACKER_SHARE`); under the plain PS2 skill it is 11-12 m.
+    for d in [15.0, 20.0] {
         let (mut sim, bot) = thrower_scene();
         // On its way to a post, as the bot of the vehicle scene above.
         sim.nav = Some(super::super::tests::l_graph());

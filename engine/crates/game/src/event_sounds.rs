@@ -13,6 +13,31 @@ use crate::walk::WalkSim;
 use core::sim::Event;
 use glam::Vec3;
 
+fn saber_sound(class: &core::hero_weapon::SaberClass, hash: u32) -> Option<&str> {
+    fn find_fields(nodes: &[manifest::combo::ComboField], hash: u32) -> Option<&str> {
+        for field in nodes {
+            if field.keyword == manifest::combo::ComboKeyword::Sound {
+                if let Some(name) = field
+                    .text(0)
+                    .filter(|n| crate::classdb::fnv1a_lowercase(n) == hash)
+                {
+                    return Some(name);
+                }
+            }
+            if let Some(name) = find_fields(&field.children, hash) {
+                return Some(name);
+            }
+        }
+        None
+    }
+    [&class.hit_sound, &class.deflect_sound]
+        .into_iter()
+        .flatten()
+        .find(|n| crate::classdb::fnv1a_lowercase(n) == hash)
+        .map(String::as_str)
+        .or_else(|| find_fields(&class.combo.fields, hash))
+}
+
 /// The local player's ears.
 pub fn listener(walk: &WalkSim) -> Listener {
     let me = &walk.sim.units[walk.player.index as usize];
@@ -61,6 +86,38 @@ pub fn each(walk: &WalkSim, ears: Vec3, mut play: impl FnMut(&str, Vec3)) {
     let mut fired: Vec<(core::unit::UnitHandle, u32)> = Vec::new();
     for e in &walk.sim.events {
         match e {
+            Event::ComboSound {
+                unit,
+                weapon_class,
+                sound_hash,
+            } => {
+                let sound = walk
+                    .sim
+                    .weapon_classes
+                    .get(*weapon_class as usize)
+                    .and_then(|w| w.saber.as_ref())
+                    .and_then(|s| saber_sound(s, *sound_hash));
+                if let (Some(u), Some(sound)) = (
+                    walk.sim
+                        .units
+                        .get(unit.index as usize)
+                        .filter(|u| u.gen == unit.gen),
+                    sound,
+                ) {
+                    play(sound, u.soldier.pos);
+                }
+            }
+            Event::SaberThrowHit { pos, weapon_class } => {
+                if let Some(sound) = walk
+                    .sim
+                    .weapon_classes
+                    .get(*weapon_class as usize)
+                    .and_then(|w| w.saber.as_ref())
+                    .and_then(|s| s.hit_sound.as_deref())
+                {
+                    play(sound, *pos);
+                }
+            }
             Event::Impact {
                 pos, weapon_class, ..
             } => {
@@ -168,6 +225,17 @@ pub fn each(walk: &WalkSim, ears: Vec3, mut play: impl FnMut(&str, Vec3)) {
                 if let Some(e) = e {
                     boom(Some(&e.look), *pos, &mut play);
                 }
+            }
+            Event::WeaponBlast { pos, weapon_class } => {
+                boom(
+                    walk.sim.weapon_classes[*weapon_class as usize]
+                        .ordnance
+                        .explosion
+                        .as_ref()
+                        .map(|e| &e.look),
+                    *pos,
+                    &mut play,
+                );
             }
             Event::StickyBlast { pos, weapon_class } => {
                 let sticky = &walk.sim.weapon_classes[*weapon_class as usize]
@@ -493,8 +561,53 @@ pub struct SoundLog {
     root: std::path::PathBuf,
 }
 
-/// The property names a dev log prints for the hashes the discs hold: the
-/// map's `sounds/names.ron`, the foley table's and the classes' engine records.
+/// The living hero's own low-health voice and the saber weapon's ambient.
+pub(crate) fn saber_visible(u: &core::unit::Unit, classes: &[core::weapon::WeaponClass]) -> bool {
+    let Some(saber) = classes.get(u.weapon_class).and_then(|c| c.saber.as_ref()) else {
+        return false;
+    };
+    let hidden = u.weapon.melee.as_ref().map_or(0, |s| s.hidden_edges);
+    u.alive
+        && u.mount.is_none()
+        && saber.blades.iter().enumerate().any(|(edge, blade)| {
+            core::hero_weapon::blade_visible(hidden, edge) && !blade.texture.is_empty()
+        })
+}
+
+pub fn hero_sample_asks(walk: &WalkSim) -> Vec<(core::unit::UnitHandle, String, Vec3)> {
+    let mut asks = Vec::new();
+    for (i, u) in walk.sim.units.iter().enumerate() {
+        let handle = core::unit::UnitHandle {
+            index: i as u32,
+            gen: u.gen,
+        };
+        if walk.sim.hero_class(u.team) != Some(u.spec.class) {
+            continue;
+        }
+        let class = walk.teams[usize::from(u.team).min(1)].class(u.spec.class);
+        if u.alive && u.health.cur <= u.health.max * class.cries.low_threshold {
+            if let Some(name) = &class.cries.low_health {
+                asks.push((handle, name.clone(), u.soldier.pos));
+            }
+        }
+        if saber_visible(u, &walk.sim.weapon_classes) {
+            if let Some(name) = &class.cries.hero.saber_ambient {
+                asks.push((handle, name.clone(), u.soldier.pos));
+            }
+        }
+        if let Some(name) = &class.cries.hero.saber_flight {
+            if let Some(flight) = std::iter::once(&u.weapon)
+                .chain(u.held.iter().map(|w| &w.state))
+                .find_map(|state| state.saber_flight.as_ref())
+            {
+                asks.push((handle, name.clone(), flight.pos));
+            }
+        }
+    }
+    asks
+}
+
+/// Names for the hashes the discs hold, including every authored combo sound.
 pub fn sound_names(
     map_dir: &std::path::Path,
     walk: &WalkSim,
@@ -503,6 +616,27 @@ pub fn sound_names(
     let text = pak::read_to_string(map_dir.join("sounds").join("names.ron")).unwrap_or_default();
     let mut names = crate::foley::names();
     for weapon in &walk.sim.weapon_classes {
+        if let Some(saber) = &weapon.saber {
+            let mut pending: Vec<_> = saber.combo.fields.iter().collect();
+            while let Some(field) = pending.pop() {
+                if field.keyword == manifest::combo::ComboKeyword::Sound {
+                    if let Some(name) = field.text(0) {
+                        names
+                            .entry(crate::classdb::fnv1a_lowercase(name))
+                            .or_insert_with(|| name.to_owned());
+                    }
+                }
+                pending.extend(&field.children);
+            }
+            for name in [&saber.hit_sound, &saber.deflect_sound]
+                .into_iter()
+                .flatten()
+            {
+                names
+                    .entry(crate::classdb::fnv1a_lowercase(name))
+                    .or_insert_with(|| name.clone());
+            }
+        }
         for name in [
             &weapon.fire_sound,
             &weapon.reload_sound,
@@ -530,6 +664,23 @@ pub fn sound_names(
     // And the jet classes' (card JETP2).
     for t in &walk.teams {
         for c in &t.classes {
+            for n in [
+                &c.cries.low_health,
+                &c.cries.hero.offer,
+                &c.cries.hero.spawned,
+                &c.cries.hero.defeated,
+                &c.cries.hero.saber_ambient,
+                &c.cries.hero.saber_on,
+                &c.cries.hero.saber_off,
+                &c.cries.hero.saber_flight,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                names
+                    .entry(crate::classdb::fnv1a_lowercase(n))
+                    .or_insert_with(|| n.clone());
+            }
             let j = &c.jet_look;
             for n in [&j.engine, &j.turn_on, &j.turning_off, &j.turn_off]
                 .into_iter()
@@ -615,6 +766,19 @@ impl SoundLog {
         // Card PWST: the stations' ambient asks start in the `start` rows.
         if let Some(lib) = lib.as_mut() {
             starts.extend(lib.station_ambient(&station_asks(walk), ears));
+            for (name, pos) in lib.hero_blade_changes(walk) {
+                lib.start(
+                    crate::classdb::fnv1a_lowercase(&name),
+                    pos,
+                    ears,
+                    &mut starts,
+                );
+            }
+            starts.extend(
+                lib.hero_samples(&hero_sample_asks(walk), ears)
+                    .into_iter()
+                    .map(|(_, s)| s),
+            );
         }
         if let Some(lib) = lib.as_mut() {
             lib.tick(core::TICK_DT, ears, &mut starts);

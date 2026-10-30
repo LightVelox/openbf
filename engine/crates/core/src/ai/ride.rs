@@ -880,6 +880,7 @@ mod tests {
         s.hover_params = vec![Some(skiff())];
         s.seat_setup = vec![Some(SeatSetup {
             radius: 5.0,
+            body_active: vec![],
             boardable: vec![true; 2],
             exit_drop: 10.0,
             ai_size: 8,

@@ -532,6 +532,7 @@ mod tests {
             // The round renderer: it reads `Sim::bolts` and returns draws
             // (glyphs, ribbons, a missile's model matrix); no draw is read back.
             "bolt_vis.rs",
+            "fx/force.rs",
             // The soldier animator poses what the sim decided; it holds no
             // `Sim` and nothing reads a pose back (card ANIML).
             "animator.rs",

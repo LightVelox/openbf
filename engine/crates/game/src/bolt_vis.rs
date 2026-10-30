@@ -47,13 +47,16 @@
 //!   but its [`key`] is stable under steering all the same: the trail
 //!   (`crate::fx::trail`) and the hit remnants identify rounds by it.
 
+mod shots;
+
 use crate::bolt_light::OmniLight;
 use crate::walk::WalkSim;
 use core::laser::LaserLook;
 use core::projectile::Hit;
 use glam::Vec3;
 use render::{BoltDraw, Renderer, TextureHandle};
-use std::collections::HashMap;
+use shots::Shots;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 /// Updates a hit bolt stays drawn at its impact point (re-bolt §4).
@@ -69,8 +72,15 @@ pub const GLOW_TEXTURE: &str = "lightglow";
 pub const MUZZLE_FORWARD: f32 = 1.2;
 pub const MUZZLE_RIGHT: f32 = 0.3;
 
-/// A bolt is known across frames by what never changes in flight.
-pub(crate) type Key = (u32, u32, usize, [u32; 3], [u32; 3]);
+/// Flight signature and stable producer identity, shared with trail emitters.
+pub(crate) type Key = (
+    u32,
+    u32,
+    usize,
+    [u32; 3],
+    [u32; 3],
+    Option<core::projectile::VisualShot>,
+);
 
 /// The round's identity across frames (see [`Key`]). A straight bolt keeps
 /// its end point and its velocity for its whole flight; a missile steers, so
@@ -92,7 +102,14 @@ pub(crate) fn key(b: &core::projectile::Bolt) -> Key {
         ),
         None => (bits(b.end), bits(b.vel)),
     };
-    (b.owner.index, b.owner.gen, b.weapon_class, end, vel)
+    (
+        b.owner.index,
+        b.owner.gen,
+        b.weapon_class,
+        end,
+        vel,
+        b.visual_shot,
+    )
 }
 
 /// Whether the round draws as its `ordnance.geometry` model instead of a
@@ -230,9 +247,20 @@ impl Struck {
         )
     }
 
-    /// The nearest of class `class`'s impacts on the flight from `from`
-    /// along `dir` within `step` metres (this tick's move).
+    /// Match direction and ray before distance within this tick's step.
+    /// The nearest impact wins only among otherwise identical flight rays.
     fn take_on(&mut self, from: Vec3, dir: Vec3, step: f32, class: usize) -> Option<(Vec3, bool)> {
+        self.take_to(from, dir, step, class, None)
+    }
+
+    fn take_to(
+        &mut self,
+        from: Vec3,
+        dir: Vec3,
+        step: f32,
+        class: usize,
+        end: Option<Vec3>,
+    ) -> Option<(Vec3, bool)> {
         let k = self
             .0
             .iter()
@@ -240,13 +268,31 @@ impl Struck {
             .filter(|(_, &(p, d, c, _))| {
                 let t = (p - from).dot(dir);
                 c == class
-                    && d.abs_diff_eq(dir, 1e-4)
-                    && (-1e-3..=step + 1e-3).contains(&t)
-                    && (p - (from + dir * t)).length_squared() < 1e-3
+                    && match end {
+                        // Native provenance already owns this endpoint. Gravity
+                        // or charged speed can change the first-step flight ray.
+                        Some(end) => p.abs_diff_eq(end, 1e-3),
+                        None => {
+                            d.abs_diff_eq(dir, 1e-4)
+                                && (-1e-3..=step + 1e-3).contains(&t)
+                                && (p - (from + dir * t)).length_squared() < 1e-3
+                        }
+                    }
             })
             .min_by(|a, b| {
-                let t = |p: Vec3| (p - from).dot(dir);
-                t(a.1 .0).total_cmp(&t(b.1 .0))
+                let error = |&(p, d, _, _): &(Vec3, Vec3, usize, bool)| {
+                    let t = (p - from).dot(dir);
+                    (
+                        d.distance_squared(dir),
+                        (p - (from + dir * t)).length_squared(),
+                        t,
+                    )
+                };
+                let (ad, ar, at) = error(a.1);
+                let (bd, br, bt) = error(b.1);
+                ad.total_cmp(&bd)
+                    .then(ar.total_cmp(&br))
+                    .then(at.total_cmp(&bt))
             })
             .map(|(k, _)| k)?;
         let (p, _, _, terrain) = self.0.remove(k);
@@ -411,10 +457,21 @@ impl BoltVis {
     pub fn track(&mut self, walk: &WalkSim) {
         let sim = &walk.sim;
         let look = |c: usize| visual_look(walk, c);
-        let old: HashMap<Key, Tracked> = self.tracked.drain(..).map(|t| (t.key, t)).collect();
-        let mut seen = std::collections::HashSet::new();
+        let mut old: HashMap<_, VecDeque<Tracked>> = HashMap::new();
+        for t in self.tracked.drain(..) {
+            let velocity = Vec3::from_array(t.key.4.map(f32::from_bits));
+            let pos = t.pos + velocity * core::TICK_DT;
+            old.entry((
+                t.key,
+                (t.age + core::TICK_DT).to_bits(),
+                pos.to_array().map(f32::to_bits),
+            ))
+            .or_default()
+            .push_back(t);
+        }
         let mut struck = Struck::of(sim);
-        for b in &sim.bolts {
+        let shots = Shots::of(walk);
+        for (bolt_index, b) in sim.bolts.iter().enumerate() {
             // A missile with a model is `SoldierVisuals`' (card UORD), and a
             // look-less round has no ribbon: neither is this module's.
             if look(b.weapon_class).is_none()
@@ -426,8 +483,10 @@ impl BoltVis {
             }
             let k = key(b);
             let spawn = b.pos - b.vel * b.age;
-            let old_t = old.get(&k);
-            let start = match old_t {
+            let old_t = old
+                .get_mut(&(k, b.age.to_bits(), b.pos.to_array().map(f32::to_bits)))
+                .and_then(VecDeque::pop_front);
+            let start = match old_t.as_ref() {
                 Some(t) => t.start,
                 None => {
                     let dir = b.vel.normalize_or_zero();
@@ -435,27 +494,9 @@ impl BoltVis {
                         drawn_from_the_gun(u)
                             || (u.mount.is_some() && self.fire_point(b.owner.index).is_some())
                     }) && !sim.is_item_gun(b.weapon_class);
-                    let point = sim
-                        .events
-                        .iter()
-                        .enumerate()
-                        .find_map(|(i, e)| match e {
-                            core::sim::Event::Shot {
-                                unit,
-                                weapon_class,
-                                dir: d,
-                                ..
-                            } if *unit == b.owner
-                                && *weapon_class as usize == b.weapon_class
-                                && d.dot(dir) > 0.9999 =>
-                            {
-                                let shot =
-                                    crate::walker_shots::ordinal(walk, *unit, b.weapon_class, i);
-                                crate::walker_shots::frame(walk, *unit, b.weapon_class, shot)
-                                    .map(|m| m.w_axis.truncate())
-                            }
-                            _ => None,
-                        })
+                    let point = shots
+                        .for_bolt(bolt_index)
+                        .and_then(|s| s.muzzle(walk))
                         .or(self.fire_point(b.owner.index));
                     drawn_start(spawn, dir, b.end, foot, point)
                 }
@@ -470,14 +511,13 @@ impl BoltVis {
             let dir = (b.end - start)
                 .try_normalize()
                 .unwrap_or(b.vel.normalize_or_zero());
-            seen.insert(k);
             self.tracked.push(Tracked {
                 key: k,
                 class: b.weapon_class,
                 start,
                 end: b.end,
                 head,
-                prev_head: old_t.map_or(start, |t| t.head),
+                prev_head: old_t.as_ref().map_or(start, |t| t.head),
                 dir,
                 age: b.age,
                 struck: !matches!(b.hit, Hit::None),
@@ -492,10 +532,9 @@ impl BoltVis {
         // a hull or a mine is met by the tick's sweep (`Sim::sweep_bolts`,
         // issue #41), which moves the end and lands it the same tick - its
         // `Impact` on the bolt's line within its last step says where.
-        let mut gone: Vec<(Key, Tracked)> =
-            old.into_iter().filter(|(k, _)| !seen.contains(k)).collect();
-        gone.sort_by_key(|(k, _)| *k);
-        for (_, t) in gone {
+        let mut gone: Vec<Tracked> = old.into_values().flatten().collect();
+        gone.sort_by_key(|t| (t.key, t.age.to_bits(), t.pos.to_array().map(f32::to_bits)));
+        for t in gone {
             // The nearest impact on its last step: a soldier the sweep met
             // short of a foreseen wall is the one it struck.
             let hit = struck
@@ -516,8 +555,8 @@ impl BoltVis {
                 prev: t.head,
             });
         }
-        self.same_tick_hits(walk, &mut struck);
-        self.walker_tracers(walk);
+        self.same_tick_hits(walk, &shots, &mut struck);
+        self.walker_tracers(walk, &shots, &mut struck);
     }
 
     /// The tick's bolts that the sim spawned and resolved inside the one
@@ -527,58 +566,39 @@ impl BoltVis {
     /// its impact like any other (re-bolt §4) and, on BF2, lights the ground
     /// there (§5.2): each `Shot` of the tick with a struck `Impact` on its
     /// ray within one step becomes a remnant.
-    fn walker_tracers(&mut self, walk: &WalkSim) {
-        for (i, e) in walk.sim.events.iter().enumerate() {
-            let core::sim::Event::Shot {
-                unit,
-                weapon_class,
-                origin,
-                dir,
-                ..
-            } = e
-            else {
-                continue;
-            };
-            let class = *weapon_class as usize;
+    fn walker_tracers(&mut self, walk: &WalkSim, shots: &Shots, struck: &mut Struck) {
+        for shot in &shots.events {
+            let class = shot.class;
             let Some(style) =
                 crate::walker_shots::style(walk, class).filter(|s| s.tracer.is_some())
             else {
                 continue;
             };
-            let shot = crate::walker_shots::ordinal(walk, *unit, class, i);
-            if !crate::walker_shots::visible(walk, class, shot) {
+            let ordinal = crate::walker_shots::ordinal(walk, shot.unit, class, shot.event);
+            if !crate::walker_shots::visible(walk, class, ordinal) {
                 continue;
             }
-            let start = crate::walker_shots::frame(walk, *unit, class, shot)
-                .map_or(*origin, |m| m.w_axis.truncate());
-            let end = walk
-                .sim
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    core::sim::Event::Impact {
-                        pos, weapon_class, ..
-                    } if *weapon_class as usize == class
-                        && (*pos - *origin).normalize_or_zero().dot(*dir) > 0.999 =>
-                    {
-                        Some(*pos)
-                    }
-                    _ => None,
-                })
-                .min_by(|a, b| {
-                    a.distance_squared(*origin)
-                        .total_cmp(&b.distance_squared(*origin))
-                })
-                .or_else(|| {
-                    walk.sim
-                        .bolts
-                        .iter()
-                        .find(|b| b.owner == *unit && b.weapon_class == class)
-                        .map(|b| b.end)
-                })
-                .unwrap_or(*origin + *dir * style.tracer.as_ref().unwrap().length);
+            let start = shot.muzzle(walk).unwrap_or(shot.origin);
+            let impact = if shot.bolt.is_none() {
+                let step = walk.sim.weapon_classes[class].ordnance.velocity * core::TICK_DT;
+                struck.take_to(
+                    shot.origin,
+                    shot.dir,
+                    step,
+                    class,
+                    shot.flight.map(|f| f.end),
+                )
+            } else {
+                None
+            };
+            let end = shot
+                .flight
+                .map(|f| f.end)
+                .or_else(|| shot.bolt.map(|i| walk.sim.bolts[i].end))
+                .or_else(|| impact.map(|h| h.0))
+                .unwrap_or(shot.origin + shot.dir * style.tracer.as_ref().unwrap().length);
             let delta = end - start;
-            let direction = delta.try_normalize().unwrap_or(*dir);
+            let direction = delta.try_normalize().unwrap_or(shot.dir);
             let len = delta.length().min(style.tracer.as_ref().unwrap().length);
             self.remnants.push(Remnant {
                 class,
@@ -594,22 +614,16 @@ impl BoltVis {
         }
     }
 
-    fn same_tick_hits(&mut self, walk: &WalkSim, struck: &mut Struck) {
-        use core::sim::Event;
+    fn same_tick_hits(&mut self, walk: &WalkSim, shots: &Shots, struck: &mut Struck) {
         let sim = &walk.sim;
-        for e in &sim.events {
-            let Event::Shot {
-                unit,
-                origin,
-                dir,
-                weapon_class: shot_class,
-                ..
-            } = e
-            else {
+        for shot in &shots.events {
+            if shot.bolt.is_some() {
+                continue;
+            }
+            let Some(u) = sim.unit(shot.unit) else {
                 continue;
             };
-            let Some(u) = sim.unit(*unit) else { continue };
-            let class = *shot_class as usize;
+            let class = shot.class;
             let Some(w) = sim.weapon_classes.get(class) else {
                 continue;
             };
@@ -620,27 +634,30 @@ impl BoltVis {
                 continue;
             }
             let step = w.ordnance.velocity * core::TICK_DT;
-            // The class and the line both: another hit this tick may be
-            // another bolt's. A mounted Shot names the seat gun, not the
-            // rider's foot weapon.
-            let Some((p, terrain)) = struck.take_on(*origin, *dir, step, class) else {
+            let Some((p, terrain)) = struck.take_to(
+                shot.origin,
+                shot.dir,
+                step,
+                class,
+                shot.flight.map(|f| f.end),
+            ) else {
                 continue;
             };
             let start = drawn_start(
-                *origin,
-                *dir,
+                shot.origin,
+                shot.dir,
                 p,
                 (drawn_from_the_gun(u)
-                    || (u.mount.is_some() && self.fire_point(unit.index).is_some()))
+                    || (u.mount.is_some() && self.fire_point(shot.unit.index).is_some()))
                     && !sim.is_item_gun(class),
-                self.fire_point(unit.index),
+                shot.muzzle(walk).or(self.fire_point(shot.unit.index)),
             );
             self.remnants.push(Remnant {
                 class,
                 head: p,
-                dir: *dir,
+                dir: (p - start).try_normalize().unwrap_or(shot.dir),
                 len: (p - start).length(),
-                age: (p - *origin).length() / w.ordnance.velocity,
+                age: (p - shot.origin).length() / w.ordnance.velocity,
                 fade: 1.0,
                 timer: 0.0,
                 terrain,
@@ -895,6 +912,7 @@ mod tests {
         };
         walk.sim.seat_setup = vec![Some(SeatSetup {
             radius: 5.0,
+            body_active: vec![],
             boardable: vec![true],
             exit_drop: 0.0,
             ai_size: 1,
@@ -1677,6 +1695,7 @@ mod tests {
         });
         let mut lcg = core::lcg::GameLcg::new(seed);
         let mut b = core::projectile::Bolt {
+            visual_shot: None,
             pos: Vec3::new(1.0, 1.6, -2.0),
             vel: Vec3::NEG_Z * 40.0,
             remaining: 4.0,

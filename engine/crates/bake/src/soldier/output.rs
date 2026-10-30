@@ -62,7 +62,7 @@ pub fn bake_soldier_anims(
     let pc = pc_lvl.map(crate::tier::PcTextures::load).transpose()?;
     let buf = std::fs::read(lvl_path).with_context(|| lvl_path.to_string())?;
     let inner = mungefs::open(&buf).map_err(|e| anyhow!("{e}"))?;
-    let (m, skel) = find_soldier(inner, model)?;
+    let (m, mut skel) = find_soldier(inner, model)?;
     let mut sm = to_skinned_model(&m, &skel)?;
     // BF2's cloth, rest shape pinned to its bones (card CLOTH; the step is
     // CLOTH2). A sheet only a cloth draws is opaque unless the class says
@@ -104,6 +104,9 @@ pub fn bake_soldier_anims(
         };
         let mut banks = mungefs::anim::find_banks(ainner).map_err(|e| anyhow!("{e}"))?;
         let anim_banks = banks.len();
+        // The requested side can also be JED or a native side, outside the
+        // four faction LVLs loaded below.
+        banks.extend(mungefs::anim::find_banks(inner).map_err(|e| anyhow!("{e}"))?);
         for side in &sides {
             let inner = mungefs::open(side).map_err(|e| anyhow!("{e}"))?;
             banks.extend(mungefs::anim::find_banks(inner).map_err(|e| anyhow!("{e}"))?);
@@ -122,6 +125,11 @@ pub fn bake_soldier_anims(
             );
         }
         let pose = pose_rig(&classes, &m.name, &rigs, sanm.is_some());
+        if let Some(pose) = &pose {
+            if super::append_rig_attachment(&mut skel, &pose.rig, "hp_weapons")? {
+                sm.bones = super::bones_of(&skel);
+            }
+        }
         let bones: Vec<String> = skel.bones.iter().map(|b| b.name.clone()).collect();
         let plan = match &sanm {
             None => anim_sets::plan_bf1(&anim_sets::bf1::inventory(&banks), &bones),
@@ -174,6 +182,69 @@ pub fn bake_soldier_anims(
             let (b, k) = found.ok_or_else(|| anyhow!("{}: not in bank {bank}", c.name))?;
             wanted.push((c.name.clone(), b, k));
         }
+        if sanm.is_some() {
+            // Force choke uses a custom animation outside the ordinary set
+            // slots: B2 FUN_00239850 defaults to CRC 144ebf32 (human_choking).
+            // Include a model family's authored equivalent when it exists.
+            let all: Vec<&AnimBank> = banks.iter().collect();
+            let families: std::collections::BTreeSet<_> = plan
+                .sets
+                .bf2
+                .iter()
+                .map(|f| f.family.as_str())
+                .chain(["human"])
+                .collect();
+            for family in families {
+                if let Some((name, bank, k)) = find_clip(&all, &format!("{family}_choking")) {
+                    if !wanted.iter().any(|w| w.0 == name) {
+                        wanted.push((name, bank, k));
+                    }
+                }
+            }
+            let bindings = crate::combo::model_bindings(&classes, &m.name);
+            if !bindings.is_empty() {
+                let own = crate::combo::baked_combos_from_lvl(&buf)?;
+                let inv = anim_sets::Inventory::new(&banks);
+                let mut model_combos = manifest::combo::ComboSet {
+                    scope_provenance: own.scope_provenance,
+                    ..manifest::combo::ComboSet::default()
+                };
+                for binding in bindings {
+                    let combo = own
+                        .combos
+                        .iter()
+                        .find(|c| c.name_hash == binding.name_hash)
+                        .with_context(|| {
+                            format!("{}: missing combo 0x{:08x}", m.name, binding.name_hash)
+                        })?;
+                    let (extra, missing) =
+                        crate::combo::resolve_animation_clips(&inv, &binding, combo);
+                    meta.missing.extend(
+                        missing
+                            .into_iter()
+                            .map(|s| format!("combo:{}:{s}", binding.family)),
+                    );
+                    for clip in extra {
+                        if wanted.iter().any(|w| w.0 == clip.name) {
+                            continue;
+                        }
+                        let (bank, index) = banks
+                            .iter()
+                            .filter(|b| b.name == clip.bank)
+                            .find_map(|b| Some((b, b.clip_index(&clip.name)?)))
+                            .with_context(|| format!("{}: not in bank {}", clip.name, clip.bank))?;
+                        wanted.push((clip.name, bank, index));
+                    }
+                    if !model_combos.combos.contains(combo) {
+                        model_combos.combos.push(combo.clone());
+                    }
+                }
+                crate::write_ron(
+                    &out.join("soldiers").join(format!("{}.combos.ron", m.name)),
+                    &model_combos,
+                )?;
+            }
+        }
         let mut sets = plan.sets;
         // BF2 has no prone clips (`missing`); BF1's rifle prone clips are
         // borrowed when `BF1_ANIMS` names BF1's COMMON.LVL (issue #40, one
@@ -210,8 +281,20 @@ pub fn bake_soldier_anims(
                 wanted.push((full, bank, k));
             }
         }
+        let mut motions = manifest::anim_sets::ClipMotions::new();
         for (name, bank, k) in wanted {
             let mut decoded = bank.decode_clip(k).map_err(|e| anyhow!("{name}: {e}"))?;
+            let root = decoded
+                .tracks
+                .iter()
+                .find(|t| t.bone_crc == crc32_lower("DummyRoot"));
+            motions.insert(
+                name.clone(),
+                root.map_or_else(
+                    || vec![[0.0; 3]; usize::from(decoded.frames)],
+                    |t| t.translations.clone(),
+                ),
+            );
             if borrowed.contains(&name) {
                 // The lender's bone lengths are not this model's: a bone the clip
                 // does not move keeps the model's own rest offset - but the
@@ -252,6 +335,7 @@ pub fn bake_soldier_anims(
             &meta,
         )?;
         crate::write_ron(&manifest::anim_sets::path(out, &m.name), &sets)?;
+        crate::write_ron(&manifest::anim_sets::motion_path(out, &m.name), &motions)?;
     }
     let glb = skinned_to_glb(&sm, &clips)?;
     std::fs::write(out.join("soldiers").join(format!("{}.glb", m.name)), glb)?;
@@ -532,7 +616,7 @@ pub fn weapon_nodes(chunks: &[mungefs::Chunk<'_>], model: &str) -> manifest::Wea
                 .map(|b| manifest::ManifestHardpoint {
                     name: b.name.clone(),
                     pos: b.t,
-                    axes: None,
+                    axes: Some(b.rows),
                 })
                 .collect()
         })

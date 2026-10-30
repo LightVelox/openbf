@@ -44,11 +44,29 @@ pub struct TeamDef {
     pub classes: Vec<(String, u32, Option<u32>)>,
 }
 
+/// One BF2 SIDE resource request, with its source file and native load order.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct SideClassLoad {
+    /// Original-case SIDE filename stem, excluding `.lvl`.
+    pub side: String,
+    /// Original request spelling; it may name a resource alias, not a class.
+    pub request: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct MissionDef {
     pub map: String,
     pub mode: String,
     pub source_game: String,
+    /// `SetHeroClass(team, class)` from the BF2 PS2 mission (Lua team numbers).
+    #[serde(default)]
+    pub heroes: Vec<(u8, String)>,
+    /// Every BF2 `ReadDataFile("SIDE\\...", ...)` resource request with its
+    /// source side file, in call/argument order, including repeats and aliases.
+    /// Native shared animation definitions use the first loaded definition;
+    /// this is independent of team/roster order. Older missions default empty.
+    #[serde(default)]
+    pub class_load_order: Vec<SideClassLoad>,
     pub teams: Vec<TeamDef>,
     /// Alive-AI cap per team. BF2 conquest: the NumBots default, 16. BF1:
     /// there is no cap below the member pool, so this is the larger of the
@@ -457,6 +475,95 @@ mod tests {
             eprintln!("SKIP: no engine/missions/*.ron (scripts/pack.py generates them)");
         }
         none
+    }
+
+    #[test]
+    fn class_load_order_preserves_names_repeats_and_legacy_default() {
+        let legacy = r#"(map: "x", mode: "con", source_game: "bf2", teams: [
+            (faction: "rep", units: 20, tickets: 150),
+            (faction: "cis", units: 20, tickets: 150)],
+            ai_alive_cap: 16, spawn_delay: 10.0, spawn_interval: 0.25)"#;
+        let old: MissionDef = ron::from_str(legacy).unwrap();
+        assert!(old.class_load_order.is_empty());
+        let ordered = legacy.replacen(
+            "teams:",
+            r#"class_load_order: [(side: "REP", request: "rep_HERO_aalya"),
+                (side: "ewk", request: "bank_alias"),
+                (side: "REP", request: "rep_HERO_aalya")], teams:"#,
+            1,
+        );
+        let loaded: MissionDef = ron::from_str(&ordered).unwrap();
+        assert_eq!(
+            loaded
+                .class_load_order
+                .iter()
+                .map(|load| (load.side.as_str(), load.request.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("REP", "rep_HERO_aalya"),
+                ("ewk", "bank_alias"),
+                ("REP", "rep_HERO_aalya")
+            ]
+        );
+        assert!(
+            loaded.heroes.is_empty(),
+            "loading a class does not field a hero"
+        );
+    }
+
+    #[test]
+    fn every_bf2_mission_keeps_all_loaded_classes_before_roster_filtering() {
+        if no_missions() {
+            return;
+        }
+        let mut missions = Vec::new();
+        for path in std::fs::read_dir(missions_dir()).unwrap() {
+            let path = path.unwrap().path();
+            if path.extension().is_none_or(|x| x != "ron") {
+                continue;
+            }
+            let m = MissionDef::load(&path).unwrap();
+            if m.source_game == "bf2" {
+                missions.push((path, m));
+            }
+        }
+        assert_eq!(missions.len(), 33);
+        if missions.iter().all(|(_, m)| m.class_load_order.is_empty()) {
+            eprintln!(
+                "SKIP: all BF2 missions predate SIDE load-order metadata; regenerate missions"
+            );
+            return;
+        }
+        let mut heroes = 0;
+        for (path, m) in &missions {
+            assert!(
+                m.class_load_order.len() > m.heroes.len(),
+                "{}: incomplete SIDE load-order metadata",
+                path.display()
+            );
+            for (_, hero) in &m.heroes {
+                heroes += 1;
+                assert!(
+                    m.class_load_order
+                        .iter()
+                        .any(|load| load.request.eq_ignore_ascii_case(hero)),
+                    "{}: missing loaded hero {hero}",
+                    path.display()
+                );
+            }
+        }
+        assert_eq!(heroes, 66);
+        let cw = MissionDef::load(&missions_dir().join("tat2_con_cw.ron")).unwrap();
+        let at = |name: &str| {
+            cw.class_load_order
+                .iter()
+                .position(|load| load.request == name)
+                .unwrap()
+        };
+        assert!(at("rep_inf_ep3_rocketeer") < at("rep_inf_ep3_rifleman"));
+        assert!(at("rep_hero_obiwan") < at("cis_hero_darthmaul"));
+        assert_eq!(cw.class_load_order[at("rep_hero_obiwan")].side, "rep");
+        assert_eq!(cw.class_load_order[at("cis_hero_darthmaul")].side, "cis");
     }
 
     fn cp(name: &str) -> core::cp::CpDef {

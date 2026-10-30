@@ -695,6 +695,7 @@ pub fn install(
             Some(setup)
         })
         .collect();
+    crate::hero_riders::install(sim, m, map_dir, &b);
     for (class, setup) in sim
         .seat_setup
         .iter()
@@ -1159,6 +1160,14 @@ pub fn seat_setup(
         boardable: ring
             .iter()
             .map(|s| matches!(s.pilot_type, PilotType::Vehicle | PilotType::VehicleSelf))
+            .collect(),
+        body_active: ring
+            .iter()
+            .map(|s| {
+                s.pilot_exposed
+                    && s.gunner_draw(game.eq_ignore_ascii_case("bf2"))
+                        == vehicle_class::GunnerDraw::Drawn
+            })
             .collect(),
         exit_drop: if game.eq_ignore_ascii_case("bf2") {
             15.0

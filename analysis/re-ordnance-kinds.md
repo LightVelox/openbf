@@ -366,6 +366,68 @@ B2:305952-307007) runs one query per weapon shot and returns 0 (B1:199272).
   (B1:199011-199012), from the muzzle to the aim ray's end within ConeLength (mask 0x4c); BF2 draws NumBolts
   (0x63384b21, ctor 1) less the hits. BF2's bolt spread (0xdd09f94e, hero classes only, global RNG) is not modelled.
 
+### 8.1 BF2 hero emitter clarification
+
+Fresh B2 source/instruction reads for the hero consumer distinguish several fields
+which must not be merged. FUN003153a8 defaults range10, first-radius1.5,
+max-jump10, max-targets5 and zero deduction/threshold/hit-all. Cone membership is
+strict distance>0 and<range, strict dot>cos; inside2.5m the cosine is
+min(authored,0.1). The heap key is actual 3D distance: MIPS31647c supplies
+squared distance in f12 and316508 calls sqrt0052bc10. The later chain-distance
+difference therefore cannot use squared distances.
+
+Ordinary damage effects use class+130(hash6824f471) and+160(1076dfd6),
+not the separate timed debuff damage fields+120/+124. FUN00236e28,
+150887–150940, keeps max(timer), always replaces rate/attribution and releases
+previous visual instances. FUN00236f50,150949–151046, decrements the timer
+before testing it, damages only while remaining>0 and alive, and uses eight
+1.0 type scales plus1.0 shield scale. Lightning authors3s with0DPS to carry
+its electrical damage particles; hero flame authors5s with50DPS. The ordinary
+burn has no separate hero exclusion. The timed debuff path's hero exclusion
+must not be imported into this one.
+
+Damage-effect bone names(hash6cf895fb) and effect names(592fb160) append to
+independent five-slot arrays atclass+138/+14c. They are paired by slot,
+not by adjacency in file order. Native positive push's apparent two-float
+call loses an implicit third argument:316bb8..316c00 preserves Push in f14
+while f12=.5L and f13=2L. Negative pull uses a virtual origin1.1L from the
+muzzle toward the target. Native weapon-deflect precedes damage/burn/push;
+blocked targets still consume a chain hit/deduction.
+
+### 8.2 BF2 emitter lightning and its authored effect
+
+`com_sfx_lightning` is a top-level `LightningBolt`, not a ParticleEmitter.
+INGAME's record authors Texture=com_sfx_lightning, Width.5, FadeTime.6,
+BreakDistance1, TextureSize3.5, SpreadFactor.8, InterpolationSpeed5,
+MaxBranches3, NumChildren3, BranchFactor.15, ChildWidth.4,
+ChildTextureSize2, ChildSpreadFactor1, Color[130,170,255,250] and
+ChildColor[140,180,255,100]. The bake preserves missing fields rather than
+substituting particle defaults, and includes its texture dependency.
+
+FUN00458a50,518590–518658, defaults missing BranchSpreadFactor.8,
+BranchLength4, ChildBreakDistance1.5, ChildTextureSize3, ChildWidth.3,
+ChildSpreadFactor1, TextureSize5, BreakDistance2, Width2, FadeTime1,
+SpreadFactor1, InterpolationSpeed10, BranchFactor.3, MaxBranches5 and
+NumChildren3; MaxBranches is capped10 after parsing. Both colors defaultwhite.
+
+Emitter class+c4/hash38ffe98e multiplies shot charge to **bolt strength**
+(FUN0045a5b0 sets livebolt+104). It does not set lifetime. Lifetime starts
+from FadeTime (00459270);004594f0 decrements it and advances a pair of jitter
+seeds when phase>1. FUN00459898 applies width multiplier.7*strength+.3 and
+alpha multiplier min(1,2*remaining/FadeTime)*(.5*strength+.5), then renders
+max(1,int(NumChildren*strength)) child bolts when NumChildren>0.
+
+FUN00459c50 uses max(3,int(length/BreakDistance)) segments and skips counts
+above100. Each interior point gets a seeded 3D offset projected perpendicular
+to the bolt, interpolating two offset streams by phase. Width tapers by
+initialWidth/(segmentCount+1) per interior point. Both endpoints have alpha0;
+interior points retain the computed alpha. A sampled branch can extend along
+normalize(jitter+axis*BranchSpreadFactor), up to MaxBranches, with length
+BranchLength; a child branch has no further branch children. Texture coordinate
+increments are segmentLength/TextureSize. The port uses the ordinary shared
+particle renderer for its view-facing strips; exact GS vertex joins and the
+session RNG sequence require separate presentation evidence.
+
 ## 9. The disc: fielded primaries that are not bolts
 
 BF1 (UAUD1, `analysis/unit-audit-bf1.md` §3.1): missile = the torpedo launchers (ALL vanguard x3, IMP shock trooper

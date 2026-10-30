@@ -12,6 +12,15 @@ pub fn path(side_dir: &std::path::Path, model: &str) -> std::path::PathBuf {
     side_dir.join("soldiers").join(format!("{model}.sets.ron"))
 }
 
+/// Original DummyRoot translations, before the GLB bake removes model travel.
+pub type ClipMotions = BTreeMap<String, Vec<[f32; 3]>>;
+
+pub fn motion_path(side_dir: &std::path::Path, model: &str) -> std::path::PathBuf {
+    side_dir
+        .join("soldiers")
+        .join(format!("{model}.motion.ron"))
+}
+
 /// One clip a set names.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SetClip {

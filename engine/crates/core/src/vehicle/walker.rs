@@ -34,7 +34,8 @@
 //! seen); death (a destroyed vehicle leaves no wreck, re-vehicles §6); the
 //! water damage (§3 I3); the stomp (C4) and vehicle contacts (C6); the AI's
 //! boost mode (its steering is `ai::walker_drive`, card WAI). The leftup/rightup leg blend (§6 P+0x120) is kept for the
-//! drawn pose (card WSKN, `game::viewer::walker_pose`), outside the hash.
+//! drawn pose (card WSKN, `game::viewer::walker_pose`). Sim also hashes it
+//! when BF2 hero queries use animated rider frames.
 //!
 //! PROVISIONAL (re-walker §14.5 and ours): where the contact pass sits in
 //! the frame (last, as the hover's); C7's horizontal push-out distance; the
@@ -336,7 +337,8 @@ pub struct WalkerState {
     /// E+0x2270 bit 32: the boost latch.
     pub boosting: bool,
     /// Each leg pair's P+0x120 (§6): its `_leftup` (< 0) / `_rightup` (> 0)
-    /// layer weight. Drawn only (card WSKN): not in [`WalkerState::hash_into`].
+    /// layer weight. Sim adds these bytes when hero rider collision frames
+    /// are installed; ordinary walker hashes retain their existing layout.
     pub layer_blend: [f32; MAX_PAIRS],
 }
 
@@ -914,7 +916,7 @@ pub fn legs(v: &mut Vehicle, p: &WalkerParams, world: &impl WalkerWorld, dt: f32
         .map(|pair| pair_support(v, p, pair, world))
         .collect();
     // FUN_002a2028: each pair's layer blend follows its feet's height
-    // difference (the drawn walker's; nothing below reads it).
+    // difference. Drawing and exposed-rider hero queries read the result.
     for (b, &(_, d)) in v.walker.layer_blend.iter_mut().zip(&pairs) {
         *b += ((-LAYER_GAIN * d).clamp(-1.0, 1.0) - *b) * LAYER_RATE;
     }

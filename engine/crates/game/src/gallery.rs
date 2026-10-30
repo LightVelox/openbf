@@ -789,6 +789,38 @@ pub fn walkabout(map_dir: &Path, assets_dir: &Path, scale: u32) -> Result<Walkab
 /// set `set` picks (the plain rifle clips when the unit's sets are not
 /// baked).
 pub fn unit_sheet(glb: &Path, weapon: Option<&Path>, set: &UnitSet) -> Result<(Vec<u8>, u32, u32)> {
+    unit_sheet_heading(glb, weapon, set, std::f32::consts::PI * 0.75)
+}
+
+/// Asset inspection with a chosen model heading, radians. The default gallery
+/// keeps its original view; hero sheets also inspect faces from the front.
+pub fn unit_sheet_heading(
+    glb: &Path,
+    weapon: Option<&Path>,
+    set: &UnitSet,
+    heading: f32,
+) -> Result<(Vec<u8>, u32, u32)> {
+    unit_sheet_inner(glb, weapon, set, heading, false)
+}
+
+/// Hero asset inspection with four seconds of cloth settling at each held
+/// pose. This diagnostic does not alter the ordinary golden gallery.
+pub fn unit_sheet_clothed(
+    glb: &Path,
+    weapon: Option<&Path>,
+    set: &UnitSet,
+    heading: f32,
+) -> Result<(Vec<u8>, u32, u32)> {
+    unit_sheet_inner(glb, weapon, set, heading, true)
+}
+
+fn unit_sheet_inner(
+    glb: &Path,
+    weapon: Option<&Path>,
+    set: &UnitSet,
+    heading: f32,
+    cloth: bool,
+) -> Result<(Vec<u8>, u32, u32)> {
     let asset = load_skinned_glb(glb).with_context(|| glb.display().to_string())?;
     let rig = glb
         .parent()
@@ -854,6 +886,15 @@ pub fn unit_sheet(glb: &Path, weapon: Option<&Path>, set: &UnitSet) -> Result<(V
         None => Vec::new(),
     };
     let hp = asset.skeleton.index_of("hp_weapons");
+    let cloths: Vec<crate::cloth::Definition> = if cloth {
+        let path = manifest::cloth::path(side_dir.context("side directory")?, &asset.name);
+        let raw: Vec<manifest::cloth::Cloth> = ron::from_str(&pak::read_to_string(path)?)?;
+        raw.into_iter()
+            .map(|c| crate::cloth::Definition::new(c, &asset.skeleton))
+            .collect::<Result<_>>()?
+    } else {
+        Vec::new()
+    };
 
     let cam = Camera {
         position: Vec3::new(0.0, 1.0, 0.0),
@@ -869,9 +910,42 @@ pub fn unit_sheet(glb: &Path, weapon: Option<&Path>, set: &UnitSet) -> Result<(V
             (None, None) => crate::skin::Pose::bind(&asset.skeleton),
         };
         let palette = asset.skeleton.palette(&pose.locals());
-        let model = Mat4::from_translation(Vec3::new(0.0, 0.0, -2.6))
-            * Mat4::from_rotation_y(std::f32::consts::PI * 0.75);
+        let model =
+            Mat4::from_translation(Vec3::new(0.0, 0.0, -2.6)) * Mat4::from_rotation_y(heading);
         let mut statics = Vec::new();
+        let globals: Vec<_> = palette
+            .iter()
+            .zip(&asset.skeleton.global_bind)
+            .map(|(p, b)| *p * *b)
+            .collect();
+        for (k, def) in cloths.iter().enumerate() {
+            let mut state = crate::cloth::State::new(def, model, &globals, k as u32);
+            for _ in 0..120 {
+                state.step(def, model, &globals, 1.0 / 30.0);
+            }
+            let vertices = state.vertices(def, &globals);
+            let positions: Vec<_> = vertices.iter().map(|v| v.position).collect();
+            let normals: Vec<_> = vertices.iter().map(|v| v.normal).collect();
+            let uvs: Vec<_> = vertices.iter().map(|v| v.uv).collect();
+            let indices: Vec<_> = def.raw.triangles.iter().flatten().copied().collect();
+            let mesh = r
+                .add_dynamic_mesh(&render::MeshData {
+                    positions: &positions,
+                    normals: &normals,
+                    uvs: &uvs,
+                    colors: None,
+                    indices: &indices,
+                })
+                .map_err(|e| anyhow!("cloth: {e}"))?;
+            let (_, tex, layer, _) = meshes[def.raw.part];
+            let mut cmd = match tex {
+                Some(t) => DrawCmd::textured(mesh, t, model),
+                None => DrawCmd::flat(mesh, [1.; 4], model),
+            }
+            .with_light(render::LightPath::Character);
+            cmd.layer = layer;
+            statics.push(cmd);
+        }
         if let Some(hp) = hp {
             let global = palette[hp] * asset.skeleton.global_bind[hp];
             for (m, t, layer, spec) in &weapon_parts {
@@ -891,7 +965,9 @@ pub fn unit_sheet(glb: &Path, weapon: Option<&Path>, set: &UnitSet) -> Result<(V
         }
         let skinned: Vec<SkinnedDrawCmd> = meshes
             .iter()
-            .flat_map(|(mesh, tex, layer, spec)| {
+            .enumerate()
+            .filter(|(k, _)| !cloths.iter().any(|c| c.raw.part == *k))
+            .flat_map(|(_, (mesh, tex, layer, spec))| {
                 let base = SkinnedDrawCmd {
                     mesh: *mesh,
                     texture: *tex,

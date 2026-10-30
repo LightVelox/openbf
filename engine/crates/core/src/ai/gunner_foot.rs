@@ -24,6 +24,7 @@ use super::{
     AIM_TOLERANCE, CHARGE_MIN, ERR_GROWTH, ERR_MAX, ERR_NO_TARGET, ERR_SPEED_TERM, LINE_CLEAR,
     LINE_PAST, LINE_SPREAD, SLEW_COS, SLEW_SIN, THINK_PERIOD,
 };
+use crate::autoturret::Turret;
 use crate::collision::lead_point;
 use crate::fmath;
 use crate::perception::{self, Contact};
@@ -50,6 +51,8 @@ pub(super) enum AimRequest<'a> {
     /// A SEEN enemy remote droid, fired on once its contact is fireable
     /// (`analysis/re-remote-droid.md` 6).
     Droid(&'a Droid, bool),
+    /// A SEEN enemy auto-turret, likewise (`re-portable-turret.md` 10).
+    Turret(&'a Turret, bool),
 }
 
 /// What the gunner answers, for the behaviour's position rules.
@@ -98,6 +101,8 @@ pub(super) fn track_error(sim: &Sim, st: &mut AiState, skill: &crate::skill::Ski
                 let d = sim.live_droid(id)?;
                 Some((d.pos, sim.droid_class(d)?.max_speed))
             }
+            // It stands still: the error decays as on a still soldier.
+            perception::Foe::Turret(id) => sim.live_turret(id).map(|t| (t.centre(), 1.0)),
         });
     match tracked {
         Some((p, top)) => {
@@ -156,10 +161,13 @@ pub(super) fn run(
     let (enemy, held, memory) = match *aim {
         AimRequest::Enemy(e, c) => (Some(e), Some(c), None),
         AimRequest::Memory(p) => (None, None, Some(p)),
-        AimRequest::Travel(_) | AimRequest::Droid(..) => (None, None, None),
+        AimRequest::Travel(_) | AimRequest::Droid(..) | AimRequest::Turret(..) => {
+            (None, None, None)
+        }
     };
     let droid = match *aim {
         AimRequest::Droid(d, ready) => Some((d.pos, ready)),
+        AimRequest::Turret(t, ready) => Some((t.centre(), ready)),
         _ => None,
     };
     // Card TOKN: a human this bot holds none of the tokens of - it shoots
@@ -171,6 +179,17 @@ pub(super) fn run(
     let armed = match (enemy.is_some() || droid.is_some()) && support.is_none() {
         true => arsenal::armed(sim, u, st),
         false => Armed::Hand,
+    };
+    let (wc, weapon) = match armed {
+        Armed::Secondary(class, state) => (class, state),
+        _ => (wc, &u.weapon),
+    };
+    let speed = if wc.force.is_some() {
+        1e6
+    } else {
+        wc.saber_throw
+            .as_ref()
+            .map_or(wc.ordnance.velocity, |p| p.velocity)
     };
     let hand = u.proxy_human.and_then(|p| p.hand);
     let mut reaches = false;
@@ -194,16 +213,8 @@ pub(super) fn run(
         (AimRequest::Enemy(e, c), _) => {
             // [ours] A proxy's hand aims as a player does (`proxy::hand`).
             let p = match hand {
-                Some(h) => super::proxy::hand::aim(
-                    &h,
-                    me,
-                    sim.tick,
-                    c.first_seen,
-                    eye,
-                    e,
-                    wc.ordnance.velocity,
-                ),
-                None => seen_aim(sim, me, st, eye, e, wc.ordnance.velocity, wc),
+                Some(h) => super::proxy::hand::aim(&h, me, sim.tick, c.first_seen, eye, e, speed),
+                None => seen_aim(sim, me, st, eye, e, speed, wc),
             };
             let off = barred.and_then(|h| super::tokn::miss_offset(sim, me, h, eye, p));
             p + off.unwrap_or(Vec3::ZERO)
@@ -213,7 +224,13 @@ pub(super) fn run(
             reaches = ok;
             p
         }
-        (AimRequest::Droid(d, _), _) => droid_aim(sim, me, st, eye, d, wc.ordnance.velocity, wc),
+        (AimRequest::Droid(d, _), _) => droid_aim(sim, me, st, eye, d, speed, wc),
+        (AimRequest::Turret(t, _), Armed::Thrown(gc, _) | Armed::Lobbed(gc)) => {
+            let (p, ok) = arsenal::lob_aim(sim, u, eye, t.pos, Vec3::ZERO, gc);
+            reaches = ok;
+            p
+        }
+        (AimRequest::Turret(t, _), _) => turret_aim(sim, me, st, eye, t, wc),
         (AimRequest::Memory(p) | AimRequest::Travel(p), _) => p,
     };
     let to = look_at - eye;
@@ -239,34 +256,19 @@ pub(super) fn run(
         st.aim_vel = Vec3::ZERO;
         (yaw_toward(dir), fmath::asin(dir.y.clamp(-1.0, 1.0)))
     } else if aiming {
-        let (accel, damping) = skill.tracker_for(true);
-        let mut ad = st.aim_dir;
-        let mut av = st.aim_vel;
+        // [ours] Every hand weapon counts as a WeaponCannon here: the PS2
+        // halves both terms for any other class (grenade, melee, repair).
+        // [ours] At a share of the skill (`skill::TRACKER_SHARE`).
+        let (accel, damping) = skill.tracker_skill().tracker_for(true);
+        let (mut ad, mut av) = (st.aim_dir, st.aim_vel);
         if ad == Vec3::ZERO {
             // Not tracking yet (a new target, or the first tick with one):
             // start where the unit is actually looking.
             ad = u.aim_frame().0;
             av = Vec3::ZERO;
         }
-        if ad.dot(dir) < SLEW_COS {
-            ad = slew(ad, dir);
-            av = Vec3::ZERO;
-        } else {
-            let mut a = (dir - ad) / dt - av * damping;
-            let mag = a.length();
-            if mag > accel {
-                a *= accel / mag;
-            }
-            av += a * dt;
-            let next = ad + av * dt;
-            ad = if next.length() < 1e-6 {
-                dir
-            } else {
-                next.normalize()
-            };
-        }
-        st.aim_dir = ad;
-        st.aim_vel = av;
+        (st.aim_dir, st.aim_vel) = track_step(ad, av, dir, accel, damping, dt);
+        let ad = st.aim_dir;
         // Card GRAI (OURS): a throw's elevation is the solution's itself,
         // not the tracker's — on the grenade's flat arc the tracker's lag of
         // a few degrees is ten metres of range. A shell's is the same.
@@ -312,8 +314,8 @@ pub(super) fn run(
     // phase 4, after `think` has already run for this tick — so a weapon
     // that is reloading, overheated or rate-limited costs the bot nothing.
     let meter = Meter {
-        heat: u.weapon.heat,
-        unlimited: u.weapon.rounds(wc).is_none(),
+        heat: weapon.heat,
+        unlimited: weapon.rounds(wc).is_none(),
     };
     fire_discipline(sim, me, u, st, wc, meter, &skill);
     // Card FFLN: a friend in the line of fire. The shot waits (below); the
@@ -325,7 +327,7 @@ pub(super) fn run(
             let range = (at - eye).length();
             // The cone a shot can leave in: the weapon's spread as it is now
             // (a sniper's AI table, the posture, the recoil) round the aim.
-            let spread = u.weapon.yaw_spread(wc).max(u.weapon.pitch_spread(wc));
+            let spread = weapon.yaw_spread(wc).max(weapon.pitch_spread(wc));
             friend_in_line(
                 sim,
                 me,
@@ -365,6 +367,15 @@ pub(super) fn run(
                 Armed::Hand | Armed::Lobbed(_) if hand.is_some() => {
                     range <= wc.ordnance.max_range() && !st.arm.spare
                 }
+                Armed::Hand if wc.saber.is_some() => range < wc.ai_range[2] && !st.arm.spare,
+                // A cone cannot honour the token's harmless miss by offsetting
+                // the aim point, so a barred bot holds its fire.
+                Armed::Hand if wc.emitter.as_ref().is_some_and(|e| e.is_cone()) => {
+                    range <= wc.ordnance.max_range()
+                        && range < wc.ai_range[2]
+                        && !st.arm.spare
+                        && barred.is_none()
+                }
                 Armed::Hand | Armed::Lobbed(_) => {
                     range <= wc.ordnance.max_range() && range < wc.ai_range[2] && !st.arm.spare
                 }
@@ -375,10 +386,27 @@ pub(super) fn run(
                         && gc.ai_range[0] < range
                         && range < gc.ai_range[2]
                 }
+                Armed::Secondary(class, state) => {
+                    let energy = class
+                        .force
+                        .as_ref()
+                        .map(|p| p.energy)
+                        .or_else(|| class.saber_throw.as_ref().map(|p| p.energy))
+                        .unwrap_or(0.0);
+                    let kind = enemy.map_or(2, Unit::kind).min(31);
+                    range > class.ai_range[0] && range < arsenal::reach(class)
+                        && class.ai_target_kind & (1 << kind) != 0
+                        && (state.force_channel.is_some() || u.soldier.energy >= energy)
+                        && state.saber_flight.is_none() && !state.reloading() && !state.overheated
+                        // A cone or a broad blade cannot honor the token's
+                        // harmless miss by merely offsetting the aim point.
+                        && barred.is_none() && !st.arm.spare
+                }
             };
             no_throw = matches!(armed, Armed::Thrown(_, true)) && !in_reach;
             let tol = match hand {
                 Some(_) => super::proxy::hand::tolerance(range),
+                None if wc.saber.is_some() => super::melee::AIM_TOLERANCE,
                 None => AIM_TOLERANCE,
             };
             let on_target = ready && e_yaw.abs() < tol && e_pitch.abs() < tol && in_reach;
@@ -404,6 +432,16 @@ pub(super) fn run(
                     // The pick is spent: the throw runs on its own fire
                     // state, and the next think picks again.
                     st.arm.pick = None;
+                }
+                st.charge_until = 0;
+            } else if matches!(armed, Armed::Secondary(..))
+                && wc
+                    .force
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.kind, crate::hero_weapon::ForceKind::Choke { .. }))
+            {
+                if want_fire {
+                    pad.buttons |= buttons::FIRE;
                 }
                 st.charge_until = 0;
             } else if wc.max_pressed_time > 0.0 {
@@ -435,6 +473,9 @@ pub(super) fn run(
             None
         }
     };
+    if matches!(armed, Armed::Secondary(..)) && pad.buttons & buttons::FIRE != 0 {
+        pad.buttons = (pad.buttons & !buttons::FIRE) | buttons::SECONDARY_FIRE;
+    }
     support_input(st, pad, support);
     Some(GunReport {
         line,
@@ -912,6 +953,38 @@ pub(super) fn droid_aim(
     )
 }
 
+/// [`seen_aim`] at an auto-turret: its centre under the shooter's error, as
+/// at a still droid, with the droid's size term. PROVISIONAL (the PS2's size
+/// term for this model was not read live).
+pub(super) fn turret_aim(
+    sim: &Sim,
+    me: UnitHandle,
+    st: &AiState,
+    eye: Vec3,
+    t: &Turret,
+    wc: &WeaponClass,
+) -> Vec3 {
+    let aim = t.centre();
+    let Some(u) = sim.unit(me) else {
+        return aim;
+    };
+    let cap = sim.difficulty_of(u.team).skill_at(u.skill).err_cap;
+    if sim.ground_rules != crate::soldier::GroundRules::Bf2 {
+        let r = radius(1.0, 1.0, st.err, 0.0, 1.0, cap);
+        return aim + bf1_error_dir(sim, me) * r;
+    }
+    let err = sim.unit(t.owner).map_or(st.err, |o| o.aim.err);
+    let r = radius(DROID_AIM_SIZE, 1.0, err, 0.0, 1.0, cap);
+    aim + bubble(
+        sim,
+        me,
+        false,
+        error_dir(sim, me, u) * r,
+        (aim - eye).length(),
+        wc,
+    )
+}
+
 /// BF2's error radius at a target (B2 `FUN_002ae4d0`, 18.2 and 18.3; 80 rows
 /// of PS2 RAM reproduce it, `tests/radius_rows.rs`): `size` x (3 - 2 x `vis`) x
 /// min(`err` x `stance` x (1 + 0.6 x `moving`), `cap`) - `size` the target's
@@ -1202,6 +1275,41 @@ fn pause_ticks(
     (factor * wc.barrage_delay * crate::TICK_HZ as f32)
         .round()
         .max(0.0) as u64
+}
+
+/// One tick of the D9 aim tracker (RE §4.2; B2 `FUN_002a83e0`, B1
+/// `FUN_00236700`): `ad` the aim direction, `av` its rate, `dir` the wanted
+/// direction. More than 30° off, `ad` slews 30° toward `dir` and the rate is
+/// zeroed; then, in the same call, the second-order step: the acceleration
+/// that would reach `dir` next tick, `((dir − ad)/dt − av)/dt`, clamped to
+/// `accel`, MINUS `av · damping` (the damping is outside the clamp), then
+/// `av += a·dt`, `ad = unit(ad + av·dt)`.
+pub(super) fn track_step(
+    ad: Vec3,
+    av: Vec3,
+    dir: Vec3,
+    accel: f32,
+    damping: f32,
+    dt: f32,
+) -> (Vec3, Vec3) {
+    let (mut ad, mut av) = (ad, av);
+    if ad.dot(dir) < SLEW_COS {
+        ad = slew(ad, dir);
+        av = Vec3::ZERO;
+    }
+    let mut a = ((dir - ad) / dt - av) / dt;
+    let mag = a.length();
+    if mag >= accel && mag > 0.0 {
+        a *= accel / mag;
+    }
+    av += (a - av * damping) * dt;
+    let next = ad + av * dt;
+    let ad = if next.length() < 1e-6 {
+        dir
+    } else {
+        next.normalize()
+    };
+    (ad, av)
 }
 
 /// Rotate `from` 30° toward `to` about their common perpendicular (D9's slew,

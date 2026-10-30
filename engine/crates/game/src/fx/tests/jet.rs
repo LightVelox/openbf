@@ -158,6 +158,7 @@ fn a_moving_jets_effect_rides_the_drawn_body_every_frame() {
         weapon_geometry: None,
         weapon_hud: Default::default(),
         held_hud: Vec::new(),
+        droideka_shield: None,
         held_models: Vec::new(),
         foley_class: 0,
         cries: Default::default(),

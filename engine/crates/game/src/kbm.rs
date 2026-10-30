@@ -179,14 +179,14 @@ impl Bindings {
                 ),
                 (
                     Key(K::ArrowLeft),
-                    Bind::bits(b::SQUAD_AT_EASE | b::SPAWN_POST_LEFT),
+                    Bind::bits(b::SQUAD_AT_EASE | b::SPAWN_POST_LEFT | b::HERO_ACCEPT),
                 ),
                 (
                     Key(K::ArrowRight),
-                    Bind::bits(b::SQUAD_FOLLOW | b::SPAWN_POST_RIGHT),
+                    Bind::bits(b::SQUAD_FOLLOW | b::SPAWN_POST_RIGHT | b::HERO_DECLINE),
                 ),
-                (Key(K::F1), Bind::bits(b::SQUAD_FOLLOW)),
-                (Key(K::F2), Bind::bits(b::SQUAD_HOLD)),
+                (Key(K::F1), Bind::bits(b::SQUAD_FOLLOW | b::HERO_ACCEPT)),
+                (Key(K::F2), Bind::bits(b::SQUAD_HOLD | b::HERO_DECLINE)),
                 (Key(K::F3), Bind::bits(b::SQUAD_AT_EASE)),
                 (Key(K::F4), Bind::bits(b::SQUAD_MOVE_OUT)),
             ],

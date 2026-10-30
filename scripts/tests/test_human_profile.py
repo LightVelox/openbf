@@ -28,5 +28,20 @@ class Lives(unittest.TestCase):
         self.assertEqual((t["shots"], t["kills"], t["deaths"], t["hits"]), (2, 1, 1, 1))
 
 
+class Calibration(unittest.TestCase):
+    def test_rounds_play_16_per_side_on_mission_tickets(self):
+        # The tiers and the proxy were tuned at 16 per side; the sweep's default is now the map's own sizes.
+        from unittest import mock
+        seen = {}
+        with mock.patch.object(hp.subprocess, "run", side_effect=lambda cmd, env, **kw: seen.update(env)), \
+                mock.patch.dict(os.environ, {}, clear=False):
+            for k in ("SWEEP_COMBATANTS", "SWEEP_MISSION_TICKETS", "SWEEP_NOFILL"):
+                os.environ.pop(k, None)
+            hp.run_round("bin", {"team": 0, "map": "bf1_nab2"}, "good", {}, 1, "/nonexistent")
+        self.assertEqual(seen["SWEEP_COMBATANTS"], "16")
+        self.assertEqual(seen["SWEEP_MISSION_TICKETS"], "1")
+        self.assertNotIn("SWEEP_NOFILL", seen)
+
+
 if __name__ == "__main__":
     unittest.main()

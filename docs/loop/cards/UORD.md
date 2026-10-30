@@ -11,7 +11,7 @@ declares: sim; sweep; arena
 needs: the four PS2 replay JSONs (lead_tmp/uord/ps2/b1_m_free.json, b2_m_free.json, b1_homing.json, b2_homing.json), the census tool (lead_tmp/hvyw/tools/hvcen.py) and an 8 x 32 sweep
 effort:
 branch: uord-missiles
-resume: 2026-10-30: implementation LANDED on branch uord-missiles (70da755 + uncommitted tree) - missile law, dwell lock, per-tick sweep, draw, and BF2's secondary tracers. Status stays blocked on acceptance evidence only: the four PS2 replay JSONs are absent (paths checked, see Evidence), so the replay-comparison criterion is UNSATISFIED; the mutation run, the 45/20 deg shell test and the hvcen sweep are also missing. Restore the rows, add the replay test, run the sweep, then land.
+resume: 2026-10-30: implementation LANDED on branch uord-missiles (70da755 through 1b1e72b, pull request #84) - missile law, dwell lock, per-tick sweep, draw, and BF2's secondary tracers. Status stays blocked on acceptance evidence only: the four PS2 replay JSONs are absent (paths checked, see Evidence), so the replay-comparison criterion is UNSATISFIED; the mutation run, the 45/20 deg shell test and the hvcen sweep are also missing. Restore the rows, add the replay test, run the sweep, then land.
 created: 2026-09-29
 alpha: yes
 ---
@@ -117,7 +117,7 @@ HUD card when this lands. (The BF2 shotgun tracers are in - the tracer module ab
 - The mortar shell at 45 deg bursts ~6.8 m up after 90 updates of v-then-position steps (not 7.7 m): use that number
   in the shell test if it asserts a height.
 
-## What landed 2026-10-30 (branch `uord-missiles`, 70da755 + uncommitted tree)
+## What landed 2026-10-30 (branch `uord-missiles`, 70da755 through 1b1e72b, pull request #84)
 A `missile` ordnance now steers, homes on a locked target and meets the world on its own per-tick chord, and
 BF2's secondary tracers spawn beside the round that carries them. Line numbers are the working tree's. This is
 code, not acceptance: the card's replay criterion is still open (below).

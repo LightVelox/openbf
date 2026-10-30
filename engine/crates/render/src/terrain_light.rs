@@ -38,6 +38,10 @@ pub const MAX_TERRAIN_LIGHTS: usize = 32;
 pub const MAX_LIT_PATCHES: usize = 128;
 /// The terrain draws the first 3 of a patch's top-4 gather (§5.3).
 pub const LIGHTS_PER_PATCH: usize = 3;
+// Consecutive groups preserve the shader's first-patch tie break. Their union
+// bounds reject large unlit regions without scanning all 128 patch rectangles.
+const PATCH_GROUP_SIZE: usize = 8;
+const PATCH_GROUPS: usize = MAX_LIT_PATCHES.div_ceil(PATCH_GROUP_SIZE);
 
 /// One light as the pass draws it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,9 +77,11 @@ fn params_words(t: &TerrainLights) -> Vec<u32> {
     let taken = |p: &LitPatch| (p.count as usize).min(LIGHTS_PER_PATCH);
     let ok = |p: &&LitPatch| p.lights[..taken(p)].iter().all(|&i| (i as usize) < nl);
     let np = t.patches.iter().take(MAX_LIT_PATCHES).filter(ok).count();
-    let mut w = vec![0u32; 4 + 8 * MAX_TERRAIN_LIGHTS + 8 * MAX_LIT_PATCHES];
+    let groups = 4 + 8 * MAX_TERRAIN_LIGHTS + 8 * MAX_LIT_PATCHES;
+    let mut w = vec![0u32; groups + 4 * PATCH_GROUPS];
     w[0] = nl as u32;
     w[1] = np as u32;
+    w[2] = 1; // grouped search; prepare_terrain_light can select the reference
     for (k, l) in t.lights.iter().take(nl).enumerate() {
         let o = 4 + 8 * k;
         let row = [
@@ -99,6 +105,23 @@ fn params_words(t: &TerrainLights) -> Vec<u32> {
         w[sel + 4 * k..sel + 4 * k + n].copy_from_slice(&p.lights[..n]);
         w[sel + 4 * k + 3] = n as u32;
     }
+    for start in (0..np).step_by(PATCH_GROUP_SIZE) {
+        let mut bound = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        for k in start..(start + PATCH_GROUP_SIZE).min(np) {
+            for (j, edge) in bound.iter_mut().enumerate() {
+                let v = f32::from_bits(w[rects + 4 * k + j]);
+                *edge = if j < 2 { edge.min(v) } else { edge.max(v) };
+            }
+        }
+        for (j, v) in bound.into_iter().enumerate() {
+            w[groups + 4 * (start / PATCH_GROUP_SIZE) + j] = v.to_bits();
+        }
+    }
     w
 }
 
@@ -116,6 +139,7 @@ pub(crate) struct TerrainLightState {
     /// allows COPY_SRC)?
     pub copyable: bool,
     pub warned: bool,
+    pub linear_search: bool,
 }
 
 impl Renderer {
@@ -161,6 +185,12 @@ impl Renderer {
         self.terrain_lights.frame = lights;
     }
 
+    /// Diagnostic reference for measuring the patch prefilter and checking
+    /// exact image equality. Both paths select the first matching rectangle.
+    pub fn set_terrain_light_grouping(&mut self, enabled: bool) {
+        self.terrain_lights.linear_search = !enabled;
+    }
+
     /// Whether this frame draws the pass: lights on some patch, the texture
     /// installed, a target it can copy.
     pub(crate) fn terrain_light_wanted(&mut self) -> bool {
@@ -179,7 +209,8 @@ impl Renderer {
     /// Upload the frame's parameters and (re)build the destination copy for
     /// a `w`×`h` target and the bind group over it.
     pub(crate) fn prepare_terrain_light(&mut self, w: u32, h: u32) {
-        let words = params_words(&self.terrain_lights.frame);
+        let mut words = params_words(&self.terrain_lights.frame);
+        words[2] = u32::from(!self.terrain_lights.linear_search);
         let bytes: &[u8] = bytemuck::cast_slice(&words);
         let t = &mut self.terrain_lights;
         if t.params_buf.is_none() {
@@ -306,7 +337,10 @@ mod tests {
             ],
         };
         let w = params_words(&t);
-        assert_eq!(w.len(), 4 + 8 * MAX_TERRAIN_LIGHTS + 8 * MAX_LIT_PATCHES);
+        assert_eq!(
+            w.len(),
+            4 + 8 * MAX_TERRAIN_LIGHTS + 8 * MAX_LIT_PATCHES + 4 * PATCH_GROUPS
+        );
         assert_eq!(&w[..2], &[1, 1]);
         let f = |i: usize| f32::from_bits(w[i]);
         assert_eq!(
@@ -347,5 +381,98 @@ mod tests {
         assert_eq!(&w[..2], &[3, 1]);
         let s = 4 + 8 * MAX_TERRAIN_LIGHTS + 4 * MAX_LIT_PATCHES;
         assert_eq!(&w[s..s + 4], &[2, 1, 0, 3]);
+    }
+
+    /// The grouped search against the plain one over the words the shader
+    /// reads, at every rectangle's min, just below its max, max and centre,
+    /// plus `extra` points. Returns the points that hit some rectangle.
+    fn grouped_matches_linear(t: &TerrainLights, extra: &[f32]) -> usize {
+        let w = params_words(t);
+        let rects = 4 + 8 * MAX_TERRAIN_LIGHTS;
+        let groups = rects + 8 * MAX_LIT_PATCHES;
+        let rect =
+            |offset: usize| std::array::from_fn::<_, 4, _>(|j| f32::from_bits(w[offset + j]));
+        let inside = |offset: usize, x: f32, z: f32| {
+            let r = rect(offset);
+            x >= r[0] && z >= r[1] && x < r[2] && z < r[3]
+        };
+        let n = w[1] as usize;
+        let mut xs = extra.to_vec();
+        let mut zs = extra.to_vec();
+        for i in 0..n {
+            let r = rect(rects + 4 * i);
+            for (axis, lo, hi) in [(&mut xs, r[0], r[2]), (&mut zs, r[1], r[3])] {
+                axis.extend([lo, hi.next_down(), hi, lo + 0.5 * (hi - lo)]);
+            }
+        }
+        let mut hits = 0;
+        for &x in &xs {
+            for &z in &zs {
+                let plain = (0..n).find(|&i| inside(rects + 4 * i, x, z));
+                let grouped = (0..n).find(|&i| {
+                    inside(groups + 4 * (i / PATCH_GROUP_SIZE), x, z) && inside(rects + 4 * i, x, z)
+                });
+                assert_eq!(grouped, plain, "{x},{z}");
+                hits += usize::from(plain.is_some());
+            }
+        }
+        hits
+    }
+
+    fn patch(min: [f32; 2], max: [f32; 2]) -> LitPatch {
+        LitPatch {
+            min,
+            max,
+            lights: [0; 3],
+            count: 1,
+        }
+    }
+
+    fn one_light(patches: Vec<LitPatch>) -> TerrainLights {
+        TerrainLights {
+            lights: vec![TerrainLight {
+                pos: Vec3::ZERO,
+                rgb: [1.0; 3],
+            }],
+            patches,
+        }
+    }
+
+    #[test]
+    fn group_bounds_keep_the_first_match_at_edges_and_overlaps() {
+        let mut t = one_light(
+            (0..MAX_LIT_PATCHES)
+                .map(|i| {
+                    let (x, z) = ((i % 13) as f32, (i / 13) as f32);
+                    patch([x - 6.0, z - 4.0], [x - 4.0, z - 2.0])
+                })
+                .collect(),
+        );
+        t.patches[7].lights[0] = 99; // filtered before groups are made
+        t.patches[16].min[0] = f32::NEG_INFINITY;
+        t.patches[16].max[0] = f32::INFINITY;
+        t.patches[22].min[0] = f32::NAN; // cannot match
+        let extra = [-20.0, -6.0, -5.5, -1.0, 0.0, 0.5, 6.0, 20.0, f32::NAN];
+        assert!(
+            grouped_matches_linear(&t, &extra) > 20,
+            "the fixture must exercise matches"
+        );
+    }
+
+    /// Disjoint rectangles in a row: every rectangle, the last of each group
+    /// included, is the only one at its own sample points.
+    #[test]
+    fn group_bounds_cover_every_rectangle_of_their_group() {
+        for np in [MAX_LIT_PATCHES, 13, 8, 1] {
+            let t = one_light(
+                (0..np)
+                    .map(|i| {
+                        let x = 3.0 * i as f32 - 100.0;
+                        patch([x, -1.0 - i as f32], [x + 2.0, 1.0 + 0.5 * i as f32])
+                    })
+                    .collect(),
+            );
+            assert!(grouped_matches_linear(&t, &[]) >= 4 * np, "{np} patches");
+        }
     }
 }

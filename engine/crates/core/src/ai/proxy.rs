@@ -363,7 +363,7 @@ pub fn pick(
     st.contacts
         .iter()
         .flatten()
-        .filter(|c| c.seen_now)
+        .filter(|c| c.seen_now && crate::perception::target_admitted(sim, me, c))
         .filter_map(|c| {
             let h = c.handle.unit()?;
             let e = sim.unit(h).filter(|e| e.team != u.team)?;

@@ -181,6 +181,7 @@ impl Sim {
         damage: f32,
         scales: &[f32; 7],
         team: Option<u8>,
+        attacker: Option<UnitHandle>,
     ) {
         match target {
             Target::Mine(id) => {
@@ -198,7 +199,17 @@ impl Sim {
                 if let Some(k) = self.turrets.iter().position(|t| t.id == id) {
                     let t = &self.turrets[k];
                     let ht = self.turret_class(t).map(|c| c.health_type);
-                    self.turrets[k].health -= self.item_damage(damage, scales, ht, t.team, team);
+                    let dealt = self.item_damage(damage, scales, ht, t.team, team);
+                    self.turrets[k].health -= dealt;
+                    if let Some(shooter) = attacker.filter(|_| dealt > 0.0) {
+                        self.events.push(Event::TurretHit {
+                            shooter,
+                            turret: id,
+                            team: self.turrets[k].team,
+                            damage: dealt,
+                            health_left: self.turrets[k].health,
+                        });
+                    }
                 }
             }
             Target::Guided(id) => {

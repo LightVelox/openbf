@@ -213,8 +213,13 @@ impl Sim {
     /// skill but not its level-3 rules, so it goes without
     /// this). BF1 has no such gate; one rule on both games' maps.
     pub(super) fn bolt_spares(&self, b: &Bolt, victim: &Unit) -> bool {
+        self.shot_spares(b.team, b.shooter_is_player, victim)
+    }
+
+    /// The rule of [`Self::bolt_spares`] for a shot with no bolt (an emitter).
+    pub(super) fn shot_spares(&self, team: u8, shooter_is_player: bool, victim: &Unit) -> bool {
         (victim.is_player && self.cheats.invincible)
-            || (victim.is_human() && victim.team == b.team && !b.shooter_is_player)
+            || (victim.is_human() && victim.team == team && !shooter_is_player)
     }
 
     pub(super) fn bolt_desc(&self, b: &Bolt) -> DamageDesc {
@@ -288,6 +293,9 @@ impl Sim {
     pub(super) fn resolve_bolt(&mut self, b: &Bolt) {
         match b.hit {
             Hit::Target(Target::Unit(h)) => {
+                if self.deflect_bolt(h, b) {
+                    return;
+                }
                 if self.unit(h).is_none() {
                     return; // died in flight → bolt dies, no impact
                 }
@@ -409,7 +417,7 @@ impl Sim {
                 t @ (Target::Droid(_) | Target::Mine(_) | Target::Turret(_) | Target::Guided(_)),
             ) => {
                 let desc = self.bolt_desc(b);
-                self.damage_item(t, desc.damage, &desc.scales, Some(b.team));
+                self.damage_item(t, desc.damage, &desc.scales, Some(b.team), Some(b.owner));
                 self.events.push(Event::BoltExpired {
                     pos: b.end,
                     struck: true,
@@ -558,6 +566,17 @@ impl Sim {
     /// `killer` (scored on its life even when it is dead), or a killer-less blast's
     /// [`Event::EnvDeath`] ([`DeathCause::Blast`]).
     pub(super) fn unit_killed(&mut self, h: UnitHandle, killer: Option<UnitHandle>) {
+        self.unit_killed_with_cause(h, killer, DeathCause::Blast);
+    }
+
+    /// A direct health setter can end a life without a new damage source.
+    /// Keep the same corpse, drop, seat, ticket and respawn bookkeeping.
+    pub(super) fn unit_killed_with_cause(
+        &mut self,
+        h: UnitHandle,
+        killer: Option<UnitHandle>,
+        cause: DeathCause,
+    ) {
         let v = &self.units[h.index as usize];
         let (victim_team, victim_is_player) = (v.team, v.is_player);
         let respawn_at = self.tick + (self.respawn_delay * TICK_HZ as f32) as u64;
@@ -594,6 +613,9 @@ impl Sim {
                 } else if killer_team == Some(victim_team) {
                     self.nav_stats.team_kills += 1;
                 }
+                if k != h && killer_team.is_some_and(|team| team != victim_team) {
+                    self.heal_hero_kill(k);
+                }
                 // The PS2 credits the member, alive or dead (B1 FUN_00297440:
                 // a destroyed vehicle's riders die after its destroyer may
                 // have, re-vehicle-death 10.5): this life's slot by generation.
@@ -609,10 +631,7 @@ impl Sim {
                     victim: h,
                 });
             }
-            None => self.events.push(Event::EnvDeath {
-                unit: h,
-                cause: DeathCause::Blast,
-            }),
+            None => self.events.push(Event::EnvDeath { unit: h, cause }),
         }
     }
 
@@ -686,6 +705,10 @@ impl Sim {
         self.class_change_life_ended(h);
         crate::squad::on_unit_died(self, h);
         self.unseat_unit(h);
+        if matches!(cause, DeathCause::Lost | DeathCause::Stalled) {
+            // Recycles remove the actor instead of leaving a dead owner.
+            self.retire_saber_flights(h.index as usize);
+        }
         self.events.push(Event::EnvDeath { unit: h, cause });
     }
 }
@@ -723,6 +746,7 @@ mod tests {
         assert_eq!(replacement.index, old.index);
         assert_ne!(replacement.gen, old.gen);
         let bolt = |owner| Bolt {
+            visual_shot: None,
             pos: Vec3::X,
             vel: -Vec3::X,
             remaining: 0.0,
@@ -824,6 +848,7 @@ mod tests {
         let bot = s.spawn(&UnitSpec::trooper(0, Vec3::X * 3.0)).unwrap();
         let friend = s.spawn(&UnitSpec::trooper(0, Vec3::X * 6.0)).unwrap();
         let bolt = |owner: UnitHandle, victim: UnitHandle, shooter_is_player: bool| Bolt {
+            visual_shot: None,
             pos: Vec3::ZERO,
             vel: Vec3::X,
             remaining: 0.0,
@@ -874,6 +899,7 @@ mod tests {
         s.units[v.index as usize].health.cur = 1.0;
         let dir = Vec3::new(3.0, 0.0, 4.0);
         s.resolve_bolt(&Bolt {
+            visual_shot: None,
             pos: Vec3::ZERO,
             vel: dir * 40.0,
             remaining: 0.0,
@@ -934,6 +960,7 @@ mod tests {
             s.weapon_classes.len() - 1
         };
         let bolt = |owner: UnitHandle, wc: usize, hit: Hit, end: Vec3| Bolt {
+            visual_shot: None,
             pos: end,
             vel: Vec3::new(0.0, -100.0, 0.0),
             remaining: 0.0,
@@ -1672,6 +1699,7 @@ mod tests {
             let pos = feet + Vec3::new(-dist, height, 0.0);
             let vel = Vec3::X * 2000.0;
             s.bolts.push(Bolt {
+                visual_shot: None,
                 pos,
                 vel,
                 remaining: 0.1,

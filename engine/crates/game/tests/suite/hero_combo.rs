@@ -1,0 +1,210 @@
+//! Play the actual baked PS2 saber programs through the sim evaluator.
+
+use core::combo::{ComboInput, ComboRuntime, FIRE, FIRE_SECONDARY, STAND};
+
+#[test]
+fn every_bf2_saber_hero_attacks_and_blocks_with_its_baked_program() {
+    let root = game::assets::baked_root();
+    if !pak::exists(root.join("side_bf2/heroes.ron")) {
+        eprintln!("SKIP: BF2 hero bake absent; run bake heroes for the real-content combo check");
+        return;
+    }
+    let db =
+        game::roster::load_classdb(&root.join("classes"), "bf2", &["all", "imp", "rep", "cis"])
+            .unwrap();
+    let mut names: Vec<_> = db
+        .names()
+        .filter(|n| n.split('_').nth(1) == Some("hero"))
+        .collect();
+    names.sort_unstable();
+    let mut checked = 0;
+    for soldier in names {
+        let Some(weapon) = db
+            .weapon_slots(soldier)
+            .into_iter()
+            .find(|s| s.channel == 0)
+        else {
+            continue;
+        };
+        if !db
+            .chain(&weapon.weapon)
+            .last()
+            .is_some_and(|c| c.base.eq_ignore_ascii_case("melee"))
+        {
+            continue;
+        }
+        let saber = game::hero_blades::saber_class(&db, soldier, &weapon.weapon)
+            .unwrap_or_else(|e| panic!("{soldier}: {e:#}"));
+        let input = ComboInput {
+            posture: STAND,
+            energy: 100.0,
+            ..ComboInput::default()
+        };
+        let mut attack = ComboRuntime::default();
+        let mut active = 0;
+        let mut damage = 0.0f32;
+        let mut had_animation = false;
+        for tick in 0..900 {
+            let out = attack.step(
+                &saber.combo,
+                &saber.state_seconds,
+                ComboInput {
+                    buttons: if tick == 0 { FIRE } else { 0 },
+                    ..input
+                },
+                1.0 / 60.0,
+            );
+            had_animation |= out.animation.is_some();
+            for hit in out.attacks {
+                assert!(
+                    (hit.edge as usize) < saber.blades.len(),
+                    "{soldier}: edge {}",
+                    hit.edge
+                );
+                let amount = hit.damage.unwrap_or(saber.damage);
+                assert!(
+                    amount.is_finite() && amount > 0.0,
+                    "{soldier}: non-damaging authored attack"
+                );
+                active += 1;
+                damage = damage.max(amount);
+            }
+        }
+        assert!(
+            had_animation && active > 0,
+            "{soldier}: FIRE never reached an animated damage window"
+        );
+        let mut block = ComboRuntime::default();
+        let out = block.step(
+            &saber.combo,
+            &saber.state_seconds,
+            ComboInput {
+                buttons: FIRE_SECONDARY,
+                ..input
+            },
+            1.0 / 60.0,
+        );
+        let deflect = out
+            .deflect
+            .unwrap_or_else(|| panic!("{soldier}: block input never reached Deflect"));
+        assert!(
+            deflect.covers(0.0),
+            "{soldier}: forward block does not cover a shot"
+        );
+        assert_eq!(
+            out.energy_restore_rate,
+            Some(-10.0),
+            "{soldier}: authored block rate changed"
+        );
+        println!(
+            "{soldier}: {active} active attack ticks, max damage {damage}, block {}..{} deg",
+            deflect.min_angle, deflect.max_angle
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 15);
+}
+
+fn capture_score_scene() -> (game::walk::WalkSim, game::event_feed::EventFeed) {
+    use core::{cp::CpDef, region::Region, sim::PadState};
+    use game::event_feed::{EventFeed, Texts};
+    use glam::Vec3;
+    let mut walk = game::walk::WalkSim::new(
+        42,
+        Vec3::ZERO,
+        Some(core::heightfield::Heightfield {
+            size: 2,
+            unit: 400.0,
+            offset_x: 200.0,
+            offset_z: 200.0,
+            heights: vec![0.0; 4],
+        }),
+    );
+    walk.sim.add_cp(
+        CpDef {
+            name: "score post".into(),
+            pos: Vec3::ZERO,
+            capture: Region::sphere(Vec3::ZERO, 10.0),
+            control: None,
+            value_bleed: 1,
+            value_atk: [1; 2],
+            value_def: [1; 2],
+            spawn_nodes: vec![(Vec3::ZERO, 0.0)],
+            capture_time: core::TICK_DT * 0.5,
+            neutralize_time: 1.0,
+        },
+        None,
+    );
+    walk.sim.cps[0].capture_team = Some(0);
+    let mut feed = EventFeed::new(Texts::builtin(), ["all", "imp"], &["post".into()]);
+    feed.tick(&walk.sim, walk.player);
+    assert!(walk.sim.counts_in_cp(walk.player.index as usize, 0));
+    walk.step_tick(&[PadState::default()]);
+    assert!(
+        walk.sim
+            .events
+            .iter()
+            .any(|e| matches!(e, core::sim::Event::Captured { cp: 0, team: 0 })),
+        "capture fixture: player {:?}, post {:?}, events {:?}",
+        walk.sim.unit(walk.player).map(|u| u.soldier.pos),
+        walk.sim.cps[0],
+        walk.sim.events,
+    );
+    feed.tick(&walk.sim, walk.player);
+    assert_eq!(feed.round().units[walk.player.index as usize].points, 5);
+    // A second genuine CP capture will cross the ordinary ten-point gate.
+    let post = &mut walk.sim.cps[0];
+    post.owner = None;
+    post.capture = 0.0;
+    post.capture_team = Some(0);
+    game::heroes::install(&mut walk.sim, [Some(1), None]);
+    game::heroes::scores(&mut walk.sim, &feed);
+    (walk, feed)
+}
+
+fn capture_offer(batch: bool, publish_each_tick: bool) -> (u64, Option<u64>) {
+    use core::sim::PadState;
+    let (mut walk, mut feed) = capture_score_scene();
+    for _ in 0..if batch { 1 } else { 2 } {
+        game::heroes::scores(&mut walk.sim, &feed);
+        walk.advance_with(
+            core::TICK_DT * if batch { 2.0 } else { 1.0 },
+            &[PadState::default()],
+            |walk| {
+                if publish_each_tick {
+                    game::heroes::tick(walk, &mut feed);
+                } else {
+                    feed.tick(&walk.sim, walk.player);
+                }
+            },
+        );
+    }
+    assert_eq!(walk.sim.tick, 3);
+    assert_eq!(feed.round().units[walk.player.index as usize].points, 10);
+    (
+        walk.sim.hash(),
+        walk.sim.heroes.as_ref().unwrap().teams[0]
+            .offer
+            .map(|o| o.expires),
+    )
+}
+
+#[test]
+fn hero_unlock_tick_and_hash_do_not_depend_on_render_batch_size() {
+    let batch = capture_offer(true, true);
+    let individual = capture_offer(false, true);
+    assert!(
+        batch.1.is_some(),
+        "the ten-point capture must actually unlock an offer"
+    );
+    assert_eq!(
+        batch, individual,
+        "two fixed ticks together equal two individual frames"
+    );
+    // The old frame-only publication is the instrument's negative control.
+    let old_batch = capture_offer(true, false);
+    let old_individual = capture_offer(false, false);
+    assert!(old_batch.1.is_none());
+    assert!(old_individual.1.is_some());
+    assert_ne!(old_batch.0, old_individual.0);
+}

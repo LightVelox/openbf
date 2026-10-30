@@ -100,6 +100,8 @@ const CAROUSEL: u32 = buttons::SPAWN_CLASS_NEXT
 pub enum ClassRefusal {
     /// "Get %d more points to unlock!": this many more points.
     Points(u32),
+    /// The member has not accepted this team's current hero offer.
+    HeroUnavailable,
 }
 
 impl SideChoice {

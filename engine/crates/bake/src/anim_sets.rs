@@ -250,7 +250,7 @@ pub fn plan_bf2(
     bones: &[String],
 ) -> Plan {
     use mungefs::sanm::Layer;
-    let built = bf2::build(inv, reg);
+    let built = bf2::build_with_combos(inv, reg);
     let mut p = Plan::default();
     p.sets.game = "bf2".into();
     (p.sets.upper_bones, p.sets.lower_bones) = masks(bones, true);

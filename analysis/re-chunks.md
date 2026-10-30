@@ -125,7 +125,10 @@ Addresses are BF2 (SWBFRNT2.ELF).
 - Contacts come from the terrain and the map's static bodies only: no vehicle hulls, and no damage to units.
 - SIMPLE uses the FULL handler, since SIMPLE is never authored.
 - The push-out ignores the chunk's own collision layer, which is not traced.
-- Droid chunks keep the mesh-bounds sphere (no prims are baked for them), and droid `ChunkNodeName` bones are unused.
+- Historical before issue #80: droid chunks used mesh-bounds spheres and ignored `ChunkNodeName`.
+  The targeted droid bake now records SBD prims and launch nodes; battle rendering uses the last drawn
+  soldier pose at those bones, with bind-pose fallback for callers without soldier visuals.
+  Magnaguard cuts and the cross-game SBD profile are [ours] (FEEL_NOTES, 2026-10-29).
 
 **Observed.** A parked hailfire's hull (`hailfire_chunk3`, ChunkSpeed 20, UpFactor 0) starts 0.66 m below the
 vehicle origin. That origin is itself under the ground: 0.148 m on the PS2 (RE_LOG, the hover rest census) and

@@ -104,6 +104,21 @@ class Sweep(unittest.TestCase):
             binary();self.assertEqual(run(),0)
             self.assertEqual(run(['--botq']),1);self.assertFalse(receipt.exists())
             binary(rows=False);self.assertEqual(run(),1);self.assertFalse(receipt.exists())
+    def test_parse_stdout_skips_round_detail_lines(self):
+        # round_to_outcome prints setup / opening / timing detail per map; they are not map rows,
+        # indented (current) or in column 0 (builds before the fix).
+        text = ('setup bf1_nab1 combatants 20/20 tickets 150/150\nopening bf1_nab1 alive 20/20\n'
+                '    setup bf1_nab1 combatants 20/20 tickets 150/150\n    opening bf1_nab1 alive 20/20\n'
+                'bf1_nab1   team 1 wins at tick 25000 stuck_max 3 hash 00\n    mission: x\n'
+                'timing bf1_nab1 median_us 900 p99_us 2000 max_us 5000\n'
+                '    timing bf1_nab1 median_us 900 p99_us 2000 max_us 5000\n'
+                'bf2_pol1   NO OUTCOME in 9000 ticks  tickets 3/4\nsweep: finished 1/2  stuck_max median 3\n')
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / 'sweep_s1.txt'; f.write_text(text)
+            rows = sweep.parse_stdout(str(f))
+        self.assertEqual(sorted(rows), ['bf1_nab1', 'bf2_pol1'])
+        self.assertTrue(rows['bf1_nab1']['finished']); self.assertEqual(rows['bf1_nab1']['tick'], 25000)
+        self.assertFalse(rows['bf2_pol1']['finished'])
     def test_default_inventory_and_botq(self):
         with tempfile.TemporaryDirectory() as d:
             p=pathlib.Path(d);(p/'sweep_s1.txt').write_text('a no outcome stuck_max 2\nsweep: finished 0/1  stuck_max median 2\n');(p/'sweep_s1.err').write_text('a done (1/1, 0 s)\n')

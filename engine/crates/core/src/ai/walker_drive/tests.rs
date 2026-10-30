@@ -177,6 +177,7 @@ fn world(p: WalkerParams, deg: f32) -> (Sim, UnitHandle, VehicleHandle, Vec3) {
     s.walker_params = vec![Some(p)];
     s.seat_setup = vec![Some(SeatSetup {
         radius: 3.0,
+        body_active: vec![],
         boardable: vec![true],
         exit_drop: 10.0,
         ai_size: 8,
@@ -433,6 +434,7 @@ fn pickup_walker_world(p: WalkerParams, deg: f32) -> (Sim, UnitHandle, VehicleHa
     s.walker_params = vec![Some(p)];
     s.seat_setup = vec![Some(SeatSetup {
         radius: 3.0,
+        body_active: vec![],
         boardable: vec![true; 2],
         exit_drop: 10.0,
         ai_size: 8,

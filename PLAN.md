@@ -48,14 +48,14 @@ One line per decision; the full text, with every number, is VERBATIM in `analysi
 **Heroes** (FEATURE_SET.md L48+)
 - Playable heroes (BF2) AND AI-controlled heroes (BF1 presence), both on all content. [L49]
 - Heroes are killable, always — no BF1 invincibility ("you see a hero and you just run away — no fun"). [L50]
-- Health (the maintainer, 2026-09-23 — reverses the earlier "flat pool, drop the drain/kill-to-heal" call): use BF2's standard hero health pool, the disc's own values (`RE:` them, do not guess), with … [L52]
+- Health (maintainer, 2026-10-30): regular BF2 conquest keeps the original hero pool and saber-shaped bar, time/damage drain and kill healing; the rate remains data. See `analysis/plan/FEATURE_SET.md`, Heroes.
 
 **AI** (FEATURE_SET.md L60+)
 - Infantry AI base: RESOLVED 2026-09-01 (the maintainer, Fable session 8): openbf's OWN AI — modern architecture (authored-graph navigation + local steering, a per-team utility commander, behaviour … [L61]
 - (the maintainer, 2026-10-01) AI class weights. An AI spawn (and respawn) draws its class by weight: the team's alive-AI cap is shared out over its classes — the default class (the mission's first: … [L71]
 - (the maintainer, 2026-10-01) Bots hold ground and fight, and not as statues. [L79]
 - (the maintainer, 2026-10-01) AI bounds and the way back. [L91]
-- Unit counts: default = PS2-authentic (16/team), settings slider to raise on modern hardware. [L99]
+- Unit counts (the maintainer, 2026-10-29): map-specific defaults, 16–32 combatants/team including the human; map-relative percentage settings, ceiling 32. [L112]
 
 **Vehicles & space** (FEATURE_SET.md L106+)
 - Ground vehicle handling: BF2 (verify BF1/BF2 similarity during RE; [L107]
@@ -149,7 +149,7 @@ exception on the last count, kept for the video.
 **Next, in order:**
 - **M3 Plays right** — a full conquest round on every map ends by tickets, no unit stuck (the stuck census empty), the round
   sweep `finished 32/32`; PCSX2 gameplay spot checks. *Measured by* the sweep footer and the census.
-- **M4 Heroes, space, awards** (old P8): Space Assault faithful first; heroes killable (BF2 hero health, no time drain, regen
+- **M4 Heroes, space, awards** (old P8): Space Assault faithful first; heroes killable (BF2 conquest hero health, time/damage drain and healing
   on kills); awards/medals; class meta-unlock.
 - **M5 Campaign, Galactic Conquest, splitscreen, polish, Win/Linux/macOS builds** (old P10) — the shell and menus
   (card BSHL) ship a **Multiplayer** entry in BF2's main-menu slot, greyed out and unselectable, behind an `enabled` flag in

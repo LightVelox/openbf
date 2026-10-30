@@ -448,7 +448,7 @@ impl SoundLib {
         }
     }
 
-    fn mix_shot(
+    pub(super) fn mix_shot(
         &mut self,
         audio: &mut audio::Audio,
         s: &Start,

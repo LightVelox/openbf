@@ -1,5 +1,7 @@
 use super::*;
 
+mod combo_aim;
+
 /// Card USKN: a part takes its class's override of the group its
 /// texture is listed under; parts in no group, and classes with no
 /// override of that group, keep their own texture.
@@ -68,6 +70,7 @@ fn team(classes: &[(&str, Option<&str>, Option<&str>)]) -> TeamTemplate {
             weapon_geometry: weapon.map(str::to_owned),
             weapon_hud: Default::default(),
             held_hud: Vec::new(),
+            droideka_shield: None,
             held_models: Vec::new(),
             foley_class: 0,
             cries: Default::default(),
@@ -612,6 +615,7 @@ fn the_feet_keep_to_the_ground() {
                     max_speed: 7.0,
                     root_scale: 1.0,
                     dead: false,
+                    hero_dead: false,
                     hard_lock: false,
                     set: 0,
                     fired: false,
@@ -717,6 +721,7 @@ fn a_prone_soldier_lies_down_on_both_games() {
                     max_speed: 7.0,
                     root_scale: 1.0,
                     dead: false,
+                    hero_dead: false,
                     hard_lock: false,
                     set,
                     fired: false,
@@ -798,6 +803,7 @@ fn no_frozen_wait_after_a_lock_animation() {
                     max_speed: 7.0,
                     root_scale: 1.0,
                     dead: false,
+                    hero_dead: false,
                     hard_lock: s.look_frozen(),
                     set: 0,
                     fired: false,
@@ -946,6 +952,7 @@ fn a_sprinting_soldier_shows_his_throw_and_shot() {
             max_speed: 7.0,
             root_scale: 1.0,
             dead: false,
+            hero_dead: false,
             hard_lock: false,
             set: 0,
             fired: false,
@@ -1048,6 +1055,7 @@ fn a_thrown_soldier_is_drawn_over_his_position() {
                 max_speed: 7.0,
                 root_scale: 1.0,
                 dead: false,
+                hero_dead: false,
                 hard_lock: false,
                 set: 0,
                 fired: false,

@@ -101,6 +101,8 @@ pub struct SoldierAsset {
     /// (`soldiers/<model>.skins.ron`, [`part_groups`]); a class's override
     /// of that group replaces the part's texture (card USKN).
     pub groups: Vec<Option<String>>,
+    /// Optional live cloth companion; older GLBs retain their skinned fallback.
+    pub cloths: Vec<crate::cloth::Definition>,
 }
 
 /// The model group of each part, by its texture: the groups file lists
@@ -354,18 +356,29 @@ pub struct UnitVisual {
     pub dead_for: f32,
     /// The sim tick of the unit's last shot: its muzzle flash's clock.
     pub shot_tick: Option<u64>,
+    cast: cast::CastClock,
     pub shot_class: Option<usize>,
+    shot_ordinal: u64,
     repair_shot: Option<usize>,
     repair_tick: Option<u64>,
     /// The weapon class last seen in the unit's hands and the set it picks.
     set: Option<(usize, usize)>,
     throwing: Option<usize>,
+    /// A melee throw's weapon was firing at the last look: its rising edge
+    /// starts the throw clip ([`cast::CastClock`]).
+    saber_throwing: bool,
+    /// The unit left the field with no death ([`core::sim::Event::Despawn`],
+    /// a hero accept or a class change): nothing to draw until it respawns.
+    gone: bool,
     pending_throw: Option<u8>,
     throw_windup: f32,
     /// Card VTURG: a seated gunner's world matrix this frame; `None` when he
     /// is not drawn in a seat.
     seat_model: Option<Mat4>,
     seat_clock: Option<SeatClock>,
+    cloth_body: Option<usize>,
+    cloth_alive: Option<bool>,
+    cloth_states: Vec<crate::cloth::State>,
 }
 
 /// What a seated gunner keeps from one sim tick to the next: the tick, the
@@ -583,6 +596,8 @@ fn rider_now<'a>(
 pub struct SoldierVisuals {
     pub assets: Vec<SoldierAsset>,
     pub weapons: Vec<WeaponAsset>,
+    sabers: [Vec<Option<saber::SaberVisual>>; 2],
+    saber_trails: Vec<saber_trail::State>,
     grenades: Vec<Option<usize>>,
     /// `per_class[team][class]` -> indices into `assets` and `weapons`; a
     /// `None` body = marker box.
@@ -610,6 +625,8 @@ pub struct SoldierVisuals {
     pub walker_rigs: Vec<Option<std::sync::Arc<crate::viewer::walker_pose::WalkerRig>>>,
     /// Per `Sim::vehicles` slot: a hover's rider numbers (card VRIDE).
     hover_nine: Vec<Option<HoverClock>>,
+    /// Reused across generations; respawning resets CPU state, not GPU buffers.
+    cloth_meshes: std::collections::HashMap<(usize, usize, usize), render::MeshHandle>,
 }
 
 /// A hover's [`tp::HoverNine`] and the vehicle and tick it was stepped for.
@@ -669,9 +686,13 @@ fn model_of(s: &core::soldier::Soldier) -> Mat4 {
     Mat4::from_translation(s.pos) * Mat4::from_rotation_y(s.yaw + std::f32::consts::PI)
 }
 
+mod cast;
+mod cloth;
 mod grenade;
 use grenade::drawn;
 mod runtime;
+mod saber;
+mod saber_trail;
 
 #[cfg(test)]
 mod tests;

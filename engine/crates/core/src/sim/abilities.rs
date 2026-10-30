@@ -65,13 +65,21 @@ impl Sim {
             unit: owner,
             weapon_class: class as u32,
             pos: from,
+            charge: 1.0,
         });
         let targets: Vec<_> = self.ability_targets(i, ability).collect();
         let affected = !targets.is_empty();
         for target in targets {
-            self.units[target].buffs.apply_ability(ability, owner);
+            let u = &self.units[target];
+            let hero = self.ground_rules == crate::soldier::GroundRules::Bf2
+                && self.hero_class(u.team) == Some(u.spec.class);
+            if !hero {
+                self.units[target].buffs.apply_ability(ability, owner);
+            }
         }
-        if affected && ability.self_on_hit && ability.friends {
+        let hero = self.ground_rules == crate::soldier::GroundRules::Bf2
+            && self.hero_class(self.units[i].team) == Some(self.units[i].spec.class);
+        if affected && ability.self_on_hit && ability.friends && !hero {
             self.units[i].buffs.apply_ability(ability, owner);
         }
     }

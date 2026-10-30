@@ -16,6 +16,68 @@ use render::{light_sum, Camera, DirLight, DrawCmd, LightPath, Lighting, MeshData
 use crate::common;
 use common::{capture_pixel, headless, upload_tex, N};
 
+#[test]
+#[ignore = "requires a GPU adapter (run with --ignored on the NVIDIA box)"]
+fn terrain_light_groups_match_the_linear_shader_exactly() {
+    use render::{LitPatch, TerrainLight, TerrainLights};
+    let mut r = headless();
+    let quad = common::view_quad(&mut r, -3.0);
+    let tex = upload_tex(&mut r, 1, 1, &[40, 40, 40, 255], "terrain");
+    let draws = [DrawCmd::textured(quad, tex, Mat4::IDENTITY).with_light(LightPath::Terrain)];
+    r.set_omniproj(Some((1, 1, &[255; 4]))).unwrap();
+    r.render(&Camera::default(), &draws, [0.0; 4]).unwrap();
+    let base = r.capture_rgba().unwrap().0;
+    let mut patches: Vec<_> = (0..128)
+        .map(|i| LitPatch {
+            min: [100.0 + i as f32, -4.0],
+            max: [101.0 + i as f32, -2.0],
+            lights: [0; 3],
+            count: 1,
+        })
+        .collect();
+    // The first visible rectangle lies across a group boundary. Another
+    // overlaps it with a different light: reordering would change the pixels.
+    patches[7] = LitPatch {
+        min: [-0.5, -4.0],
+        max: [0.5, -2.0],
+        lights: [0; 3],
+        count: 1,
+    };
+    patches[8] = LitPatch {
+        min: [-2.0, -4.0],
+        max: [2.0, -2.0],
+        lights: [1; 3],
+        count: 1,
+    };
+    patches[16].lights[0] = 99; // packing rejects an invalid light index
+    let lights = vec![
+        TerrainLight {
+            pos: Vec3::new(0.0, 1.0, -3.0),
+            rgb: [0.5, 0.0, 0.0],
+        },
+        TerrainLight {
+            pos: Vec3::new(0.0, 1.0, -3.0),
+            rgb: [0.0, 0.5, 0.0],
+        },
+    ];
+    for count in [0, 1, 8, 9, 17, 127, 128] {
+        r.set_terrain_lights(TerrainLights {
+            lights: lights.clone(),
+            patches: patches[..count].to_vec(),
+        });
+        r.set_terrain_light_grouping(false);
+        r.render(&Camera::default(), &draws, [0.0; 4]).unwrap();
+        let reference = r.capture_rgba().unwrap().0;
+        r.set_terrain_light_grouping(true);
+        r.render(&Camera::default(), &draws, [0.0; 4]).unwrap();
+        let grouped = r.capture_rgba().unwrap().0;
+        assert_eq!(grouped, reference, "{count} input rectangles");
+        if count >= 8 {
+            assert_ne!(reference, base, "the light must be visible");
+        }
+    }
+}
+
 /// The vertex colour every quad below carries: 128/255 linear (a Unorm8 is
 /// not sRGB-decoded), the COL0 the bake writes.
 const C: u8 = 128;

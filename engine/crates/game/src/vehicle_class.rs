@@ -1341,6 +1341,26 @@ mod tests {
     }
 
     #[test]
+    fn seat_setup_carries_the_body_exposure_to_physical_hero_queries() {
+        let mut ring = Vec::new();
+        for keys in [
+            vec![],
+            vec![("PilotAnimation", "drive")],
+            vec![("PilotAnimation", "drive"), ("IsPilotExposed", "0")],
+            vec![("PilotAnimation", "drive"), ("PilotType", "none")],
+        ] {
+            let mut seat = SeatSpec::new(SeatKind::Pilot);
+            for (key, value) in keys {
+                seat.set(h(key), value);
+            }
+            ring.push(seat);
+        }
+        let setup = crate::vehicle_pads::seat_setup(&ClassDb::default(), "fixture", &ring, "bf2");
+        assert_eq!(setup.body_active, [false, true, false, false]);
+        assert_eq!(setup.boardable, [true, true, true, false]);
+    }
+
+    #[test]
     fn section_values_map_to_the_ps2_indices() {
         assert_eq!(section_scope("BODY"), Scope::Body);
         assert_eq!(section_scope("TURRET"), Scope::Turret(0));

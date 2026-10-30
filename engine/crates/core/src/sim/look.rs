@@ -103,8 +103,16 @@ impl Sim {
         if self.controlled_guided(h).is_some() {
             return None;
         }
+        if u.droideka.is_some() && u.mount.is_none() {
+            let (yaw, pitch) = self.droideka_look_preview(h.index as usize, pad)?;
+            return Some(LookPreview::Foot {
+                unit: h.index as usize,
+                yaw,
+                pitch,
+            });
+        }
         let Some(m) = u.mount else {
-            if u.soldier.look_frozen() {
+            if u.soldier.look_frozen() || self.saber_look_locked(h.index as usize) {
                 return None;
             }
             let (yaw, pitch) = u
@@ -151,12 +159,28 @@ impl Sim {
         if self.controlled_droid(h).is_some() || self.controlled_guided(h).is_some() {
             return None;
         }
+        // A saber combo that locks the turn: the tick drops the stick (and
+        // the assist's pull on it), so nothing is drawn ahead of it.
+        if self.saber_look_locked(h.index as usize) {
+            return None;
+        }
         let slot = self.players.iter().position(|p| *p == Some(h));
         let magnet = slot.and_then(|k| Some((k, self.magnet.get(k).copied().flatten()?)));
         let pad = magnet
             .and_then(|(k, m)| self.assisted(k, h, m, pad, crate::TICK_DT))
             .map_or(*pad, |(p, _, _)| p);
+        if u.droideka.is_some() {
+            let (yaw, pitch) = self.droideka_look_preview(h.index as usize, &pad)?;
+            return Some(LookPreview::Foot {
+                unit: h.index as usize,
+                yaw,
+                pitch,
+            });
+        }
         let mut c = u.consts;
+        // The tick's own rates: a combo state's TurnFactor, a force power's.
+        self.saber_constants(h.index as usize, &mut c);
+        self.force_constants(h.index as usize, &mut c);
         if let Some(z) = u.zoom {
             c.max_turn_speed /= z.divisor;
             c.max_pitch_speed /= z.divisor;

@@ -361,6 +361,14 @@ pub struct ExplosionClass {
     /// deviation, `game::roster::PUSH_SPARES_THE_LIVING`); the damage is
     /// untouched.
     pub spares_living: bool,
+    /// `HurtOwner` (flags bit 1 at class+0xa0, ctor 1,
+    /// `analysis/re-vehicle-death.md` §1): when clear, the blast leaves out
+    /// its owner - B2 FUN_0030c8f8 skips the gathered object that is the
+    /// damage info's owner, for the damage and the push alike
+    /// (B2:300612-300633). Mace's ground crack and Sidious's blast author 0;
+    /// a combo's PlayExplosion passes its soldier as the owner (FUN_00340350,
+    /// B2:335530).
+    pub hurt_owner: bool,
     /// Its `Effect` / `WaterEffect` (card FXP3, [`crate::impact`]).
     /// Render-only: the sim never reads it; filled by the game's class
     /// loader.
@@ -378,6 +386,7 @@ impl Default for ExplosionClass {
             push: 0.0,
             push_outer: 0.0,
             spares_living: false,
+            hurt_owner: true,
             look: crate::impact::ExplosionLook::default(),
         }
     }
@@ -404,6 +413,9 @@ impl ExplosionClass {
         }
         if let Some(v) = any(["PushRadiusOuter", "PushRadius"]) {
             e.push_outer = v;
+        }
+        if let Some(v) = pf(src, "HurtOwner") {
+            e.hurt_owner = v != 0.0;
         }
         e
     }

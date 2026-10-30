@@ -23,6 +23,7 @@ fn spec(prim: Prim) -> Spec {
         trails: Vec::new(),
         smoke: Vec::new(),
         node: None,
+        node_name: None,
     }
 }
 
@@ -403,7 +404,7 @@ fn real_bf2_class_resolves_five_droid_pieces() {
     let c = Chunks::load(
         &db,
         &["cis_inf_rifleman".into()],
-        &[root.join("side_bf2/weapons")],
+        &[root.join("side_bf2/droid_chunks/weapons")],
         Era::Bf2,
     );
     assert_eq!(c.defs["cis_inf_rifleman"].len(), 5);
@@ -430,4 +431,188 @@ fn real_bf2_chunks_take_their_prims_trails_and_only_skeleton_nodes() {
     assert!(c.defs["cis_tread_hailfire"]
         .iter()
         .any(|s| s.node.is_some()));
+}
+
+#[test]
+#[ignore = "requires bake droid-chunks from both discs"]
+fn real_sbd_and_magnaguard_profiles_launch_five_pieces_at_the_authored_frequency() {
+    use core::unit::UnitSpec;
+    let root = crate::assets::baked_root();
+    for (game, era, class, prefix) in [
+        ("bf2", Era::Bf2, "cis_inf_rifleman", "sbdroid_chunk"),
+        ("bf1", Era::Bf1, "cis_inf_battledroid", "sbdroid_chunk"),
+        ("bf2", Era::Bf2, "cis_inf_officer", "magnaguard_chunk"),
+        ("bf2", Era::Bf2, "cis_inf_officer_hunt", "magnaguard_chunk"),
+    ] {
+        let db = crate::roster::load_classdb(&root.join("classes"), game, &["cis", "rep"]).unwrap();
+        assert_eq!(
+            db.prop(class, "ChunkGeometryName"),
+            Some(format!("{prefix}1").as_str()),
+            "{game} {class}: resolved chunk geometry"
+        );
+        let roster = crate::roster::ClassRoster::build(&db, class, 0, None).unwrap();
+        let mut walk = WalkSim::new(7, Vec3::ZERO, None);
+        walk.sim.ground_rules = if game == "bf1" {
+            core::soldier::GroundRules::Bf1
+        } else {
+            core::soldier::GroundRules::Bf2
+        };
+        let registered = roster.register(&mut walk.sim, &mut Vec::new());
+        assert_eq!(
+            registered.chunk.as_ref().unwrap().frequency,
+            crate::roster::DROID_CHUNK_CHANCE
+        );
+        assert_eq!(
+            registered
+                .chunk
+                .as_ref()
+                .unwrap()
+                .explosion
+                .as_ref()
+                .unwrap()
+                .look
+                .effects,
+            ["openbf_droid_explosion"]
+        );
+        walk.sim.classes[1] = vec![registered];
+        walk.teams[1].classes = vec![crate::walk::ClassVisual::from_roster(&roster)];
+        let dirs = [root.join(format!("side_{game}/droid_chunks/weapons"))];
+        let mut c = Chunks::load(&db, &[class.into()], &dirs, era);
+        let specs = &c.defs[class];
+        assert_eq!(specs.len(), 5);
+        for (i, spec) in specs.iter().enumerate() {
+            assert_eq!(spec.model, format!("{prefix}{}", i + 1));
+            assert!(spec.node.is_some(), "{} launch bone", spec.model);
+            assert!(matches!(spec.prim, Prim::Sphere(_)));
+            assert_eq!(
+                (spec.speed, spec.budget, spec.omega),
+                (8.0, 4, Vec3::new(-4.0, -4.0, 4.0))
+            );
+        }
+        let spec = UnitSpec::trooper(1, Vec3::Y * 10.0);
+        let h = walk.sim.spawn(&spec).unwrap();
+        let mut bursts = 0;
+        for _ in 0..1000 {
+            walk.sim.units[h.index as usize] = spec.build(h.gen, &walk.sim.weapon_classes);
+            let u = &mut walk.sim.units[h.index as usize];
+            u.health.cur = -50.0;
+            u.alive = false;
+            u.body = true;
+            walk.sim.step(&[]);
+            c.clear();
+            c.tick(&walk, None);
+            if walk.sim.units[h.index as usize].burst {
+                bursts += 1;
+                assert_eq!(
+                    c.len(),
+                    5,
+                    "{game} {class}: event must reach chunk renderer"
+                );
+                assert!(!walk.sim.units[h.index as usize].body);
+            } else {
+                assert_eq!(c.len(), 0, "a plain death must not launch chunks");
+            }
+        }
+        assert!((554..=646).contains(&bursts), "{class}: {bursts}/1000");
+        println!("{game} {class}: {bursts}/1000 deaths, five {prefix} pieces per burst");
+        let control = if game == "bf1" {
+            "cis_inf_assault"
+        } else {
+            "cis_inf_rocketeer"
+        };
+        assert_eq!(db.prop(control, "ChunkGeometryName"), Some("bdroid_chunk1"));
+    }
+}
+
+#[test]
+#[ignore = "requires bake droid-chunks from both discs"]
+fn real_battle_droid_bursts_into_its_own_aliased_chunks() {
+    let root = crate::assets::baked_root();
+    for (game, era, class) in [
+        ("bf1", Era::Bf1, "cis_inf_assault"),
+        ("bf2", Era::Bf2, "cis_inf_rocketeer"),
+    ] {
+        let db = crate::roster::load_classdb(&root.join("classes"), game, &["cis", "rep"]).unwrap();
+        let side = root.join(format!("side_{game}"));
+        // The library's own order: the droid layer, then the side's weapons.
+        let dirs = [side.join("droid_chunks/weapons"), side.join("weapons")];
+        let c = Chunks::load(&db, &[class.into()], &dirs, era);
+        let specs = &c.defs[class];
+        assert_eq!(specs.len(), 5, "{game} {class}");
+        for (i, spec) in specs.iter().enumerate() {
+            assert_eq!(spec.model, format!("bdroid_chunk{}", i + 1));
+            let glb = side.join(format!("droid_chunks/weapons/{}.glb", spec.model));
+            let mesh = crate::assets::load_glb(&glb).unwrap();
+            for (_, _, material, _, _) in &mesh.submeshes {
+                let m = material.to_ascii_lowercase();
+                assert!(m.starts_with("openbf_droid_"), "{game} {}: {m}", spec.model);
+                assert!(pak::is_file(
+                    side.join(format!("droid_chunks/textures/{m}.ktx2"))
+                ));
+            }
+        }
+        // The living droid's sheet is not the chunk bake's opaque copy.
+        let living = std::fs::read(side.join("textures/cis_inf_battledroid.ktx2")).unwrap();
+        let chunk =
+            std::fs::read(side.join("droid_chunks/textures/openbf_droid_cis_inf_battledroid.ktx2"))
+                .unwrap();
+        assert_ne!(
+            living, chunk,
+            "{game}: living sheet replaced by the chunk's"
+        );
+    }
+}
+
+#[test]
+fn a_droid_piece_uses_the_last_drawn_bone_frame_before_the_bind_fallback() {
+    let mut s = spec(Prim::Sphere(0.2));
+    s.node = Some(Mat4::from_translation(Vec3::Y));
+    s.node_name = Some("bone_a_spine".into());
+    s.local = Mat4::from_translation(Vec3::X);
+    let mut c = chunks(s);
+    let nodes = [(
+        "bone_a_spine".into(),
+        Mat4::from_rotation_translation(
+            Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            Vec3::Y * 3.0,
+        ),
+    )];
+    c.launch_posed(
+        "fixture",
+        Vec3::X * 10.0,
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        1.0,
+        1.0,
+        None,
+        Some(&nodes),
+    );
+    assert!(piece(&c).pos.distance(Vec3::new(10.0, 4.0, 0.0)) < 1e-5);
+    assert!(
+        piece(&c)
+            .model()
+            .w_axis
+            .truncate()
+            .distance(Vec3::new(10.0, 3.0, 0.0))
+            < 1e-5
+    );
+}
+
+#[test]
+fn a_piece_without_baked_launch_nodes_keeps_its_original_origin() {
+    let mut s = spec(Prim::Sphere(0.2));
+    s.node_name = Some("bone_a_spine".into());
+    let mut c = chunks(s);
+    let nodes = [("bone_a_spine".into(), Mat4::from_translation(Vec3::Y * 3.0))];
+    c.launch_posed(
+        "fixture",
+        Vec3::X * 10.0,
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        1.0,
+        1.0,
+        None,
+        Some(&nodes),
+    );
+    assert_eq!(piece(&c).model().w_axis.truncate(), Vec3::X * 10.0);
 }

@@ -109,7 +109,7 @@ fn all_officer_variants_keep_their_disc_ability_and_apply_it_through_secondary_f
 }
 
 #[test]
-fn hero_copies_stay_deferred_but_the_invulnerability_definition_is_preserved() {
+fn hero_buffs_are_available_and_keep_the_disc_ability_definition() {
     let root = game::assets::baked_root();
     if !root.join("classes/bf2_all.ron").exists() {
         return;
@@ -126,8 +126,112 @@ fn hero_copies_stay_deferred_but_the_invulnerability_definition_is_preserved() {
         "all_hero_hansolo_tat",
         "cis_hero_grievous",
     ] {
-        assert!(game::roster::held_slots(&db, hero, 0)
+        let slots = game::roster::held_slots(&db, hero, 0);
+        assert!(
+            slots
+                .iter()
+                .any(|w| w.weapon.ability.is_some() && w.channel == 1),
+            "{hero}"
+        );
+    }
+}
+
+#[test]
+fn actual_hero_buff_weapons_help_ordinary_allies_and_refuse_hero_timers() {
+    let root = game::assets::baked_root();
+    if !root.join("classes/bf2_all.ron").exists() {
+        eprintln!("SKIP: actual BF2 hero classes required");
+        return;
+    }
+    let db = load_classdb(&root.join("classes"), "bf2", &["all", "cis"]).unwrap();
+    for hero in [
+        "all_hero_leia",
+        "all_hero_hansolo_tat",
+        "all_hero_chewbacca",
+        "cis_hero_grievous",
+    ] {
+        let roster = ClassRoster::build(&db, hero, 0, Some(1)).unwrap();
+        let mut sim = Sim::empty(48);
+        sim.ground_rules = core::soldier::GroundRules::Bf2;
+        sim.heightfield = Some(Heightfield {
+            size: 2,
+            unit: 4000.0,
+            offset_x: 2000.0,
+            offset_z: 2000.0,
+            heights: vec![0.0; 4],
+        });
+        let class = roster.register(&mut sim, &mut Vec::new());
+        sim.heroes = Some(core::sim::heroes::Heroes::new([Some(0), None]));
+        let owner = sim
+            .spawn(&class.spec(0, Vec3::ZERO, 0.0, Controller::Player { slot: 0 }, 0, 0))
+            .unwrap();
+        let hero_ally = sim
+            .spawn(&class.spec(0, Vec3::X * 3.0, 0.0, Controller::Idle, 0, 1))
+            .unwrap();
+        let mut spec = UnitSpec::trooper(0, Vec3::Z * 4.0);
+        spec.class = 1;
+        let ally = sim.spawn(&spec).unwrap();
+        sim.unit_mut(ally).unwrap().health.cur = 100.0;
+        spec.team = 1;
+        spec.pos = Vec3::X * -4.0;
+        let enemy = sim.spawn(&spec).unwrap();
+        let slot = sim
+            .unit(owner)
+            .unwrap()
+            .held
             .iter()
-            .all(|w| w.weapon.ability.is_none()));
+            .position(|w| sim.weapon_classes[w.class].ability.is_some())
+            .unwrap();
+        let weapon = sim.unit(owner).unwrap().held[slot].class;
+        let ability = sim.weapon_classes[weapon].ability.clone().unwrap();
+        for _ in 0..sim.unit(owner).unwrap().held.len() {
+            if sim.unit(owner).unwrap().cur1 == Some(slot as u8) {
+                break;
+            }
+            sim.step(&[PadState {
+                buttons: buttons::SWITCH_SECONDARY,
+                ..Default::default()
+            }]);
+            sim.step(&[PadState::default()]);
+        }
+        assert_eq!(sim.unit(owner).unwrap().cur1, Some(slot as u8));
+        assert!(sim.unit(owner).unwrap().held[slot].state.active);
+        let mut activations = 0;
+        for tick in 0..30 {
+            sim.step(&[PadState {
+                buttons: if tick == 0 {
+                    buttons::SECONDARY_FIRE
+                } else {
+                    0
+                },
+                ..Default::default()
+            }]);
+            activations += sim
+                .events
+                .iter()
+                .filter(|e| {
+                    matches!(e, Event::Ability { unit, weapon_class, .. }
+                    if *unit == owner && *weapon_class == weapon as u32)
+                })
+                .count();
+        }
+        assert_eq!(activations, 1, "{hero}");
+        assert!(!sim.unit(owner).unwrap().buffs.active(), "{hero}: self");
+        assert!(
+            !sim.unit(hero_ally).unwrap().buffs.active(),
+            "{hero}: hero ally"
+        );
+        assert!(!sim.unit(enemy).unwrap().buffs.active(), "{hero}: enemy");
+        let recipient = sim.unit(ally).unwrap();
+        assert!(recipient.buffs.active(), "{hero}: ordinary ally");
+        if hero == "all_hero_leia" {
+            assert_eq!(recipient.buffs.defense.1, 0.05);
+            assert!(recipient.buffs.defense.0 > 9.0);
+            assert_eq!(recipient.buffs.regeneration.1, 20.0);
+            assert!(recipient.health.cur > 100.0);
+        } else {
+            assert_eq!(recipient.buffs.offense.1, ability.offense.1);
+            assert!(recipient.buffs.offense.0 > ability.offense.0 - 1.0);
+        }
     }
 }

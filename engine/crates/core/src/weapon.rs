@@ -323,6 +323,9 @@ pub struct WeaponClass {
     pub dispenser: Option<Dispenser>,
     pub mine: Option<Dispenser<crate::mine::MineClass>>,
     pub ability: Option<Ability>,
+    pub force: Option<crate::hero_weapon::ForcePower>,
+    pub saber_throw: Option<crate::hero_weapon::SaberThrow>,
+    pub saber: Option<Box<crate::hero_weapon::SaberClass>>,
     /// An `emitterordnance` class's data (the arc casters, the incinerator,
     /// the flamethrowers; `analysis/re-ordnance-kinds.md` §8). `None` = the
     /// class is not an emitter.
@@ -480,6 +483,9 @@ impl Default for WeaponClass {
             dispenser: None,
             mine: None,
             ability: None,
+            force: None,
+            saber_throw: None,
+            saber: None,
             emitter: None,
             cloak: None,
             guided: None,
@@ -658,6 +664,9 @@ impl WeaponClass {
             dispenser: None,
             mine: None,
             ability: None,
+            force: None,
+            saber_throw: None,
+            saber: None,
             emitter: None,
             cloak: None,
             guided: None,
@@ -1213,6 +1222,9 @@ pub struct WeaponState {
     /// release edge, 0 idle.
     pub fire_cmd: i32,
     pub remote_press: u8,
+    pub force_channel: Option<crate::hero_weapon::ForceChannel>,
+    pub saber_flight: Option<crate::hero_weapon::SaberFlight>,
+    pub melee: Option<crate::hero_weapon::MeleeState>,
     /// Human players get the −SpreadThreshold free-shot buffer; AI floor 0
     /// (both less the port's tight hold, `spread_floor`).
     pub human: bool,
@@ -1278,6 +1290,9 @@ impl WeaponState {
             overheated: false,
             fire_cmd: 0,
             remote_press: 0,
+            force_channel: None,
+            saber_flight: None,
+            melee: None,
             human,
             ai_dispersion: None,
             active: true,
@@ -1690,6 +1705,15 @@ impl WeaponState {
         eat(&self.clip.to_le_bytes());
         eat(&self.spare.to_le_bytes());
         eat(&self.fire_cmd.to_le_bytes());
+        if let Some(melee) = &self.melee {
+            melee.hash_into(eat);
+        }
+        if let Some(flight) = &self.saber_flight {
+            flight.hash_into(eat);
+        }
+        if let Some(channel) = &self.force_channel {
+            channel.hash_into(eat);
+        }
         if self.remote_press > 0 {
             eat(b"REMOTE");
             eat(&[self.remote_press]);

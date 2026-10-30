@@ -406,7 +406,7 @@ fn option_ranges_steps_and_defaults() {
             o.con_mult,
             o.con_timer
         ),
-        (16, 2, 16, 100, 0)
+        (100, 2, 100, 100, 0)
     );
     assert_eq!(
         (o.ctf_score, o.ctf_timer, o.hun_timer, o.hun_score),
@@ -414,15 +414,11 @@ fn option_ranges_steps_and_defaults() {
     );
     assert_eq!(o.ass_score, 180);
     o.adjust(Opt::NumBots, 1, 10);
-    assert_eq!(o.num_bots, MAX_BOTS);
-    assert_eq!(
-        (o.con_numbots, o.ctf_numbots, o.ass_numbots),
-        (MAX_BOTS, MAX_BOTS, MAX_BOTS)
-    );
-    o.adjust(Opt::NumBots, -1, 10);
-    o.adjust(Opt::NumBots, -1, 10);
-    o.adjust(Opt::NumBots, -1, 10);
-    assert_eq!(o.num_bots, 0);
+    assert_eq!(o.num_bots, 200);
+    assert_eq!(o.con_numbots, 200);
+    assert_eq!((o.ctf_numbots, o.ass_numbots), (16, 16));
+    o.adjust(Opt::NumBots, -1, 100);
+    assert_eq!(o.num_bots, 10);
     o.adjust(Opt::AiDifficulty, 1, 1);
     assert_eq!(o.difficulty, 3);
     o.adjust(Opt::AiDifficulty, -1, 10);
@@ -467,45 +463,26 @@ fn option_ranges_steps_and_defaults() {
     assert_eq!(o.hero_respawn, -1, "121 wraps to Never");
     o.adjust(Opt::HeroUnlock, 1, 1);
     assert_eq!(o.hero_unlock, 5);
-    assert_eq!(o.rows(Group::Hero), [Opt::HeroesOnOff], "Heroes Off");
+    assert_eq!(o.rows(Group::Hero).len(), 5, "Heroes On");
     o.adjust(Opt::HeroesOnOff, 1, 1);
-    assert_eq!(o.rows(Group::Hero).len(), 5);
+    assert_eq!(o.rows(Group::Hero), [Opt::HeroesOnOff], "Heroes Off");
 }
 
-/// menuref §9.1.1-2: AI units per team 0..16 on every page that has the
-/// row; Global copies into Conquest, CTF and Assault.
+/// Supported modes use bounded percentages; unsupported modes keep raw counts.
 #[test]
-fn ai_per_team_is_capped_at_16() {
+fn population_percent_and_unsupported_mode_counts_have_distinct_bounds() {
     assert_eq!(MAX_BOTS, 16);
     let mut o = SessionOptions::default();
-    for opt in [
-        Opt::NumBots,
-        Opt::ConNumBots,
-        Opt::CtfNumBots,
-        Opt::AssNumBots,
-    ] {
-        for _ in 0..3 {
-            o.adjust(opt, 1, 1);
-        }
-        o.adjust(opt, 1, 10);
-        let v = [o.num_bots, o.con_numbots, o.ctf_numbots, o.ass_numbots];
-        assert!(v.iter().all(|n| *n == 16), "{opt:?} {v:?}");
+    for opt in [Opt::NumBots, Opt::ConNumBots] {
+        o.adjust(opt, 1, 100);
+        assert_eq!(o.con_numbots, crate::population::MAX_TEAM_PCT as i32);
+        o.adjust(opt, -1, 100);
+        assert_eq!(o.con_numbots, 10);
     }
-    o.adjust(Opt::ConNumBots, -1, 10);
-    o.adjust(Opt::ConNumBots, -1, 10);
-    assert_eq!(o.con_numbots, 0, "minimum 0");
-    o.num_bots = 16;
-    o.adjust(Opt::NumBots, -1, 1);
-    o.adjust(Opt::NumBots, -1, 1);
-    o.adjust(Opt::NumBots, -1, 1);
-    o.adjust(Opt::NumBots, -1, 1);
-    o.adjust(Opt::NumBots, -1, 1);
-    o.adjust(Opt::NumBots, -1, 1);
-    assert_eq!(
-        (o.num_bots, o.con_numbots, o.ctf_numbots, o.ass_numbots),
-        (10, 10, 10, 10),
-        "Global 10 -> all three read 10"
-    );
+    for opt in [Opt::CtfNumBots, Opt::AssNumBots] {
+        o.adjust(opt, 1, 100);
+        assert_eq!((o.ctf_numbots, o.ass_numbots), (16, 16));
+    }
 }
 
 /// menuref "Session Options" Hero rows (`so_hero`, `so_hero_ranges`,
@@ -523,7 +500,10 @@ fn hero_defaults_and_ranges() {
             .collect()
     };
     let mut o = SessionOptions::default();
-    assert!(!o.heroes, "Heroes Off");
+    // [ours] Heroes On by default (maintainer 2026-10-30; the PS2's is Off).
+    assert!(o.heroes, "Heroes On by default");
+    o.adjust(Opt::HeroesOnOff, 1, 1);
+    assert!(!o.heroes);
     assert_eq!(o.rows(Group::Hero), [Opt::HeroesOnOff], "the rest hidden");
     assert_eq!(flat(t.option(Opt::HeroesOnOff, &o)), "Heroes: < Off >");
     o.adjust(Opt::HeroesOnOff, 1, 1);
@@ -608,10 +588,10 @@ fn session_options_clicks() {
     m.step(up(), 0.0);
     m.step(cross(), 0.0);
     assert_eq!(m.take_clicks(), [S::Select, S::Accept]);
-    // Global: AI at 16, Right and R1 clamp but click.
+    // Global: percentage steps by 10; R1 advances 100.
     m.step(press(|i| i.menu.right = true), 0.0);
     m.step(press(|i| i.r1 = true), 0.0);
-    assert_eq!(m.options.num_bots, 16);
+    assert_eq!(m.options.num_bots, crate::population::MAX_TEAM_PCT as i32);
     assert_eq!(m.take_clicks(), [S::Select, S::Select]);
     m.step(up(), 0.0);
     assert!(m.take_clicks().is_empty(), "silent at the first row");
@@ -791,10 +771,7 @@ fn option_rows_read_as_the_disc_writes_them() {
             })
             .collect()
     };
-    assert_eq!(
-        flat(t.option(Opt::NumBots, &o)),
-        "AI Units Per Team: < 16 >"
-    );
+    assert_eq!(flat(t.option(Opt::NumBots, &o)), "Team size: < 100% >");
     assert_eq!(
         flat(t.option(Opt::AiDifficulty, &o)),
         "AI Difficulty Level: < Normal >"
@@ -883,4 +860,72 @@ fn launch_hands_over_the_playlist_in_order() {
     m.step(press(|i| i.l1 = true), 0.0);
     m.step(press(|i| i.l1 = true), 0.0);
     assert_eq!(m.map_list.at, 0);
+}
+
+#[test]
+fn population_rows_stop_at_the_percent_and_help_averages_every_map() {
+    use crate::population::{Defaults, Entry};
+    static TABLE: [Entry; 2] = [
+        (
+            "a",
+            false,
+            Defaults {
+                combatants: [16, 16],
+                tickets: [100, 100],
+            },
+        ),
+        (
+            "b",
+            true,
+            Defaults {
+                combatants: [31, 25],
+                tickets: [200, 220],
+            },
+        ),
+    ];
+    let texts = IaTexts::new(&|_, english| english.to_owned());
+    let mut values = SessionOptions {
+        population_table: &TABLE,
+        con_mult: 125,
+        ..Default::default()
+    };
+    let flat = |pieces: Vec<Piece>| {
+        pieces
+            .into_iter()
+            .map(|p| match p {
+                Piece::Text(s) => s,
+                Piece::Left => "<".into(),
+                Piece::Right => ">".into(),
+            })
+            .collect::<String>()
+    };
+    let help = |v: &SessionOptions, o| v.population_help(o).unwrap();
+    for o in [Opt::NumBots, Opt::ConNumBots] {
+        assert_eq!(flat(texts.option(o, &values)), "Team size: < 100% >");
+    }
+    assert_eq!(
+        flat(texts.option(Opt::ConMult, &values)),
+        "Reinforcements: < 125% >"
+    );
+    let minutes = crate::population::match_minutes(100, 125).round();
+    let length = format!("Average match length: {minutes} minutes");
+    assert_eq!(
+        help(&values, Opt::ConNumBots),
+        format!("Average team size: 22 units\n{length}")
+    );
+    // 125% of 100/100 and of 200/220: 125 and 262.5 per side, averaged 193.75.
+    assert_eq!(
+        help(&values, Opt::ConMult),
+        format!("Average reinforcements: 194 units\n{length}")
+    );
+    assert_eq!(values.population_help(Opt::ConTimer), None);
+    // The value moves the averages: Right on the Global row moves both rows.
+    values.adjust(Opt::NumBots, 1, 10);
+    assert_eq!(values.con_numbots, 200);
+    assert_eq!(
+        flat(texts.option(Opt::ConNumBots, &values)),
+        "Team size: < 200% >"
+    );
+    assert!(help(&values, Opt::ConNumBots).starts_with("Average team size: 31 units\n"));
+    assert!(help(&values, Opt::NumBots).starts_with("Average team size: 31 units\n"));
 }

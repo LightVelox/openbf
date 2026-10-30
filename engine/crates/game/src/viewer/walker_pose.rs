@@ -85,10 +85,18 @@ impl WalkerRig {
     /// The local pose of walker state `w` (every bone, parent space), before
     /// SkeletonRootScale.
     pub fn pose(&self, w: &WalkerState) -> Pose {
+        self.pose_sampled(w, false)
+    }
+
+    fn pose_sampled(&self, w: &WalkerState, simulation: bool) -> Pose {
         let entry = self.entries.get(usize::from(w.anim));
         let sample = |layer: usize| {
             let c = entry.and_then(|e| e[layer]).map(|k| &self.clips[k])?;
-            Some(c.sample(&self.skeleton, w.clip_time * c.fps, false))
+            Some(if simulation {
+                crate::sim_pose::sample(c, &self.skeleton, w.clip_time * c.fps)
+            } else {
+                c.sample(&self.skeleton, w.clip_time * c.fps, false)
+            })
         };
         let mut pose = sample(0).unwrap_or_else(|| Pose::bind(&self.skeleton));
         for (mask, &b) in self.masks.iter().zip(&w.layer_blend) {
@@ -101,7 +109,11 @@ impl WalkerRig {
             };
             let Some(lp) = sample(layer) else { continue };
             for (k, _) in mask.iter().enumerate().filter(|(_, &m)| m) {
-                pose.0[k] = pose.0[k].blend(lp.0[k], weight.min(1.0));
+                pose.0[k] = if simulation {
+                    crate::sim_pose::blend(pose.0[k], lp.0[k], weight.min(1.0))
+                } else {
+                    pose.0[k].blend(lp.0[k], weight.min(1.0))
+                };
             }
         }
         // FUN_0025f050: bone 0 turns with the legs (2h).
@@ -110,7 +122,11 @@ impl WalkerRig {
             b0.rotation = (Quat::from_xyzw(0.0, s, 0.0, c) * b0.rotation).normalize();
         }
         if let Some(r) = self.bone_root.and_then(|r| pose.0.get_mut(r)) {
-            let (sa, ca) = w.pitch.sin_cos();
+            let (sa, ca) = if simulation {
+                core::fmath::sin_cos(w.pitch)
+            } else {
+                w.pitch.sin_cos()
+            };
             let (rc, rs) = w.roll;
             r.rotation = (r.rotation
                 * Quat::from_xyzw(sa, 0.0, 0.0, ca)
@@ -128,6 +144,26 @@ impl WalkerRig {
             locals[r] *= Mat4::from_scale(Vec3::splat(root_scale));
         }
         self.skeleton.palette(&locals)
+    }
+
+    /// Node `name`'s model-space matrix as walker state `w` poses it: what
+    /// an `AnimatedPilotPosition` rider hangs by (card VRIDE,
+    /// `analysis/re-vehicle-riders.md` 2.1 [O]). `None` when the skeleton
+    /// has no such node.
+    /// Collision uses portable interpolation and trigonometry, independently
+    /// of the host-math drawing sampler above.
+    pub(crate) fn node_for_sim(
+        &self,
+        w: &WalkerState,
+        root_scale: f32,
+        name: &str,
+    ) -> Option<Mat4> {
+        let n = self.skeleton.index_of(name)?;
+        let mut locals = self.pose_sampled(w, true).locals();
+        if let Some(r) = self.bone_root.filter(|_| root_scale != 1.0) {
+            locals[r] *= Mat4::from_scale(Vec3::splat(root_scale));
+        }
+        Some(self.skeleton.palette(&locals)[n] * self.skeleton.global_bind[n])
     }
 
     pub fn with_seats(mut self, seats: Vec<crate::vehicle_class::SeatSpec>) -> Self {
@@ -359,5 +395,148 @@ mod tests {
             &[[2, 0, 0, 0]],
         );
         assert!((p[0][1] - 4.0).abs() < 1e-5, "{p:?}");
+    }
+    #[test]
+    fn rider_collision_layers_change_sim_hash_only_with_the_pose_provider() {
+        use core::sim::{HeroRiderFrames, Sim};
+        use core::vehicle::{SeatKind, Vehicle, VehicleKind, VehicleSpec};
+        use std::sync::Arc;
+        struct Frames(Arc<WalkerRig>);
+        impl HeroRiderFrames for Frames {
+            fn frame(&self, vehicle: &Vehicle, _: u8) -> Option<Mat4> {
+                self.0.node_for_sim(&vehicle.walker, 1.0, "bone_l_calf")
+            }
+        }
+        let frames = Arc::new(Frames(Arc::new(rig(true))));
+        let mut sim = Sim::empty(73);
+        let vehicle = sim.spawn_vehicle(&VehicleSpec {
+            kind: VehicleKind::Walker,
+            class: 0,
+            home_team: Some(0),
+            neutral_when_empty: false,
+            spawn_pad: None,
+            pos: Vec3::ZERO,
+            yaw: 0.0,
+            max_health: 500.0,
+            health_type: core::weapon::HealthType::Vehicle,
+            seats: vec![SeatKind::Pilot],
+        });
+        let ordinary = sim.hash();
+        sim.vehicle_mut(vehicle).unwrap().walker.layer_blend[0] = 0.25;
+        assert_eq!(
+            sim.hash(),
+            ordinary,
+            "a provider-free sim keeps its historical stream"
+        );
+        let first = frames.frame(sim.vehicle(vehicle).unwrap(), 0).unwrap();
+        sim.hero_rider_frames = Some(frames.clone());
+        let hashed = sim.hash();
+        let mut old_walker_hash = Vec::new();
+        sim.vehicle(vehicle)
+            .unwrap()
+            .walker
+            .hash_into(&mut |b| old_walker_hash.extend_from_slice(b));
+        sim.vehicle_mut(vehicle).unwrap().walker.layer_blend[0] = -0.75;
+        let second = frames.frame(sim.vehicle(vehicle).unwrap(), 0).unwrap();
+        assert_ne!(
+            first.to_cols_array(),
+            second.to_cols_array(),
+            "the omitted history really moves the physical node"
+        );
+        let mut unchanged_old_walker_hash = Vec::new();
+        sim.vehicle(vehicle)
+            .unwrap()
+            .walker
+            .hash_into(&mut |b| unchanged_old_walker_hash.extend_from_slice(b));
+        assert_eq!(
+            old_walker_hash, unchanged_old_walker_hash,
+            "negative control: the old walker hash omits the layer"
+        );
+        assert_ne!(
+            sim.hash(),
+            hashed,
+            "the new physical consumer must hash that history"
+        );
+        sim.hero_rider_frames = None;
+        assert_eq!(sim.hash(), ordinary);
+    }
+
+    #[test]
+    fn portable_seat_nodes_match_actual_baked_walker_drawing_at_fractional_phases() {
+        let root = crate::assets::baked_root();
+        let path = root.join("bf2_hot1/manifest.ron");
+        if !path.is_file() {
+            eprintln!("SKIP: actual BF2 Hoth manifest and walker bakes required");
+            return;
+        }
+        let manifest: manifest::Manifest =
+            ron::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let db = crate::roster::load_classdb(
+            &root.join("classes"),
+            "bf2",
+            &["all", "imp", "rep", "cis"],
+        )
+        .unwrap();
+        let names: Vec<_> = db
+            .names()
+            .filter(|name| db.engine_base(name) == Some("walker"))
+            .map(str::to_owned)
+            .collect();
+        let geometry: Vec<_> = names
+            .iter()
+            .map(|name| db.prop(name, "GeometryName").map(str::to_owned))
+            .collect();
+        let rigs = crate::viewer::vehicles::walker_rigs(&manifest, &root, &geometry);
+        let mut nodes = 0;
+        let mut node_classes = Vec::new();
+        let mut samples = 0;
+        for (name, rig) in names.iter().zip(rigs) {
+            let Some(rig) = rig else { continue };
+            for seat in crate::vehicle_class::seats(&db, name) {
+                let Some(node) = seat.animated_pilot_position else {
+                    continue;
+                };
+                nodes += 1;
+                node_classes.push(name.as_str());
+                for anim in 0..rig.entries.len() {
+                    for time in [0.0, 1.0 / 60.0, 0.173, 0.41] {
+                        let (s, c) = core::fmath::sin_cos(0.23);
+                        let state = WalkerState {
+                            anim: anim as u8,
+                            clip_time: time,
+                            h: (c, s),
+                            pitch: -0.11,
+                            roll: (c, s),
+                            layer_blend: [0.37; core::vehicle::walker::MAX_PAIRS],
+                            ..Default::default()
+                        };
+                        let actual = rig.node_for_sim(&state, 1.17, &node).unwrap();
+                        let repeat = rig.node_for_sim(&state, 1.17, &node).unwrap();
+                        assert_eq!(
+                            actual.to_cols_array().map(f32::to_bits),
+                            repeat.to_cols_array().map(f32::to_bits)
+                        );
+                        let n = rig.skeleton.index_of(&node).unwrap();
+                        let drawn = rig.palette(&state, 1.17)[n] * rig.skeleton.global_bind[n];
+                        let error = actual
+                            .to_cols_array()
+                            .into_iter()
+                            .zip(drawn.to_cols_array())
+                            .map(|(a, b)| (a - b).abs())
+                            .fold(0.0f32, f32::max);
+                        assert!(
+                            error < 0.002,
+                            "{name}/{node} anim{anim} time{time}: {error}"
+                        );
+                        samples += 1;
+                    }
+                }
+            }
+        }
+        node_classes.sort_unstable();
+        assert_eq!(node_classes, ["all_walk_tauntaun", "rep_walk_oneman_atst"]);
+        // Each of the two original banks has eleven table entries.
+        assert_eq!(samples, 2 * 11 * 4);
+        eprintln!("actual portable seat nodes{nodes}, samples{samples}");
     }
 }

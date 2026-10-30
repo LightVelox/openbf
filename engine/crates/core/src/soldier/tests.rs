@@ -3,6 +3,7 @@ use super::*;
 
 mod jet;
 mod juni;
+mod motion;
 mod prone_tap;
 
 const DT: f32 = 1.0 / 30.0;

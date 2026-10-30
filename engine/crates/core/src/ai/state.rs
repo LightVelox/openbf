@@ -345,6 +345,7 @@ pub struct AiState {
     pub last_think: u64,
     pub wake: u8,
     pub items: super::items::ItemSeek,
+    pub melee: Option<super::melee::MeleeBrain>,
     pub target_cp: Option<u32>,
     /// The squad this unit is in (Phase B): the key of the objective it shares
     /// with at least one other unit of its team within
@@ -1545,6 +1546,7 @@ impl Default for AiState {
             last_think: 0,
             wake: 0,
             items: super::items::ItemSeek::default(),
+            melee: None,
             target_cp: None,
             squad: None,
             cmd: None,
@@ -1593,6 +1595,9 @@ impl Default for AiState {
 
 impl AiState {
     pub fn hash_into(&self, eat: &mut impl FnMut(&[u8])) {
+        if let Some(melee) = &self.melee {
+            melee.hash_into(eat);
+        }
         self.items.hash_into(eat);
         eat(&self.target_cp.unwrap_or(u32::MAX).to_le_bytes());
         match self.target {
@@ -1603,6 +1608,10 @@ impl AiState {
             }
             Some(crate::perception::Foe::Droid(id)) => {
                 eat(&[2]);
+                eat(&id.to_le_bytes());
+            }
+            Some(crate::perception::Foe::Turret(id)) => {
+                eat(&[3]);
                 eat(&id.to_le_bytes());
             }
             None => eat(&[0]),

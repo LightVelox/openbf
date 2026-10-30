@@ -247,9 +247,14 @@ Inputs: dt, the AI object, the aim controller at `soldier+0x580`, the current ai
    (§4.1). `weapon+0x138` scales the AI distance table in `GetYawSpread` (re-blaster-damage §4.3).
 3. If the angle to the target exceeds 30° (`FUN_0052a688` = cosf(π/6)) the current direction is
    rotated 30° toward it (`FUN_0053adf0(±π/6)`).
-4. Otherwise a second-order tracker: aim velocity `v` (aimctl+0xc0) gets
-   `a = (target − dir)/dt − v·B`, `|a|` clamped to A, `dir += v·dt` — A and B from §4.1, both
-   halved when the weapon is not a WeaponCannon (`DAT_00699ec8`).
+4. Then (in the same call, also after a step-3 slew, which zeroes `v` first) a second-order
+   tracker: aim velocity `v` (aimctl+0xc0) gets `a = clamp_A(((target − dir)/dt − v)/dt) − v·B`
+   (the acceleration that would reach the target next tick, its length clamped to A, THEN the
+   damping subtracted outside the clamp), `v += a·dt`, `dir = unit(dir + v·dt)` — A and B from
+   §4.1, both halved when the weapon is not a WeaponCannon (`DAT_00699ec8`). BF2 decomp lines
+   228922-228983 (the *(decompiler detail omitted)* block), BF1 150727-150786. (Corrected
+   2026-10-30: this step first read `a = (target − dir)/dt − v·B` with the sum clamped, which
+   the port implemented until then.)
 5. The result goes into the shared aim-point path exactly like the human branch: aim point =
    origin + dir × 200 m (`0x43480000`) → `soldier+0x3d0/+0x3c0` → `FUN_003018b8`.
 

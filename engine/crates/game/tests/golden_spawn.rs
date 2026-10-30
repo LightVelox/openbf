@@ -19,6 +19,8 @@ fn hud() -> ui::hud::HudModel {
         bleed: [0.0; 2],
         hp: 0.0,
         hp_max: 300.0,
+        hero: false,
+        hero_offer: None,
         energy: 100.0,
         energy_max: 100.0,
         weapon: None,
@@ -176,7 +178,7 @@ fn hot1_pages() -> [(&'static str, usize, ui::spawn_draw::SpawnPage); 3] {
                 accept: "Select Character".into(),
                 team: 0,
                 class: 0,
-                classes: 6,
+                classes: (0..6).collect(),
                 // The battle's start: no points, so the officer (8) and
                 // the dark trooper (12) are refused, black at places 0 / 1
                 // as on the PS2's frame (re-spawn-flow §4.3).
@@ -208,6 +210,7 @@ fn hot1_teams() -> [game::walk::TeamTemplate; 2] {
             family: "human".into(),
             root_scale: 1.0,
             banks: Vec::new(),
+            custom: Default::default(),
         },
         ..base.clone()
     })

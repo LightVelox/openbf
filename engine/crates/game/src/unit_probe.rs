@@ -436,6 +436,7 @@ impl Probe {
                 .and_then(|t| match t {
                     Foe::Unit(h) => sim.unit(h).map(|o| o.soldier.pos),
                     Foe::Droid(id) => sim.live_droid(id).map(|d| d.pos),
+                    Foe::Turret(id) => sim.live_turret(id).map(|t| t.centre()),
                 })
                 .map_or(-1.0, |t| t.distance(p)),
             target_droid: u.ai.target.and_then(|t| t.droid()),

@@ -1,6 +1,6 @@
 use super::*;
 use crate::fx::Library;
-use core::sim::Burn;
+use core::hero_weapon::Burn;
 use core::unit::UnitSpec;
 use core::weapon::{BurnClass, EmitterOrdnance, WeaponClass};
 
@@ -93,9 +93,10 @@ fn a_burning_soldier_wears_one_effect_per_slot_until_the_burn_ends() {
     fx.ingest_sim(&sim);
     assert!(fx.burns().is_empty());
     sim.units[h.index as usize].burn = Some(Burn {
-        timer: 5.0,
-        rate: 50.0,
-        by: shooter,
+        left: 5.0,
+        damage_per_second: 50.0,
+        owner: shooter,
+        team: 0,
         weapon_class: class,
     });
     fx.ingest_sim(&sim);

@@ -21,10 +21,11 @@
 
 use anyhow::{anyhow, Result};
 use manifest::{
-    FxBeam, FxBlend, FxColorNode, FxColorOp, FxEffect, FxEmitter, FxGeometry, FxPositionNode,
-    FxPositionOp, FxRange, FxScalarNode, FxScalarOp, FxSet, FxShape, FxSpawner, FxTransformer,
-    FxType,
+    FxBeam, FxBlend, FxColorNode, FxColorOp, FxEffect, FxEmitter, FxGeometry, FxLightning,
+    FxPositionNode, FxPositionOp, FxRange, FxScalarNode, FxScalarOp, FxSet, FxShape, FxSpawner,
+    FxTransformer, FxType,
 };
+use mungefs::fx::LightningBoltConfig;
 use mungefs::lightbeam::LightBeamConfig;
 use mungefs::particle::{
     BlendMode, ColorMode, ColorOp, Effect, Emitter, GeometryType, PositionOp, Range, ScalarOp,
@@ -51,6 +52,7 @@ pub fn names() -> HashMap<u32, &'static str> {
 pub struct Collected {
     pub effects: Vec<Effect>,
     pub beams: Vec<LightBeamConfig>,
+    pub lightning: Vec<LightningBoltConfig>,
     /// Copies of an already-seen NAME whose tree differs from the first.
     pub differing_copies: Vec<u32>,
 }
@@ -64,6 +66,17 @@ impl Collected {
         for c in chunks {
             if &c.tag != b"fx__" {
                 continue;
+            }
+            for bolt in LightningBoltConfig::parse_all(c)
+                .map_err(|err| anyhow!("fx__ 0x{:X}: {err}", c.offset))?
+            {
+                if !out
+                    .lightning
+                    .iter()
+                    .any(|b| b.name.eq_ignore_ascii_case(&bolt.name))
+                {
+                    out.lightning.push(bolt);
+                }
             }
             if let Some(b) =
                 LightBeamConfig::parse(c).map_err(|err| anyhow!("fx__ 0x{:X}: {err}", c.offset))?
@@ -105,6 +118,14 @@ impl Collected {
                 }
             }
         }
+        for b in &self.lightning {
+            if let Some(t) = &b.texture {
+                let t = t.to_ascii_lowercase();
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
         out
     }
 
@@ -132,7 +153,7 @@ impl Collected {
         have_textures: &[String],
         have_models: &[String],
     ) -> Result<Option<FxSet>> {
-        if self.effects.is_empty() && self.beams.is_empty() {
+        if self.effects.is_empty() && self.beams.is_empty() && self.lightning.is_empty() {
             // A rebake into a used directory must not keep a stale file.
             let _ = std::fs::remove_file(outdir.join(EFFECTS_FILE));
             return Ok(None);
@@ -142,6 +163,7 @@ impl Collected {
             game: game.to_owned(),
             effects: self.effects.iter().map(|e| effect(e, &names)).collect(),
             beams: self.beams.iter().filter_map(beam).collect(),
+            lightning: self.lightning.iter().map(lightning).collect(),
         };
         crate::write_ron(&outdir.join(EFFECTS_FILE), &set)?;
         let emitters: usize = self.effects.iter().map(|e| e.all_emitters().len()).sum();
@@ -152,6 +174,9 @@ impl Collected {
         );
         if !set.beams.is_empty() {
             eprintln!("effects: {} light beam(s)", set.beams.len());
+        }
+        if !set.lightning.is_empty() {
+            eprintln!("effects: {} lightning definition(s)", set.lightning.len());
         }
         for b in self.beams.iter().filter(|b| b.color.is_none()) {
             eprintln!("effects: light beam {} authors no Color, not drawn", b.name);
@@ -191,7 +216,7 @@ pub fn bake_side(lvl_path: &str, outdir: &str, game: &str) -> Result<Option<FxSe
     let inner = mungefs::open(&buf).map_err(|e| anyhow!("{e}"))?;
     let chunks = mungefs::content_chunks(inner).map_err(|e| anyhow!("{e}"))?;
     let fx = Collected::from_chunks(chunks.iter())?;
-    if fx.effects.is_empty() && fx.beams.is_empty() {
+    if fx.effects.is_empty() && fx.beams.is_empty() && fx.lightning.is_empty() {
         eprintln!("effects: {lvl_path} holds no particle effect");
         // As `Collected::write`: no stale file from an earlier bake.
         let _ = std::fs::remove_file(Path::new(outdir).join(EFFECTS_FILE));
@@ -252,6 +277,31 @@ pub fn bake_side(lvl_path: &str, outdir: &str, game: &str) -> Result<Option<FxSe
         .collect();
     let have_textures = crate::soldier::bake_textures_flagged(inner, &wanted, &flags, out, None)?;
     fx.write(out, game, &have_textures, &have_models)
+}
+
+fn lightning(b: &LightningBoltConfig) -> FxLightning {
+    FxLightning {
+        hash: mungefs::fnv1a_lowercase(&b.name),
+        name: b.name.clone(),
+        texture: b.texture.clone(),
+        width: b.width,
+        fade_time: b.fade_time,
+        break_distance: b.break_distance,
+        texture_size: b.texture_size,
+        spread_factor: b.spread_factor,
+        max_branches: b.max_branches,
+        branch_factor: b.branch_factor,
+        branch_spread_factor: b.branch_spread_factor,
+        branch_length: b.branch_length,
+        interpolation_speed: b.interpolation_speed,
+        num_children: b.num_children,
+        child_break_distance: b.child_break_distance,
+        child_texture_size: b.child_texture_size,
+        child_width: b.child_width,
+        child_spread_factor: b.child_spread_factor,
+        color: b.color,
+        child_color: b.child_color,
+    }
 }
 
 fn beam(b: &LightBeamConfig) -> Option<FxBeam> {

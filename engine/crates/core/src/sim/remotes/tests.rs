@@ -1028,6 +1028,7 @@ fn a_seated_gunner_takes_a_droid_without_the_weapon_test() {
     sim.hover_params = vec![Some(crate::vehicle::hover::tests::skiff())];
     sim.seat_setup = vec![Some(SeatSetup {
         radius: 5.0,
+        body_active: vec![],
         boardable: vec![true; 2],
         exit_drop: 10.0,
         ai_size: 1,
@@ -1078,4 +1079,99 @@ fn a_seen_droid_gets_the_sniper_distance_spread() {
         "no distance spread against a seen droid {d:.0} m^2 away: {:?}",
         u.ai.dispersion
     );
+}
+
+fn droid_at(sim: &mut Sim, owner: UnitHandle, weapon: usize, team: u8, pos: Vec3) -> u64 {
+    let remote = sim.weapon_classes[weapon].remote.clone().unwrap();
+    let mut d = crate::remote::Droid::new(
+        77,
+        owner,
+        team,
+        weapon,
+        &remote,
+        pos,
+        Vec3::ZERO,
+        0.0,
+        false,
+    );
+    d.controlled = false;
+    sim.droids.push(d);
+    77
+}
+
+/// The maintainer: "have its name and health show up on the hud and the
+/// reticle change color if you go over it". The pick says enemy or friend;
+/// no magnet comes of it.
+#[test]
+fn a_droid_under_the_reticle_is_picked_with_its_relation_and_no_magnet() {
+    for (team, relation) in [(1, -1), (0, 1)] {
+        let (mut sim, owner, weapon) = setup(true);
+        let eye = sim.unit(owner).unwrap().soldier.pos;
+        let id = droid_at(
+            &mut sim,
+            owner,
+            weapon,
+            team,
+            eye + Vec3::new(0.0, 1.5, -12.0),
+        );
+        sim.step(&[PadState::default()]);
+        assert_eq!(sim.reticle_pick[0], Some((AimTarget::Droid(id), relation)));
+        assert_eq!(sim.magnet[0], None);
+    }
+}
+
+/// Away from the reticle there is no pick.
+#[test]
+fn a_droid_off_the_reticle_is_not_picked() {
+    let (mut sim, owner, weapon) = setup(true);
+    let eye = sim.unit(owner).unwrap().soldier.pos;
+    droid_at(&mut sim, owner, weapon, 1, eye + Vec3::new(9.0, 1.5, -12.0));
+    sim.step(&[PadState::default()]);
+    assert_eq!(sim.reticle_pick[0], None);
+}
+
+/// "yeah don't aim assist remote droids": with the same enemy soldier beside
+/// the reticle and the same sticks, a droid under the reticle moves neither
+/// the stick the assist hands on, nor the yaw, nor the magnet.
+#[test]
+fn a_droid_under_the_reticle_leaves_the_aim_assist_alone() {
+    for (soldier, stick) in [(false, 0.0), (false, 0.3), (true, 0.0), (true, 0.3)] {
+        let run = |with_droid: bool| {
+            let (mut sim, owner, weapon) = setup(true);
+            let eye = sim.unit(owner).unwrap().soldier.pos;
+            if soldier {
+                sim.spawn(&UnitSpec::trooper(1, eye + Vec3::new(0.4, 0.0, -20.0)))
+                    .unwrap();
+            }
+            let at = eye + Vec3::new(0.0, 1.5, -12.0);
+            let mut row = Vec::new();
+            for tick in 0..60 {
+                if with_droid {
+                    sim.droids.clear();
+                    droid_at(&mut sim, owner, weapon, 1, at);
+                    // Unarmed: only the pick may differ between the two runs.
+                    sim.droids[0].age = 0.0;
+                    sim.droids[0].blaster.clip = 0;
+                }
+                sim.step(&[PadState {
+                    rx: PadState::quantize(if tick < 30 { stick } else { 0.0 }),
+                    buttons: buttons::FIRE,
+                    ..Default::default()
+                }]);
+                let u = sim.unit(owner).unwrap();
+                row.push((u.soldier.yaw, u.soldier.pitch, sim.magnet[0]));
+            }
+            (row, sim.reticle_pick[0])
+        };
+        let (with, without) = (run(true), run(false));
+        assert_eq!(with.0, without.0, "soldier={soldier} stick={stick}");
+        if soldier && stick == 0.0 {
+            assert!(
+                without.0.iter().any(|r| r.2.is_some()),
+                "the control has a magnet"
+            );
+        } else if stick == 0.0 {
+            assert_eq!(with.1.map(|p| p.0), Some(AimTarget::Droid(77)));
+        }
+    }
 }

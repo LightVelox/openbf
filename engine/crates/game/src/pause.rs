@@ -49,7 +49,8 @@ pub fn apply_menu_action(
             println!("cheat {id}: {}", walk.sim.cheats.entries()[i].2);
         }
         MenuAction::SetAssist(v) => walk.sim.assist_intensity = v.clamp(0.0, 1.5),
-        MenuAction::SetAiCap(c) => walk.sim.ai_alive_cap = c,
+        MenuAction::SetAiCap(c) => walk.set_team_size_percent(c),
+        MenuAction::SetReinforcements(c) => walk.reinforcement_pct = c.clamp(10, 500),
         MenuAction::SetMusic(v) => {
             if let Some(m) = walk.music.as_mut() {
                 m.volume = v.clamp(crate::music::VOLUME_RANGE.0, crate::music::VOLUME_RANGE.1);

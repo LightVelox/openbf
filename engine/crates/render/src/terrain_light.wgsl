@@ -13,6 +13,9 @@ struct TlParams {
     rects: array<vec4<f32>, 128>,
     // Patch k: up to three light indices, w = how many.
     sel: array<vec4<u32>, 128>,
+    // Union of each consecutive eight rects. No reordering: overlaps still
+    // take the first rectangle. CPU: terrain_light::PATCH_GROUP_SIZE.
+    groups: array<vec4<f32>, 16>,
 };
 @group(1) @binding(0) var t_omni: texture_2d<f32>;
 @group(1) @binding(1) var s_omni: sampler;
@@ -40,11 +43,31 @@ fn vs_terrain_light(in: VsIn) -> VsTlOut {
 fn fs_terrain_light(in: VsTlOut) -> @location(0) vec4<f32> {
     let p = in.world_pos;
     var found = -1;
-    for (var i = 0u; i < tl.counts.y; i++) {
-        let r = tl.rects[i];
-        if p.x >= r.x && p.x < r.z && p.z >= r.y && p.z < r.w {
-            found = i32(i);
-            break;
+    if tl.counts.z == 0u {
+        // Original linear search, retained as a diagnostic reference.
+        for (var i = 0u; i < tl.counts.y; i++) {
+            let r = tl.rects[i];
+            if p.x >= r.x && p.x < r.z && p.z >= r.y && p.z < r.w {
+                found = i32(i);
+                break;
+            }
+        }
+    } else {
+        for (var start = 0u; start < tl.counts.y; start += 8u) {
+            let bound = tl.groups[start / 8u];
+            if !(p.x >= bound.x && p.x < bound.z && p.z >= bound.y && p.z < bound.w) {
+                continue;
+            }
+            for (var i = start; i < min(start + 8u, tl.counts.y); i++) {
+                let r = tl.rects[i];
+                if p.x >= r.x && p.x < r.z && p.z >= r.y && p.z < r.w {
+                    found = i32(i);
+                    break;
+                }
+            }
+            if found >= 0 {
+                break;
+            }
         }
     }
     if found < 0 {

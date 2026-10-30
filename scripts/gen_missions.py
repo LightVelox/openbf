@@ -936,14 +936,16 @@ def facts_from_calls(seq):
          "mus_amb": [], "mus_vic": [], "mus_def": [], "sound": [],
          "shots": [], "ai_view": None, "ai_aggr": {}, "ai_snipe": None,
          "ai_capture": {}, "ai_damage": [], "fly": None,
-         "bird_count": 0, "bird_types": {}}
+         "bird_count": 0, "bird_types": {}, "heroes": {}, "class_load_order": []}
 
     def ti(v):
         return int(v) if isinstance(v, float) and v == int(v) else None
 
     for c in seq:
         a = c.args
-        if c.name == "SetNumBirdTypes" and a and ti(a[0]) is not None:
+        if c.name == "SetHeroClass" and len(a) >= 2 and ti(a[0]) is not None and isinstance(a[1], str):
+            d["heroes"][ti(a[0])] = a[1]
+        elif c.name == "SetNumBirdTypes" and a and ti(a[0]) is not None:
             d["bird_count"] = min(3, max(0, ti(a[0])))
         elif c.name == "SetBirdType" and len(a) >= 3 and ti(a[0]) is not None and isinstance(a[2], str):
             d["bird_types"][ti(a[0])] = (a[1], a[2])
@@ -1076,6 +1078,17 @@ def facts_from_calls(seq):
                 all(isinstance(v, float) for v in a[:7]):
             if len(d["shots"]) < 16:
                 d["shots"].append(tuple(a[:7]))
+        # Preserve SIDE requests independently of SetupTeams and hero/team
+        # order: native shared animation definitions are first-loaded wins.
+        # Keep original spelling and repeated requests, not a sorted roster.
+        elif c.name == "ReadDataFile" and a and isinstance(a[0], str) and \
+                a[0].lower().startswith("side\\"):
+            filename = a[0].split("\\")[-1]
+            if not filename.lower().endswith(".lvl"):
+                raise ValueError("unsupported SIDE filename: %r" % a[0])
+            side = filename[:-4]
+            d["class_load_order"].extend((side, v) for v in a[1:]
+                                         if isinstance(v, str))
         # The sound sub-levels the script loads (card SNDE):
         # ReadDataFile("sound\\kas.lvl;kas2gcw") -> ("kas", "kas2gcw").
         elif c.name == "ReadDataFile" and a and isinstance(a[0], str) and \
@@ -1140,6 +1153,8 @@ def build(key, game, planet, era, pc_stem, ps2_name):
                for i in range((ps2 or {}).get("bird_count", 0))]
     m.sound = (ps2 or {}).get("sound", [])
     m.shots = (ps2 or {}).get("shots", [])
+    m.heroes = sorted((ps2 or {}).get("heroes", {}).items()) if game == "bf2" else []
+    m.class_load_order = (ps2 or {}).get("class_load_order", []) if game == "bf2" else []
     # Card MAIS: the script's AI knobs (the PS2 bytecode only).
     p2 = ps2 or {}
     m.ai_view = p2.get("ai_view")
@@ -1301,6 +1316,13 @@ def ron(m):
     L.append('    map: "%s",' % m.key)
     L.append('    mode: "con",')
     L.append('    source_game: "%s",' % m.game)
+    if m.heroes:
+        L.append('    heroes: [%s],' % ", ".join(
+            '(%d, "%s")' % (t, name) for t, name in m.heroes))
+    if m.game == "bf2":
+        L.append('    class_load_order: [%s],' % ", ".join(
+            '(side: "%s", request: "%s")' % (side, request)
+            for side, request in m.class_load_order))
     L.append("    teams: [")
     for (fac, units, tickets), cls in zip(m.teams, m.classes):
         if not cls:

@@ -49,6 +49,8 @@ pub struct BattleMusic {
     /// One per `player.musics` entry.
     tracks: Vec<MusicTrack>,
     bound: bool,
+    hero_names: [Option<String>; 2],
+    hero_tracks: [Option<usize>; 2],
     /// Seconds of [`BattleMusic::observe`] so far.
     pub clock: f32,
     /// The music volume option ([`VOLUME_RANGE`]).
@@ -67,6 +69,8 @@ impl BattleMusic {
             ambient: Ambient::new(if bf2 { Rule::Bf2 } else { Rule::Bf1 }),
             tracks: Vec::new(),
             bound: false,
+            hero_names: [None, None],
+            hero_tracks: [None, None],
             clock: 0.0,
             volume: DEFAULT_VOLUME,
         }
@@ -77,6 +81,12 @@ impl BattleMusic {
     /// that were not found.
     pub fn bind(&mut self, sounds: &SoundLib) -> Vec<String> {
         self.bind_with(|n| sounds.music(n))
+    }
+
+    /// Each mission team's authored SoldierMusic; registered before binding.
+    pub fn set_hero_music(&mut self, names: [Option<String>; 2]) {
+        self.hero_names = names;
+        self.bound = false;
     }
 
     pub fn bind_with(&mut self, find: impl Fn(&str) -> Option<MusicTrack>) -> Vec<String> {
@@ -119,6 +129,10 @@ impl BattleMusic {
                 }
             }
         }
+        self.hero_tracks = self
+            .hero_names
+            .each_ref()
+            .map(|name| name.as_ref().and_then(|name| index(name, &mut missing)));
         self.player = Player::new(tracks.iter().map(|t| t.def.clone()).collect());
         self.tracks = tracks;
         missing
@@ -202,6 +216,18 @@ impl BattleMusic {
     /// [`BattleMusic::observe`] from the sim.
     pub fn frame(&mut self, sim: &Sim, player: UnitHandle, dt: f32) -> Vec<Change> {
         let me = sim.unit(player);
+        for index in self.hero_tracks.into_iter().flatten() {
+            if let Some(music) = self.player.musics.get_mut(index) {
+                music.wanted = false;
+            }
+        }
+        if sim.outcome.is_none() && sim.is_hero(player) {
+            if let Some(index) = me.and_then(|u| self.hero_tracks[usize::from(u.team.min(1))]) {
+                if let Some(music) = self.player.musics.get_mut(index) {
+                    music.wanted = true;
+                }
+            }
+        }
         // The slot's team, dead or alive: a battle that ends while the
         // player waits to respawn plays HIS team's end music.
         let listener = sim
@@ -381,6 +407,33 @@ mod tests {
         m.player.musics[entry.music].def.takes = vec![8.4, 6.0];
         m.player.musics[entry.music].take = 1;
         assert_eq!(m.end_music_secs(0, 0), Some(6.0));
+    }
+
+    #[test]
+    fn hero_music_follows_the_live_hero_and_releases_its_authored_track_at_death() {
+        use core::{
+            sim::{heroes::Heroes, Sim},
+            unit::UnitSpec,
+        };
+        let mut sim = Sim::empty(1);
+        let hero = sim.spawn(&UnitSpec::player(0, glam::Vec3::ZERO)).unwrap();
+        sim.heroes = Some(Heroes::new([Some(0), None]));
+        let mut m = BattleMusic::new(&MusicCalls::default(), true, [150; 2]);
+        m.set_hero_music([Some("hero_theme".into()), None]);
+        m.bind_with(track);
+        let changes = m.frame(&sim, hero, core::TICK_DT);
+        assert!(changes
+            .iter()
+            .any(|c| matches!(c, Change::Started { music: 0, .. })));
+        assert!(m.player.musics[0].wanted);
+        sim.units[hero.index as usize].alive = false;
+        m.frame(&sim, hero, core::TICK_DT);
+        assert!(!m.player.musics[0].wanted);
+        // Authored minimum playback and fade still own the audible stop.
+        for _ in 0..210 {
+            m.frame(&sim, hero, core::TICK_DT);
+        }
+        assert!(m.player.current().is_none());
     }
 
     fn calls() -> MusicCalls {

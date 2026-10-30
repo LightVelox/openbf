@@ -335,6 +335,8 @@ fn lib() -> SoundLib {
         ambient: HashMap::new(),
         cries: HashMap::new(),
         station_voices: HashMap::new(),
+        hero_voices: HashMap::new(),
+        hero_blades: Vec::new(),
         seed: 0x1234_5678,
         played: 0,
         handed: None,

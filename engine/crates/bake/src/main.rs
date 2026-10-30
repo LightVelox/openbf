@@ -76,6 +76,21 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("extract-iso") if args.len() == 4 => extract_iso(&args[2], &args[3]),
+        Some("heroes") if args.len() == 4 => {
+            let result = bake::heroes::bake_heroes(Path::new(&args[2]), Path::new(&args[3]))?;
+            println!(
+                "baked {} BF2 hero classes: {} bodies, {} weapon/HUD models, {} extra textures",
+                result.heroes.len(),
+                result.soldiers.len(),
+                result.weapons.len(),
+                result.textures.len()
+            );
+            Ok(())
+        }
+        Some("combos") if args.len() == 4 => {
+            bake::combo::bake_combos(&args[2], &args[3])?;
+            Ok(())
+        }
         Some("tex-dump") if args.len() == 4 => tex_dump(&args[2], &args[3]),
         Some("pc-tex") if args.len() == 4 => pc_tex(&args[2], &args[3]),
         Some("soldier") if (5..=7).contains(&args.len()) => {
@@ -90,6 +105,13 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Some("droid-chunks") if args.len() == 6 || args.len() == 7 => bake::droid_chunks::bake(
+            &args[2],
+            &args[3],
+            &args[4],
+            Path::new(&args[5]),
+            args.get(6).map(String::as_str),
+        ),
         Some("weapon") if args.len() == 5 || args.len() == 6 => {
             let pc = args.get(5).map(String::as_str);
             for model in args[3].split(',') {
@@ -318,7 +340,10 @@ fn main() -> Result<()> {
                  \x20 bake tex-dump   <file.lvl>   <outdir>       every tex_ to PNG (mip 0)\n\
                  \x20 bake pc-tex     <file.lvl|-> <outdir>       PC-format textures to KTX2\n\
                  \x20 bake soldier    <side.lvl> <model[,model]> <outdir> [anim.lvl] [pc.lvl]\n\
+                 \x20 bake heroes     <BF2 DATA/_LVL_PS2> <side_bf2 outdir>\n\
+                 \x20 bake combos     <side.lvl> <out.ron>\n\
                  \x20 bake weapon     <side.lvl[,lvl]> <model[,model]> <outdir> [pc.lvl]\n\
+                 \x20 bake droid-chunks <bf1-cis.lvl> <bf2-cis.lvl> <bf1-common.lvl> <outroot> [pc-cis.lvl]\n\
                  \x20 bake vehicle    <side.lvl> <outdir> [pc.lvl]     every vehicle class: models, chunks, collision\n\
                  \x20 bake effects    <side.lvl> <outdir> bf1|bf2   fx__ particle effects + their textures/models\n\
                  \nscripts/rebake.sh runs all of these over the extracted discs."

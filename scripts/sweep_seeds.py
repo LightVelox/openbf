@@ -15,7 +15,8 @@ Each seed keeps its raw output: `sweep_s<seed>.txt` (stdout — byte-identical t
   per map   finish count n/N, the winner split (team 0 / team 1), the median finishing tick, stuck_max min / median / max
             over the seeds, the no-progress units alive at the end (the census's "on one leg" count — what the
             stuck_max footer misses; summed over seeds), and the deaths summed over seeds: kills vs the world (falls,
-            death regions, vehicles, blasts, the kill floor, landings under the map, lost bots, stalled bots) and the
+            death regions, vehicles, blasts, the kill floor, landings under the map, lost bots, stalled bots,
+            confirmed Respawn and hero time exhaustion without a credited attacker) and the
             world's share; `recycled` = the last resort's uses (card RCYC: bots given up for no net progress).
   footer    maps finishing >= 7/8 of the seeds, maps with any stuck_max >= 10,000, all rounds finished, recycles.
   recycles  every recycle by spot (6 m cells) per map, with the seeds, legs and steering — a spot on 2+ seeds is a
@@ -60,12 +61,16 @@ GATES_TOML = os.path.join(MAIN_ROOT, "engine/artifacts/loop/gates.toml")
 NOPROG = re.compile(r"^census (\S+): (\d+) alive units on one leg")
 # Since KFLR (2026-10-01) each team's row may carry three more causes: floor (the kill floor), under (a landing under
 # the map) and lost (a bot off the playable level with no way back), and since RCYC a ninth: stalled (a bot given up
-# for no net progress). Older runs' rows have five or eight.
+# for no net progress). Hero health adds suicide and hero_exhausted. Preserve
+# the historical five/eight/nine-cause rows by padding their missing counters.
 _TEAM = (r"kill (\d+) region (\d+) fall (\d+) vehicle (\d+) blast (\d+)"
-         r"(?: floor (\d+) under (\d+) lost (\d+))?(?: stalled (\d+))?")
+         r"(?: floor (\d+) under (\d+) lost (\d+))?(?: stalled (\d+))?"
+         r"(?: suicide (\d+) hero_exhausted (\d+))?")
 DEATHS = re.compile(r"^deaths (\S+): team0 " + _TEAM + r" \| team1 " + _TEAM)
-NCAUSE = 9
-STALLED = NCAUSE - 1
+DEATH_CAUSES = ("kill", "region", "fall", "veh", "blast", "floor", "under", "lost", "stalled",
+                "suicide", "hero_exhausted")
+NCAUSE = len(DEATH_CAUSES)
+STALLED = DEATH_CAUSES.index("stalled")
 RECYCLE = re.compile(r"^recycle (\S+): seed (\d+) tick (\d+) unit (\d+) gen (\d+) team (\d+) class (\d+) "
                      r"pos \(([-\d.]+),([-\d.]+),([-\d.]+)\) leg (.*?)(?: wp (\S+))? locus (\S+) floor_dy (\S+) steer (.*?) objective (.*)$")
 # Card STLVL: the same recycle against the leg hub's RESOLVED floor (`floor_dy` reads a roof as the floor).
@@ -94,11 +99,18 @@ def lower_median(v):
     return v[(len(v) - 1) // 2] if v else None
 
 
+# round_to_outcome per-map detail lines, never map rows.
+DETAIL_TAGS = ("setup", "opening", "timing")
+
+
 def parse_stdout(path):
-    """{map: dict(finished, winner, tick, stuck_max, line)} for every result row (map rows start in column 0)."""
+    """{map: dict(finished, winner, tick, stuck_max, line)} for every result row (map rows start in column 0).
+
+    Per-map detail lines (setup / opening / timing) are indented; older builds printed them in column 0, so
+    those tags are skipped too."""
     rows = {}
     for line in open(path, errors="replace").read().splitlines():
-        if not line or line[0].isspace() or line.startswith("sweep:"):
+        if not line or line[0].isspace() or line.startswith("sweep:") or line.split()[0] in DETAIL_TAGS:
             continue
         key = line.split()[0]
         m = re.search(r"team (\d+) wins at tick (\d+)", line)
@@ -109,7 +121,7 @@ def parse_stdout(path):
 
 
 def parse_stderr(path):
-    """{map: dict(noprog, deaths=[kill, region, fall, vehicle, blast] summed over both teams)}"""
+    """{map: dict(noprog, deaths in DEATH_CAUSES order, summed over both teams)}"""
     out = {}
     if not os.path.exists(path):
         return out
@@ -200,7 +212,7 @@ def fmt_deaths(d):
         return "-", "-", "-"
     env = sum(d[1:])
     tot = d[0] + env
-    parts = [f"{n} {lab}" for n, lab in zip(d[1:], ("region", "fall", "veh", "blast", "floor", "under", "lost", "stalled")) if n]
+    parts = [f"{n} {lab}" for n, lab in zip(d[1:], DEATH_CAUSES[1:]) if n]
     return str(d[0]), f"{env}" + (f" ({', '.join(parts)})" if parts else ""), f"{100 * env / tot:.0f} %" if tot else "-"
 
 
@@ -513,7 +525,8 @@ def main():
             rc = 2
     L += ["", "## Per map", ""] + table(stats, len(seeds), base)
     L += ["", "Deaths are summed over the seeds and both teams: kills = `Event::Kill`, world = `Event::EnvDeath` "
-          "(region / fall / veh = a destroyed vehicle's rider / blast = an attackerless blast / stalled = recycled). "
+          "(region / fall / veh = a destroyed vehicle's rider / blast = an attackerless blast / stalled = recycled / "
+          "suicide = confirmed Respawn / hero_exhausted = hero time drain with no credited attacker). "
           "noprog = alive units on one leg >= NO_PROGRESS_TICKS at the round's end, summed over the seeds; recycled = "
           "bots the last resort gave up, summed over the seeds."]
     L += ["", "## Recycles", ""] + recycle_section(stats)
