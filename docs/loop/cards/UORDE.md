@@ -8,10 +8,10 @@ status: blocked
 deps:
 files: engine/crates/core/src/weapon.rs, engine/crates/core/src/weapon/emitter.rs, engine/crates/core/src/emitter.rs, engine/crates/core/src/sim/emitter.rs, engine/crates/core/src/sim/ordnance.rs, engine/crates/core/src/sim/state.rs, engine/crates/core/src/sim/guns.rs, engine/crates/game/src/roster.rs, engine/crates/game/src/fx.rs, engine/crates/game/src/fx/arc.rs
 declares: sim; sweep; arena
-needs: the H2 PS2 checks (lead_tmp/uord/helpers/H2_emitter.md) and an 8 x 32 sweep 256 / 256; the burn / deflection / buff keys are uncracked
+needs: the H2 PS2 checks (lead_tmp/uord/helpers/H2_emitter.md) and an 8 x 32 sweep 256 / 256; the deflection / buff keys are uncracked (burn traced 2026-10-30)
 effort:
 branch: uord-missiles
-resume: 2026-10-30: implementation LANDED on branch uord-missiles (70da755 + uncommitted tree) - the emitterordnance class, the BF1 / BF2 query law, the soldier_shots dispatch, one Event::Emitter per link and the lightning-arc renderer, with 22 core tests and the game arc test. Status stays blocked: burn / deflection / per-hit buffs / pull have no RE model, the flamethrowers' flame and the burn bone effects are not drawn, and the mutation check and the 8 x 32 sweep are not run. Restore the H2 checks first; the PS2-side files are absent (Test-Path false).
+resume: 2026-10-30: implementation LANDED on branch uord-missiles (70da755 + uncommitted tree) - the emitterordnance class, the BF1 / BF2 query law, the soldier_shots dispatch, one Event::Emitter per link and the lightning-arc renderer, with 22 core tests and the game arc test. Burn (traced in the BF2 decomp), the shot flame effect and the burn bone effects landed later the same day. Status stays blocked: deflection / per-hit buffs / pull have no RE model, and the mutation check and the 8 x 32 sweep are not run. Restore the H2 checks first; the PS2-side files are absent (Test-Path false).
 created: 2026-10-22
 ---
 ## Why
@@ -71,21 +71,50 @@ An `emitterordnance` class is now one instant query per shot, not a bolt. Line n
   emitter_links_draw_their_lightning` -> 1 passed, 0 failed (576 filtered): two links become two arcs, a class
   with no `LightningEffect` starts none, and the arc is gone at tick 23 after its 18 (`fx.rs:2042-2079`).
 
+## Burn, the shot effect and the burn bone effects (2026-10-30, traced in the BF2 decomp)
+The keys were in `analysis/SWBFRNT2.ELF-decomp.c` all along: the emitter class setter `FUN_003156e0`
+(B2:293400-293680) parses them, the create slot `FUN_00315f78` uses them, the soldier keeps the burn.
+- **Class keys** (names untraced, hashes and slots read from the setter; ctor `FUN_003153a8` zeroes the floats):
+  `0x6824f471` burn time -> class+0x130; `0x1076dfd6` burn rate -> class+0x160; `0x6cf895fb` a bone and
+  `0x592fb160` an effect, each appended to its own 5-slot array (+0x138 / +0x14c); `0xc0e20834` an effect
+  name -> class+0x12c; `0x348506dc` a bool -> class+0x134 bit 0 (copied to the soldier's +0x1060 bit 0; no
+  reader found, not ported). Disc values: hero flamethrowers 5.0 s, 50.0/s, fire on ribcage / head / pelvis,
+  effect `com_sfx_weap_flamethrower_ord`; incinerator 1.5 s, no rate (0), disintegrate on both forearms,
+  effect `com_sfx_weap_incinerate_ord`.
+- **The hit** (`FUN_00315f78` B2:294190-294207, the same block at each of its three hit sites): when the hit's
+  damage > 0, the body is a soldier (vtable type `DAT_00689828`) and burn time > 0, the five (bone, effect)
+  slots are written onto the soldier (`FUN_00236f38`) and `FUN_00236e28` sets timer = max(timer, T), stops
+  the running burn effects, OVERWRITES the rate and copies the hit's damage desc (the attacker).
+- **The update** (`FUN_00236f50`, from the soldier updates `FUN_00240bf8` / `FUN_0024de60`): while alive,
+  timer -= dt (floor 0); while > 0 and rate != 0, rate x dt with all nine scales 1.0 through the stored desc;
+  each slot's effect runs at its bone (`FUN_00237170`); at 0 the effects stop.
+- **The port**: `EmitterOrdnance::{effect, burn}` (`core/src/weapon/emitter.rs`, `BurnClass`), loaded with
+  repeated keys through `PropSource::prop_hash_all` (`ClassDb::props_all_hash`); `Unit::burn`
+  (`core/src/sim/burn.rs`, hashed only while it runs) set by `Sim::ignite` from `fire_emitter` before the
+  hit's damage (BF2 rules, not a droideka), ticked by `Sim::tick_burns` after `tick_buffs` (step 5c), the
+  kill credited to the shooter, no `Event::Hit` per tick (the poison precedent). The draw: `fx/flame.rs`
+  starts the class's effect at each `Event::Shot`'s muzzle facing the shot, and keeps one effect per burn
+  slot on the drawn bone (`SoldierVisuals::burn_frames`; body + 1 m when undrawn), stopped when the burn
+  ends, the soldier dies or the class changes.
+- **Deviation, named**: the PS2 restarts the burn effects at every hit; the port restarts them only when the
+  burning class changes (a flamethrower's stream would otherwise restart them ten times a second).
+- **Tests, run 2026-10-30** from `engine/`: `cargo test -p core --lib burn` -> 8 passed (50/s for 5 s after a
+  15 hit, max timer and overwritten rate, the incinerator's no-damage mark, BF1 / no-burn classes set none,
+  the burn kill credited with no per-tick `Hit`, the hash only while it runs, the loader for both disc
+  classes); `cargo test -p game --lib flame` -> 2 passed (the shot effect along the shot; one bone effect
+  per slot that follows, stops at the end and at death).
+
+## Miss lightning (2026-10-30)
+- An emitter whose query struck nothing still draws its lightning: BF1 one bolt (B1:199011), BF2 NumBolts
+  (0x63384b21, ctor 1) less the hits, from the muzzle to the aim ray's end within ConeLength, stopped by terrain and
+  the world (`sim/emitter.rs`, `perception::reach`). The dark trooper's arc caster is seen on every shot.
+
 ## What is deferred (not built, with the reason)
-- **Burn over time** (BF2's soldier timer = `max(timer, T)`, then `rate x dt` per update while alive, doc §8):
-  the ODF burn keys are uncracked in the RE text. §8 states the effect in one line, with no key hashes, no
-  units and no class table, so there is no model to implement against. No soldier burn field exists: `grep -i
-  burn` in `engine/crates/core/src` finds the sticky's fuse (`sticky.rs:253`, ticked at `sim/ordnance.rs:423`)
-  and no soldier or emitter burn.
 - **Deflection, per-hit buffs, Force push / pull**: §8 names each in a clause - "deflection by the target's
   weapon", "pull (Push < 0)", "buffs" - with no key, unit or class table, and the impact section's deflector
   vcall (+0xd0 / +0xdc, §3.2) is the impact handler's, not the emitter's. No code models them: `kick_and_push`
   returns on `push <= 0.0` (`sim/blast.rs:311`), so a negative `Push` (a pull) does nothing; the zero-damage
   (Force push / pull) emitter is kept on the bolt path (`sim/ordnance.rs:192-199`).
-- **The flame and the burn bone effects**: not started. The arc renderer covers a class that names a
-  `LightningEffect`; an emitter that names none (the incinerator, the hero flamethrowers) draws no effect, and
-  no code draws the burn bone effects (the only `burn` in `engine/crates/core/src` is the sticky's fuse,
-  `sticky.rs:253`).
 
 ## Evidence (2026-10-30)
 - Source: the files and lines above; the test runs quoted above (`22 passed, 0 failed` in core; `1 passed` in
@@ -96,5 +125,5 @@ An `emitterordnance` class is now one instant query per shot, not a bolt. Line n
   checked against the doc's text (`analysis/re-ordnance-kinds.md` §8) only.
 - Mutation check (the card's "mutation-checked" clause): NOT RUN. `lead_tmp/audit-uord/mut/M1` is false.
 - 8 x 32 sweep 256 / 256: NOT RUN.
-- Status stays `blocked`: the sim build is in, but burn / deflection / buffs / pull, the flame and the two
-  acceptance runs (mutation, sweep) are not.
+- Status stays `blocked`: the sim build, burn and the flame draw are in, but deflection / buffs / pull and
+  the two acceptance runs (mutation, sweep) are not.

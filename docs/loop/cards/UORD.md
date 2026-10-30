@@ -168,12 +168,19 @@ code, not acceptance: the card's replay criterion is still open (below).
   bot locking its combat target with no magnet and no cone; a vehicle target homed on its aim-sphere centre, not
   its origin (`sim/missiles/tests.rs:139-493`).
 
+## Every non-hero weapon draws and strikes (2026-10-30, after the maintainer's report)
+- Secondaries: every `SecondaryOrdnanceName` class is registered and spawned on rounds 1, 1 + period, ... (PS2
+  `FUN_0032f208`), with its own kind and the primary's charge: the sonic blaster's `fatray` blast (trail
+  `imp_sfx_weap_sonicblast_ord`) and the geonosian turret's hidden bolt now fly.
+- `fatray` (`sim/fatray.rs`): the PS2 sweep, piercing, falloff by distance from the line, damage floor.
+- `beam` (`sim/beam.rs`): the BF2 award sniper rifles and the vehicle beams follow the fire point for their
+  LifeSpan, cast Range each tick, spread their damage over the life, and draw as a ribbon (`bolt_vis::beam_draw`).
+- A bullet-family round with a GeometryName draws as its model (B1 `FUN_00277130`): the BF1 jet trooper's rocket.
+- RE: `analysis/re-ordnance-kinds.md` §7 and §9b.
+
 ## What is deferred (not built, with the reason)
-- **Burn over time** (BF2's soldier timer = `max(timer, T)`, then `rate x dt` per update while alive, doc §8):
-  the ODF burn keys are uncracked in the RE text. §8 states the effect in one line, with no key hashes, no units
-  and no class table, so there is no model to implement against. No soldier burn field exists: `grep -i burn` in
-  `engine/crates/core/src` finds the sticky's fuse (`sticky.rs:253`, ticked at `sim/ordnance.rs:423`) and no
-  soldier or emitter burn.
+- **Burn over time**: built 2026-10-30 from the BF2 decomp (`FUN_003156e0` keys, `FUN_00236e28` /
+  `FUN_00236f50`); see card UORDE's "Burn, the shot effect and the burn bone effects".
 - **Deflection, per-hit buffs, Force push / pull**: §8 names each in a clause - "deflection by the target's
   weapon", "pull (Push < 0)", "buffs" - with no key, unit or class table, and no code models them. `kick_and_push`
   returns on `push <= 0.0` (`engine/crates/core/src/sim/blast.rs:311`), so a negative `Push` (a pull) does

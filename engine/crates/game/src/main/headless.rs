@@ -291,6 +291,7 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
             Event::BoltExpired { struck, .. } => format!("{tick},expire,,,{}\n", *struck as u8),
             // Render-only, and the expire / hit line already records it.
             Event::Impact { .. } => continue,
+            Event::Blast { .. } => continue,
             // HUD-only (the reticle mark); the hit line records the hit.
             Event::CriticalHit { .. } => continue,
             Event::Despawn { unit } => format!("{tick},despawn,{},,\n", unit.index),
@@ -669,6 +670,7 @@ pub(super) fn run_headless(v: &ViewerArgs) -> Result<()> {
             frame.fx.set_repair_origins(&fire_points);
             frame.bolts.set_fire_points(fire_points);
             frame.fx.set_jet_frames(frame.vis.jet_frames(&walk));
+            frame.fx.set_burn_frames(frame.vis.burn_frames(&walk));
             frame.fx.update(core::TICK_DT);
             if let Some(w) = frame.weather.as_mut() {
                 w.update(core::TICK_DT);

@@ -86,6 +86,7 @@ pub struct Bolt {
     /// A `missile` round's steering state (card UORD,
     /// [`crate::missile::Missile`]): `None` on every other ordnance.
     pub missile: Option<crate::missile::Missile>,
+    pub fat: Option<f32>,
 }
 
 /// Who fired (carried by the bolt for damage attribution + friendly fire).
@@ -99,6 +100,15 @@ pub struct Shooter {
 }
 
 impl Bolt {
+    pub fn shooter(&self) -> Shooter {
+        Shooter {
+            owner: self.owner,
+            team: self.team,
+            weapon_class: self.weapon_class,
+            is_player: self.shooter_is_player,
+        }
+    }
+
     /// Bit-exact replay state (card HASH). Hit variants have distinct tags;
     /// historical handles retain their generations after slot reuse.
     pub(crate) fn hash_into(&self, eat: &mut impl FnMut(&[u8])) {
@@ -216,6 +226,10 @@ impl Bolt {
                     eat(&h.gen.to_le_bytes());
                 }
             }
+        }
+        if let Some(damage) = self.fat {
+            eat(b"FAT");
+            eat(&damage.to_bits().to_le_bytes());
         }
     }
 
@@ -390,6 +404,7 @@ impl Bolt {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         }
     }
 

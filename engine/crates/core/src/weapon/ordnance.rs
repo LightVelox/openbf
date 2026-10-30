@@ -79,6 +79,8 @@ pub struct OrdnanceClass {
     /// [`crate::missile::MissileClass`]); `None` for every other base. Filled
     /// by the class loader.
     pub missile: Option<crate::missile::MissileClass>,
+    pub fat_ray: Option<super::FatRayClass>,
+    pub beam: Option<super::BeamClass>,
 }
 
 impl Default for OrdnanceClass {
@@ -106,6 +108,8 @@ impl Default for OrdnanceClass {
             knots: Vec::new(),
             min_damage: None,
             missile: None,
+            fat_ray: None,
+            beam: None,
         }
     }
 }

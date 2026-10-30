@@ -65,6 +65,9 @@ pub const FIRE_EPS: f32 = 3.051_757_8e-5;
 pub trait PropSource {
     fn prop(&self, key: &str) -> Option<&str>;
     fn prop_hash(&self, hash: u32) -> Option<&str>;
+    fn prop_hash_all(&self, hash: u32) -> Vec<&str> {
+        self.prop_hash(hash).into_iter().collect()
+    }
 }
 
 pub(crate) fn pf(src: &dyn PropSource, key: &str) -> Option<f32> {
@@ -93,13 +96,19 @@ pub fn floats<const N: usize>(v: &str) -> Option<[f32; N]> {
 }
 
 mod ability;
+mod beam;
 mod dispenser;
 mod emitter;
+mod fatray;
 mod ordnance;
 mod repair;
+#[cfg(test)]
+mod test_props;
 pub use ability::Ability;
+pub use beam::BeamClass;
 pub use dispenser::Dispenser;
-pub use emitter::EmitterOrdnance;
+pub use emitter::{BurnClass, EmitterOrdnance, BURN_SLOTS};
+pub use fatray::FatRayClass;
 pub use ordnance::{
     blast_falloff, DamageDesc, ExplosionClass, Falloff, Health, HealthType, OrdBlend, OrdKind,
     OrdKnot, OrdnanceClass, EXPLOSION_OFFSET, HASH_FALLOFF_DURATION, HASH_FALLOFF_END_DAMAGE,
@@ -164,12 +173,9 @@ pub struct Secondary {
 
 impl Secondary {
     /// Does round `n` (1-based: the weapon's rounds fired since it was made)
-    /// carry the secondary? The note's "every Nth shot" (a chaingun's tracer
-    /// every 5th, B2:324171-324181) says nothing about the first round or a
-    /// reset, so the port counts from 1 and spawns on each multiple of
-    /// `period`: the 5th, 10th, ... with a period of 5.
+    /// carry the secondary?
     pub fn on_round(&self, n: u32) -> bool {
-        self.period > 0 && n.is_multiple_of(self.period)
+        self.period > 0 && n >= 1 && (n - 1).is_multiple_of(self.period)
     }
 }
 
@@ -625,6 +631,8 @@ impl WeaponClass {
                 knots: Vec::new(),
                 min_damage: None,
                 missile: None,
+                fat_ray: None,
+                beam: None,
                 impact: Some(crate::impact::ImpactLook {
                     soft: Some("ord_explosion".into()),
                     rigid: Some("ord_explosion".into()),
@@ -719,6 +727,8 @@ impl WeaponClass {
                 knots: Vec::new(),
                 min_damage: None,
                 missile: None,
+                fat_ray: None,
+                beam: None,
                 impact: Some(crate::impact::ImpactLook {
                     soft: Some("com_sfx_ord_exp".into()),
                     rigid: Some("com_sfx_ord_exp".into()),
@@ -1241,6 +1251,11 @@ pub struct WeaponState {
 }
 
 impl WeaponState {
+    pub fn count_secondary_round(&mut self) -> u32 {
+        self.secondary_rounds = self.secondary_rounds.wrapping_add(1);
+        self.secondary_rounds
+    }
+
     /// One loaded clip plus `reserve_clips` spare clips. Zero means no reserve;
     /// use [`Self::with_clips`] for authored totals and an unlimited reserve.
     pub fn new(class: &WeaponClass, human: bool, reserve_clips: u32) -> Self {

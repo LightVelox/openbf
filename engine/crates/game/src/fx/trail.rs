@@ -130,7 +130,7 @@ impl Rounds {
     }
 }
 
-fn along(vel: Vec3) -> Mat3 {
+pub(super) fn along(vel: Vec3) -> Mat3 {
     let z = vel.try_normalize().unwrap_or(Vec3::Z);
     let x = Vec3::Y.cross(z).try_normalize().unwrap_or(Vec3::X);
     Mat3::from_cols(x, z.cross(x), z)
@@ -296,6 +296,7 @@ mod tests {
                 gravity: 0.0,
                 charge: 1.0,
                 missile: None,
+                fat: None,
             };
             let mut second = first.clone();
             second.age = age;
@@ -356,6 +357,7 @@ mod tests {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         };
         let ord = sim.weapon_classes[wc].ordnance.clone();
         let mc = *ord.missile.as_ref().unwrap();

@@ -1,11 +1,11 @@
 //! BF2's secondary ordnance (`analysis/re-ordnance-kinds.md` §7): a weapon's
 //! `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod` (B2:324171-324181) is a
-//! TRACER bolt spawned beside the primary round every `period`-th round - the
+//! round spawned beside the primary round every `period`-th round - the
 //! shotgun's one per pellet, the chaingun's one every 5th shot. The round is a
-//! real [`Bolt`] of its own class (`MaxDamage 0`, its own speed, LifeSpan and
+//! real [`Bolt`] of its own class (its own speed, LifeSpan and
 //! `LaserTexture`), so the drawn streak and the flight both come from the one
 //! object; it flies the primary's ray (the PS2 spawns both from one packet, so
-//! the port draws no extra LCG step) and does no damage.
+//! the port draws no extra LCG step).
 
 use crate::collision::HullFilter;
 use crate::projectile::{Bolt, Hit, Shooter};
@@ -17,22 +17,21 @@ use crate::sim::state::Sim;
 impl Sim {
     /// Spawn the secondary round for round `round` (1-based) of the class at
     /// `stage`, on the primary's `origin` / `dir`. `false` when the class
-    /// carries none, when the round is not its multiple, or when the class is
-    /// not a tracer (a real second round is not modelled yet: the sonic
-    /// blaster's sonic blast).
+    /// carries none or when the round is not its multiple.
     ///
-    /// The bolt is the tracer class's own: its Velocity and LifeSpan, its
-    /// damage (0) and its laser look. The press ray's stop is dropped - the
+    /// The bolt is the secondary class's own: its Velocity and LifeSpan, its
+    /// damage and its laser look. A tracer's press ray stop is dropped - the
     /// round is a drawn line, so it flies its whole reach even through a wall
     /// the primary stopped on - and [`Hit::None`] lets [`Sim::sweep_bolts`]
     /// meet soldiers and hulls on the way.
-    pub(super) fn fire_secondary(
+    pub(in crate::sim) fn fire_secondary(
         &mut self,
         who: Shooter,
         stage: usize,
         round: u32,
         origin: Vec3,
         dir: Vec3,
+        charge: f32,
     ) -> bool {
         let Some(sec) = self.weapon_classes[stage].secondary.as_ref() else {
             return false;
@@ -55,18 +54,21 @@ impl Sim {
             &self.collision,
             HullFilter::Static,
         );
-        bolt.hit = Hit::None;
-        bolt.remaining = ord.life_span;
-        bolt.end = origin + dir * (ord.velocity * ord.life_span);
-        self.bolts.push(bolt);
+        bolt.charge = charge;
+        if ord.is_tracer() {
+            bolt.hit = Hit::None;
+            bolt.remaining = ord.life_span;
+            bolt.end = origin + dir * (ord.velocity * ord.life_span);
+        }
+        self.launch_round(bolt, false);
         true
     }
 }
 
-/// Is `sec` a registered tracer and is `round` its multiple? The whole spawn
+/// Is `sec` registered and is `round` its multiple? The whole spawn
 /// rule in one place.
 fn spawns_secondary(sec: &Secondary, round: u32) -> bool {
-    sec.index != usize::MAX && sec.ordnance.is_tracer() && sec.on_round(round)
+    sec.index != usize::MAX && sec.on_round(round)
 }
 
 #[cfg(test)]
@@ -143,17 +145,16 @@ mod tests {
     }
 
     #[test]
-    fn period_five_rides_only_the_fifth_round() {
+    fn period_five_rides_the_first_and_the_sixth_round() {
         let (mut s, h, gun, tracer) = scene(5, 0.0);
-        // One burst of five rounds: the 5th is the tracer's (the note's
-        // "every 5th shot"; the first four carry none).
         s.soldier_shots(h.index as usize, None, &[shot(); 5]);
         assert_eq!(
             s.bolts.iter().map(|b| b.weapon_class).collect::<Vec<_>>(),
-            vec![gun, gun, gun, gun, gun, tracer]
+            vec![gun, tracer, gun, gun, gun, gun]
         );
         assert_eq!(s.unit(h).unwrap().weapon.secondary_rounds, 5);
-        // The next burst's first round is the 6th of the weapon: no tracer.
+        s.soldier_shots(h.index as usize, None, &[shot()]);
+        assert_eq!(s.bolts.last().map(|b| b.weapon_class), Some(tracer));
         s.soldier_shots(h.index as usize, None, &[shot()]);
         assert_eq!(s.bolts.last().map(|b| b.weapon_class), Some(gun));
     }
@@ -196,18 +197,46 @@ mod tests {
     }
 
     #[test]
-    fn a_real_second_round_is_not_spawned_as_a_tracer() {
-        // The probe droid's sonic blaster names a 100-damage round; the gate
-        // is `is_tracer`, so it must not double that round.
-        let (mut s, h, gun, _) = scene(1, 100.0);
-        assert_eq!(
-            s.weapon_classes[gun].secondary.as_ref().unwrap().index,
-            usize::MAX
+    fn a_fat_ray_second_round_rides_the_primary_with_its_charge() {
+        let mut s = Sim::empty(9);
+        let mut w = gun(1, 100.0);
+        if let Some(sec) = w.secondary.as_mut() {
+            sec.ordnance.fat_ray = Some(crate::weapon::FatRayClass::default());
+        }
+        let gun = s.add_weapon_class(w);
+        let fat = s.weapon_classes[gun].secondary.as_ref().unwrap().index;
+        assert_ne!(fat, usize::MAX);
+        let h = s
+            .spawn(&UnitSpec {
+                weapon_class: gun,
+                ..UnitSpec::player(0, Vec3::ZERO)
+            })
+            .unwrap();
+        s.soldier_shots(
+            h.index as usize,
+            None,
+            &[ShotSpec {
+                charge: 0.5,
+                ..shot()
+            }],
         );
+        assert_eq!(
+            s.bolts.iter().map(|b| b.weapon_class).collect::<Vec<_>>(),
+            vec![gun, fat]
+        );
+        assert_eq!(s.bolts[1].charge, 0.5);
+    }
+
+    #[test]
+    fn a_real_second_round_flies_as_its_own_bolt() {
+        let (mut s, h, gun, round) = scene(1, 100.0);
+        assert_ne!(round, usize::MAX);
+        assert!(!s.weapon_classes[round].ordnance.is_tracer());
         s.soldier_shots(h.index as usize, None, &[shot()]);
         assert_eq!(
             s.bolts.iter().map(|b| b.weapon_class).collect::<Vec<_>>(),
-            vec![gun]
+            vec![gun, round]
         );
+        assert_eq!(s.bolts[1].remaining, s.bolts[0].remaining.min(0.05));
     }
 }

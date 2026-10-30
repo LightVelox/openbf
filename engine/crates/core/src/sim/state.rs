@@ -278,6 +278,10 @@ pub enum Event {
         surface: crate::impact::Surface,
         vehicle: Option<crate::vehicle::VehicleHandle>,
     },
+    Blast {
+        pos: Vec3,
+        weapon_class: u32,
+    },
     /// AI shed by the no-overspawn rule when a player took the last slots
     /// (or bleed dropped the pool below the live count).
     Despawn {
@@ -733,6 +737,7 @@ pub struct Sim {
     /// [`Sim::collision`] follows its hashed pose (`Sim::sync_hulls`).
     pub hull_parts: Vec<Option<std::sync::Arc<[crate::collision::HullPart]>>>,
     pub bolts: Vec<Bolt>,
+    pub beams: Vec<super::Beam>,
     /// The thrown grenades in flight or lying armed (card GREN,
     /// [`crate::sticky`]), in throw order. HASHED when there is one.
     pub stickies: Vec<crate::sticky::Sticky>,
@@ -1283,6 +1288,7 @@ impl Sim {
             slice_time: Vec::new(),
             hull_parts: Vec::new(),
             bolts: Vec::new(),
+            beams: Vec::new(),
             stickies: Vec::new(),
             mines: Vec::new(),
             next_mine_id: 0,
@@ -1387,20 +1393,14 @@ impl Sim {
         if let Some(t) = wc.turret.as_mut() {
             t.item.gun_index = self.item_weapon_class(&t.item.gun);
         }
-        // A secondary ordnance (a BF2 tracer) gets a class entry of its own, so
-        // its bolts carry its own damage (0), LaserTexture and LifeSpan
-        // (`analysis/re-ordnance-kinds.md` §7). Only a TRACER is registered: a
-        // real second round (the sonic blaster's) spawns nothing, so its
-        // `Secondary::index` stays `usize::MAX` and `fire_secondary` skips it.
-        let tracer = wc
-            .secondary
-            .as_ref()
-            .filter(|s| s.ordnance.is_tracer())
-            .map(|sec| WeaponClass {
-                name: sec.name.clone(),
-                ordnance: sec.ordnance.clone(),
-                ..WeaponClass::default()
-            });
+        // A secondary ordnance gets a class entry of its own, so
+        // its bolts carry its own damage, LaserTexture and LifeSpan
+        // (`analysis/re-ordnance-kinds.md` §7).
+        let tracer = wc.secondary.as_ref().map(|sec| WeaponClass {
+            name: sec.name.clone(),
+            ordnance: sec.ordnance.clone(),
+            ..WeaponClass::default()
+        });
         if let Some(tracer) = tracer {
             let index = self.add_weapon_class(tracer);
             if let Some(sec) = wc.secondary.as_mut() {
@@ -1734,6 +1734,13 @@ impl Sim {
             eat(b"BOLTS");
             eat(&(self.bolts.len() as u64).to_le_bytes());
             for b in &self.bolts {
+                b.hash_into(&mut eat);
+            }
+        }
+        if !self.beams.is_empty() {
+            eat(b"BEAMS");
+            eat(&(self.beams.len() as u64).to_le_bytes());
+            for b in &self.beams {
                 b.hash_into(&mut eat);
             }
         }

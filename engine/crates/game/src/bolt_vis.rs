@@ -102,12 +102,10 @@ pub(crate) fn key(b: &core::projectile::Bolt) -> Key {
 /// `bolt` / `laser` alone — but the model is the preferred draw all the same
 /// (the task's order: geometry, then tracer, then nothing).
 fn modelled(walk: &WalkSim, b: &core::projectile::Bolt) -> bool {
-    b.missile.is_some()
-        && walk
-            .sim
-            .weapon_classes
-            .get(b.weapon_class)
-            .is_some_and(|w| w.ordnance.geometry.is_some())
+    walk.sim
+        .weapon_classes
+        .get(b.weapon_class)
+        .is_some_and(|w| w.ordnance.geometry.is_some())
 }
 
 /// The missiles in flight this frame as (their weapon class, the model's
@@ -120,7 +118,7 @@ pub fn missiles_in_flight(walk: &WalkSim) -> Vec<(usize, glam::Mat4)> {
     walk.sim
         .bolts
         .iter()
-        .filter(|b| b.missile.is_some())
+        .filter(|b| modelled(walk, b))
         .filter_map(|b| {
             let dir = b.vel.try_normalize()?;
             Some((
@@ -279,6 +277,21 @@ pub fn bolt_draw(
         core_color: [255, 255, 255, (fade.clamp(0.0, 1.0) * 255.0) as u8],
         glow_color: look.glow_bytes(age, fade),
     }
+}
+
+pub fn beam_draw(
+    look: &LaserLook,
+    beam: &core::sim::Beam,
+    textures: [Option<TextureHandle>; 2],
+) -> BoltDraw {
+    let len = beam.len + 1.0;
+    let look = LaserLook {
+        length: len,
+        glow_length: len,
+        ..look.clone()
+    };
+    let head = beam.origin + beam.dir * (beam.len + 0.5);
+    bolt_draw(&look, head, beam.dir, len, 0.0, 1.0, textures)
 }
 
 /// The texture a `LaserTexture` name draws with (lower-cased, as baked).
@@ -709,6 +722,16 @@ impl BoltVis {
                 .as_deref()
                 .and_then(|n| self.texture(r, &texture_name(n)));
             out.push(bolt_draw(look, head, dir, len, age, fade, [core, glow]));
+        }
+        for beam in &walk.sim.beams {
+            let Some(look) = visual_look(walk, beam.shooter.weapon_class) else {
+                continue;
+            };
+            let core = look
+                .texture
+                .as_deref()
+                .and_then(|n| self.texture(r, &texture_name(n)));
+            out.push(beam_draw(look, beam, [core, glow]));
         }
         out
     }
@@ -1669,6 +1692,7 @@ mod tests {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         };
         let mc = *o.missile.as_ref().unwrap();
         b.as_missile(o, &mc, None, &mut lcg);
@@ -1723,6 +1747,24 @@ mod tests {
     /// still tracks on a class that authored a `LaserLook`, and a stopped
     /// one is not drawn at all.
     #[test]
+    fn a_bullet_with_a_model_draws_as_its_model() {
+        let mut walk = WalkSim::new(42, Vec3::ZERO, None);
+        let (mut w, mut b) = missile_round(5);
+        w.ordnance.missile = None;
+        w.ordnance.geometry = Some("com_weap_missile".into());
+        let class = walk.sim.add_weapon_class(w);
+        b.missile = None;
+        b.weapon_class = class;
+        walk.sim.bolts.push(b);
+        let listed = missiles_in_flight(&walk);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, class);
+        let mut vis = BoltVis::default();
+        vis.update(&walk, core::TICK_DT);
+        assert!(vis.tracked.is_empty());
+    }
+
+    #[test]
     fn a_missile_draws_as_its_model_not_as_a_ribbon() {
         let mut walk = WalkSim::new(42, Vec3::ZERO, None);
         let (mut w, b) = missile_round(5);
@@ -1766,5 +1808,33 @@ mod tests {
             "an authored look is the fallback ribbon"
         );
         assert_eq!(vis.tracked[0].class, class);
+    }
+
+    #[test]
+    fn a_beam_draws_from_its_origin_to_what_it_struck() {
+        let look = core::laser::LaserLook {
+            width: 0.1,
+            ..Default::default()
+        };
+        let beam = core::sim::Beam {
+            shooter: core::projectile::Shooter {
+                owner: core::unit::UnitHandle { index: 0, gen: 0 },
+                team: 0,
+                weapon_class: 0,
+                is_player: true,
+            },
+            hulls: core::collision::HullFilter::All,
+            charge: 1.0,
+            origin: Vec3::new(0.0, 1.0, 0.0),
+            dir: Vec3::X,
+            life: 0.1,
+            len: 40.0,
+            follow: true,
+        };
+        let d = beam_draw(&look, &beam, [None, None]);
+        assert_eq!(d.head, Vec3::new(40.5, 1.0, 0.0));
+        assert_eq!(d.dir, Vec3::X);
+        assert_eq!((d.core_len, d.glow_len), (41.0, 41.0));
+        assert!((d.width - 0.1).abs() < 1e-7);
     }
 }

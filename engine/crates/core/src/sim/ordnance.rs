@@ -140,6 +140,19 @@ impl Sim {
         }
     }
 
+    pub(super) fn shot_frame(&self, i: usize) -> (Vec3, (Vec3, Vec3, Vec3)) {
+        if matches!(self.units[i].controller, Controller::Player { .. }) {
+            self.human_shot(i)
+        } else {
+            (
+                self.units[i]
+                    .droideka_muzzle()
+                    .unwrap_or_else(|| self.units[i].muzzle()),
+                self.units[i].aim_frame(),
+            )
+        }
+    }
+
     pub(super) fn soldier_shots(&mut self, i: usize, held_slot: Option<usize>, shots: &[ShotSpec]) {
         if shots.is_empty() {
             return;
@@ -150,17 +163,7 @@ impl Sim {
         // A human's shot leaves the fire point toward what the reticle's
         // ray hits (card AIMA); a bot's leaves the chest along its aim
         // (card FPNT has the fire point for bots).
-        let (origin, (fwd, right, up)) =
-            if matches!(self.units[i].controller, Controller::Player { .. }) {
-                self.human_shot(i)
-            } else {
-                (
-                    self.units[i]
-                        .droideka_muzzle()
-                        .unwrap_or_else(|| self.units[i].muzzle()),
-                    self.units[i].aim_frame(),
-                )
-            };
+        let (origin, (fwd, right, up)) = self.shot_frame(i);
         let who = Shooter {
             owner: unit,
             team: self.units[i].team,
@@ -231,12 +234,11 @@ impl Sim {
             // the counter is the weapon's rounds and not its trigger pulls.
             let secondary = self.weapon_classes[stage].secondary.is_some();
             let round = if secondary {
-                let st = match held_slot {
+                match held_slot {
                     Some(k) => &mut self.units[i].held[k].state,
                     None => &mut self.units[i].weapon,
-                };
-                st.secondary_rounds = st.secondary_rounds.wrapping_add(1);
-                st.secondary_rounds
+                }
+                .count_secondary_round()
             } else {
                 0
             };
@@ -316,11 +318,11 @@ impl Sim {
                 origin,
                 dir,
             });
-            self.bolts.push(bolt);
+            self.launch_round(bolt, true);
             // The tracer rides the SAME ray the primary round took - it draws
             // no extra LCG step (the PS2 spawns both from one packet).
             if secondary {
-                self.fire_secondary(who, stage, round, origin, dir);
+                self.fire_secondary(who, stage, round, origin, dir, spec.charge);
             }
         }
     }

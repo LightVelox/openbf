@@ -13,6 +13,7 @@ use crate::projectile::{Bolt, Hit, Target};
 use crate::soldier::Stance;
 use crate::unit::{Controller, Unit, UnitHandle};
 use crate::vehicle::VehicleHandle;
+use crate::weapon::DamageDesc;
 use crate::TICK_HZ;
 use glam::Vec3;
 
@@ -42,6 +43,7 @@ impl Sim {
         if self.bolts.is_empty() {
             return;
         }
+        self.sweep_fat_rays(dt);
         type Body = (
             UnitHandle,
             Option<VehicleHandle>,
@@ -68,8 +70,11 @@ impl Sim {
                 (h, u.mount.map(|m| m.vehicle), p, min, max, u.soldier.vel)
             })
             .collect();
-        let (world, bolts) = (&self.collision, &mut self.bolts);
+        let (world, bolts, classes) = (&self.collision, &mut self.bolts, &self.weapon_classes);
         for b in bolts.iter_mut() {
+            if classes[b.weapon_class].ordnance.fat_ray.is_some() {
+                continue;
+            }
             let step = dt.min(b.remaining.max(0.0));
             let speed = b.vel.length();
             if step <= 0.0 || speed <= 0.0 {
@@ -207,9 +212,56 @@ impl Sim {
     /// 3; the port's Hard and Elite - our Normal has the PS2 Elite's base
     /// skill but not its level-3 rules, so it goes without
     /// this). BF1 has no such gate; one rule on both games' maps.
-    fn bolt_spares(&self, b: &Bolt, victim: &Unit) -> bool {
+    pub(super) fn bolt_spares(&self, b: &Bolt, victim: &Unit) -> bool {
         (victim.is_player && self.cheats.invincible)
             || (victim.is_human() && victim.team == b.team && !b.shooter_is_player)
+    }
+
+    pub(super) fn bolt_desc(&self, b: &Bolt) -> DamageDesc {
+        let ord = &self.weapon_classes[b.weapon_class].ordnance;
+        let mut desc = ord.damage_desc_charged(b.age, false, b.charge);
+        if let Some(beam) = &ord.beam {
+            desc.damage *= beam.share(crate::TICK_DT);
+        }
+        desc
+    }
+
+    /// Card DPRX: a proxy is a human victim (no cheats: below).
+    /// A bolt of a unit that is not a human player does nothing to
+    /// a human player of its own team (B1 FUN_001bc190, B2
+    /// FUN_001dfb38: TakeDamage returns before the scale;
+    /// re-blaster-damage.md section 6.3) - as a blast, `blast_unit`.
+    pub(super) fn bolt_strikes_unit(
+        &mut self,
+        b: &Bolt,
+        h: UnitHandle,
+        desc: &DamageDesc,
+        scale: f32,
+    ) -> Option<f32> {
+        let victim = self.unit(h)?;
+        let spared = self.bolt_spares(b, victim);
+        let friendly = victim.team == b.team;
+        let ff = self.friendly_fire_scale;
+        let mult = self.buff_scale(Some(b.owner), h) * scale;
+        let v = self.unit_mut(h)?;
+        let damage = if spared {
+            0.0
+        } else {
+            v.health.take_damage(desc, mult, friendly, ff)
+        };
+        if self
+            .units
+            .get(b.owner.index as usize)
+            .filter(|s| s.gen == b.owner.gen)
+            .is_some_and(|s| s.controller == Controller::Ai)
+        {
+            self.nav_stats.ai_hits += 1;
+        }
+        self.nav_stats.bolt_hits += 1;
+        if friendly && b.owner != h {
+            self.nav_stats.friend_hits += 1;
+        }
+        Some(damage)
     }
 
     fn hit_scale(&self, b: &Bolt) -> f32 {
@@ -236,16 +288,9 @@ impl Sim {
     pub(super) fn resolve_bolt(&mut self, b: &Bolt) {
         match b.hit {
             Hit::Target(Target::Unit(h)) => {
-                let Some(victim) = self.unit(h) else {
+                if self.unit(h).is_none() {
                     return; // died in flight → bolt dies, no impact
-                };
-                let victim_team = victim.team;
-                // Card DPRX: a proxy is a human victim (no cheats: below).
-                // A bolt of a unit that is not a human player does nothing to
-                // a human player of its own team (B1 FUN_001bc190, B2
-                // FUN_001dfb38: TakeDamage returns before the scale;
-                // re-blaster-damage.md section 6.3) - as a blast, `blast_unit`.
-                let invincible = self.bolt_spares(b, victim);
+                }
                 // Card TOKN: a bot without one of this human's tokens aimed
                 // beside him; a bolt that meets him anyway is real (counted).
                 if crate::ai::tokn::bars(self, b.owner, h) {
@@ -257,40 +302,17 @@ impl Sim {
                         self.nav_stats.tokn_cross += 1;
                     }
                 }
-                let desc = self.weapon_classes[b.weapon_class]
-                    .ordnance
-                    .damage_desc_charged(b.age, false, b.charge);
-                let friendly = victim_team == b.team;
-                let ff = self.friendly_fire_scale;
+                let desc = self.bolt_desc(b);
                 // No tier multiplies a bot's bolt into a human (card DRETIRE,
                 // The maintainer 2026-10-28: D12's ×1.15 / ×1.3 retired).
                 let scale = self.hit_scale(b);
-                let critical = scale > 1.0;
-                let mult = self.buff_scale(Some(b.owner), h) * scale;
-                let v = self.unit_mut(h).unwrap();
-                let damage = if invincible {
-                    0.0
-                } else {
-                    v.health.take_damage(&desc, mult, friendly, ff)
-                };
-                if critical && damage > 0.0 {
+                let damage = self.bolt_strikes_unit(b, h, &desc, scale).unwrap_or(0.0);
+                if scale > 1.0 && damage > 0.0 {
                     self.events.push(Event::CriticalHit {
                         shooter: b.owner,
                         victim: Target::Unit(h),
                         weapon_class: b.weapon_class,
                     });
-                }
-                if self
-                    .units
-                    .get(b.owner.index as usize)
-                    .filter(|s| s.gen == b.owner.gen)
-                    .is_some_and(|s| s.controller == Controller::Ai)
-                {
-                    self.nav_stats.ai_hits += 1;
-                }
-                self.nav_stats.bolt_hits += 1;
-                if friendly && b.owner != h {
-                    self.nav_stats.friend_hits += 1;
                 }
                 self.push_impact(b, Surface::Soldier, None);
                 if self.finish_unit_damage(
@@ -319,9 +341,7 @@ impl Sim {
                 } else {
                     1.0
                 };
-                let desc = self.weapon_classes[b.weapon_class]
-                    .ordnance
-                    .damage_desc_charged(b.age, false, b.charge);
+                let desc = self.bolt_desc(b);
                 let dmg = desc.damage * self.buff_scale(Some(b.owner), h) * ff;
                 let tick = self.tick;
                 if let Some(u) = self.unit_mut(h) {
@@ -359,9 +379,7 @@ impl Sim {
                     } else {
                         Surface::Vehicle
                     };
-                let desc = self.weapon_classes[b.weapon_class]
-                    .ordnance
-                    .damage_desc_charged(b.age, false, b.charge);
+                let desc = self.bolt_desc(b);
                 self.events.push(Event::BoltExpired {
                     pos: b.end,
                     struck: true,
@@ -390,9 +408,7 @@ impl Sim {
             Hit::Target(
                 t @ (Target::Droid(_) | Target::Mine(_) | Target::Turret(_) | Target::Guided(_)),
             ) => {
-                let desc = self.weapon_classes[b.weapon_class]
-                    .ordnance
-                    .damage_desc_charged(b.age, false, b.charge);
+                let desc = self.bolt_desc(b);
                 self.damage_item(t, desc.damage, &desc.scales, Some(b.team));
                 self.events.push(Event::BoltExpired {
                     pos: b.end,
@@ -411,9 +427,7 @@ impl Sim {
                 {
                     return;
                 }
-                let desc = self.weapon_classes[b.weapon_class]
-                    .ordnance
-                    .damage_desc_charged(b.age, false, b.charge);
+                let desc = self.bolt_desc(b);
                 self.events.push(Event::BoltExpired {
                     pos: b.end,
                     struck: true,
@@ -724,6 +738,7 @@ mod tests {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         };
         s.resolve_bolt(&bolt(old));
         assert_eq!(s.nav_stats.ai_hits, 0, "new AI is not the old idle shooter");
@@ -824,6 +839,7 @@ mod tests {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         };
         let hp = |s: &Sim, h: UnitHandle| s.unit(h).unwrap().health.cur;
         s.resolve_bolt(&bolt(bot, human, false));
@@ -873,6 +889,7 @@ mod tests {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         });
         let u = &s.units[v.index as usize];
         assert!(!u.alive && u.body);
@@ -932,6 +949,7 @@ mod tests {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         };
         let world = || {
             let mut s = Sim::empty(3);
@@ -1669,6 +1687,7 @@ mod tests {
                 gravity: 0.0,
                 charge: 1.0,
                 missile: None,
+                fat: None,
             });
             for _ in 0..3 {
                 s.step(&[]);

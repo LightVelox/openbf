@@ -17,6 +17,8 @@
 
 mod mines;
 mod remotes;
+#[cfg(test)]
+mod secondary_tests;
 mod turrets;
 pub use remotes::{BLASTER_HUD, DESTRUCT_HUD};
 
@@ -46,6 +48,9 @@ impl PropSource for ClassSrc<'_> {
     }
     fn prop_hash(&self, hash: u32) -> Option<&str> {
         self.db.prop_hash(self.class, hash)
+    }
+    fn prop_hash_all(&self, hash: u32) -> Vec<&str> {
+        self.db.props_all_hash(self.class, hash)
     }
 }
 
@@ -788,6 +793,33 @@ fn fired_ordnance(db: &ClassDb, ord_name: &str) -> OrdnanceClass {
         m.ramps = db.is_bf2();
         ord.missile = Some(m);
     }
+    if db
+        .engine_base(ord_name)
+        .is_some_and(|b| b.eq_ignore_ascii_case("fatray"))
+    {
+        ord.fat_ray = Some(core::weapon::FatRayClass::from_props(&ClassSrc {
+            db,
+            class: ord_name,
+        }));
+    }
+    if ord.kind == OrdKind::Beam {
+        let beam = core::weapon::BeamClass::from_props(&ClassSrc {
+            db,
+            class: ord_name,
+        });
+        let look = ord.impact.get_or_insert_with(ImpactLook::default);
+        look.terrain = None;
+        look.water = None;
+        for slot in [
+            &mut look.soft,
+            &mut look.rigid,
+            &mut look.building,
+            &mut look.shield,
+        ] {
+            slot.clone_from(&beam.impact);
+        }
+        ord.beam = Some(beam);
+    }
     if ord.kind == OrdKind::Shell {
         // Its fall, and its burst when its life runs out in the air
         // (re-ordnance-kinds §6).
@@ -1194,7 +1226,10 @@ pub fn flash_look(db: &ClassDb, weapon: &str) -> MuzzleFlashLook {
 /// or `laser` label.
 pub fn laser_look(db: &ClassDb, ordnance: &str) -> Option<LaserLook> {
     let base = db.engine_base(ordnance)?;
-    if !(base.eq_ignore_ascii_case("bolt") || base.eq_ignore_ascii_case("laser")) {
+    if !["bolt", "laser", "beam"]
+        .iter()
+        .any(|b| base.eq_ignore_ascii_case(b))
+    {
         return None;
     }
     Some(LaserLook::replay(chain_props(db, ordnance)))

@@ -34,18 +34,6 @@ impl SoldierVisuals {
             .weapon_classes
             .iter()
             .map(|w| {
-                // Every ordnance with a model of its own: the thrown and
-                // placed kinds, and a missile in flight (card UORD — its
-                // class has no `LaserLook`, so this is how it is drawn).
-                if w.ordnance.sticky.is_none()
-                    && w.mine.is_none()
-                    && w.remote.is_none()
-                    && w.turret.is_none()
-                    && w.guided.is_none()
-                    && w.ordnance.missile.is_none()
-                {
-                    return None;
-                }
                 let name = w.ordnance.geometry.as_deref()?;
                 Some(*models.entry(name).or_insert_with(|| {
                     let index = vis.weapons.len();
@@ -890,6 +878,23 @@ impl SoldierVisuals {
                 continue;
             };
             out[i] = Some(model * palette[b] * sa.asset.skeleton.global_bind[b]);
+        }
+        out
+    }
+
+    pub fn burn_frames(&self, walk: &WalkSim) -> Vec<Vec<Option<Mat4>>> {
+        let mut out = vec![Vec::new(); walk.sim.units.len()];
+        for (i, sa, model, palette) in self.posed(walk) {
+            let Some((_, effects)) = walk.sim.burn_effects(&walk.sim.units[i]) else {
+                continue;
+            };
+            out[i] = effects
+                .iter()
+                .map(|(bone, _)| {
+                    let b = sa.asset.skeleton.index_of(bone)?;
+                    Some(model * palette[b] * sa.asset.skeleton.global_bind[b])
+                })
+                .collect();
         }
         out
     }

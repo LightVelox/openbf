@@ -469,7 +469,11 @@ impl Sim {
                     origin,
                     dir: d,
                 });
-                self.bolts.push(bolt);
+                self.launch_round(bolt, false);
+                if self.weapon_classes[w.class].secondary.is_some() {
+                    let round = st.weapons[k].count_secondary_round();
+                    self.fire_secondary(who, w.class, round, origin, d, spec.charge);
+                }
             }
         }
         self.vehicles[vi].guns[seat] = Some(st);

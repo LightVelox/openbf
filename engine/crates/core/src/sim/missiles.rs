@@ -6,7 +6,7 @@
 use super::input::AimTarget;
 use super::state::Sim;
 use crate::missile::MissileTarget;
-use crate::projectile::{Bolt, Hit, Shooter};
+use crate::projectile::{Bolt, Hit};
 use crate::unit::Controller;
 use glam::Vec3;
 
@@ -27,12 +27,7 @@ impl Sim {
             return;
         }
         let (pos, dir, step) = (b.pos, b.vel / speed, dt.min(b.remaining.max(0.0)));
-        let who = Shooter {
-            owner: b.owner,
-            team: b.team,
-            weapon_class: b.weapon_class,
-            is_player: b.shooter_is_player,
-        };
+        let who = b.shooter();
         let hulls = b.hulls;
         // `Bolt::fire`'s rays: a rider's round passes his own building.
         let probe = Bolt::fire(

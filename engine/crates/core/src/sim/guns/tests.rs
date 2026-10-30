@@ -9,7 +9,7 @@ use crate::unit::{UnitHandle, UnitSpec};
 use crate::vehicle::gun::{Aimer, GunSetup, GunWeapon};
 use crate::vehicle::hover::tests::skiff;
 use crate::vehicle::{SeatKind, SeatSetup, VehicleHandle, VehicleKind, VehicleSpec};
-use crate::weapon::{HealthType, WeaponClass};
+use crate::weapon::{HealthType, OrdnanceClass, Secondary, WeaponClass};
 use glam::Vec3;
 
 const DEG: f32 = std::f32::consts::PI / 180.0;
@@ -320,6 +320,52 @@ fn a_gunners_bolt_hits_the_soldier_it_aims_at() {
         s.unit(enemy).is_none_or(|u| u.health.cur < hp),
         "the enemy took the gunner's bolts"
     );
+}
+
+#[test]
+fn a_seat_gun_rides_its_tracer_on_every_period_th_round() {
+    let (mut s, p, v) = world(false);
+    let mut chaingun = WeaponClass::bf1_rifle();
+    chaingun.name = "test_chaingun".into();
+    chaingun.secondary = Some(Secondary {
+        name: "test_chaingun_tracer".into(),
+        ordnance: OrdnanceClass {
+            velocity: 200.0,
+            life_span: 2.0,
+            max_damage: 0.0,
+            ..OrdnanceClass::default()
+        },
+        period: 2,
+        index: usize::MAX,
+    });
+    let armed = s.add_weapon_class(chaingun);
+    let tracer = s.weapon_classes[armed].secondary.as_ref().unwrap().index;
+    s.weapon_classes[0] = s.weapon_classes[armed].clone();
+    tap(&mut s, buttons::ACTION);
+    tap(&mut s, buttons::SWITCH_WEAPON);
+    assert_eq!(seat(&s, p), SeatKind::Gunner(0));
+    let mut rounds = 0u32;
+    for _ in 0..30 {
+        s.step(&[pad(buttons::FIRE)]);
+        rounds += s
+            .events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Shot {
+                        weapon_class: 0,
+                        ..
+                    }
+                )
+            })
+            .count() as u32;
+    }
+    assert!(rounds >= 4, "the gunner fired {rounds} rounds");
+    let gun = s.vehicle(v).unwrap().guns[1].as_ref().unwrap();
+    assert_eq!(gun.weapons[0].secondary_rounds, rounds);
+    let tracers = s.bolts.iter().filter(|b| b.weapon_class == tracer).count() as u32;
+    assert_eq!(tracers, rounds.div_ceil(2));
 }
 
 /// Card VTAI: a bot in the nose gunner's seat (a human pilots) turns its

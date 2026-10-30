@@ -191,7 +191,7 @@ pub fn matrix(d: Vec3, radius: f32, origin: Vec3) -> Mat4 {
 }
 
 /// FNV-1a over byte|0x20 (the PS2's class/key hash).
-fn fnv_lower(s: &str) -> u32 {
+pub(crate) fn fnv_lower(s: &str) -> u32 {
     s.bytes().fold(0x811c_9dc5, |h, b| {
         (h ^ u32::from(b | 0x20)).wrapping_mul(0x0100_0193)
     })

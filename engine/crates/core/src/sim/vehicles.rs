@@ -1098,6 +1098,7 @@ mod tests {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         }
     }
 

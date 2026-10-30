@@ -18,6 +18,20 @@ const HASH_AFFECT_ENEMIES: u32 = 3_558_787_040;
 /// The flamethrowers' hit-all flag (`0x4c387ca1`, functionally identified;
 /// its ODF key name is untraced).
 const HASH_HIT_ALL: u32 = 1_278_770_337;
+const HASH_EFFECT: u32 = 3_236_038_708;
+const HASH_BOLTS: u32 = 1_664_633_633;
+const HASH_BURN_TIME: u32 = 1_747_252_337;
+const HASH_BURN_RATE: u32 = 276_226_006;
+const HASH_BURN_BONE: u32 = 1_828_230_651;
+const HASH_BURN_EFFECT: u32 = 1_496_297_824;
+pub const BURN_SLOTS: usize = 5;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BurnClass {
+    pub time: f32,
+    pub rate: f32,
+    pub effects: Vec<(String, String)>,
+}
 
 /// An `emitterordnance` class's own rules. `None` on a
 /// [`super::WeaponClass`] means the class is not an emitter; an emitter
@@ -46,6 +60,7 @@ pub struct EmitterOrdnance {
     pub push: f32,
     /// BF2's `LightningEffect`: render-only; the arc the query draws.
     pub lightning: Option<String>,
+    pub bolts: u32,
     /// BF2's `AffectFriends` / `AffectEnemies` (both default true): which
     /// teams the query takes. BF1 ignores them (no team test at all).
     pub affect_friends: bool,
@@ -57,6 +72,8 @@ pub struct EmitterOrdnance {
     /// radius ability, not a cone (the dispatcher keeps it on
     /// [`super::Ability`]'s path).
     pub radius: f32,
+    pub effect: Option<String>,
+    pub burn: BurnClass,
     /// BF2's rules: the true cone, vehicles in the gather, the team filter,
     /// the class's damage scales and hit-all. Set by the class loader
     /// (`ClassDb::is_bf2`), so a BF2 class on a BF1 map still follows BF2.
@@ -77,10 +94,23 @@ impl EmitterOrdnance {
             first_radius: pf(src, "FirstRadius").unwrap_or(0.0).max(0.0),
             push: pf_hash(src, HASH_PUSH).unwrap_or(0.0),
             lightning: src.prop_hash(HASH_LIGHTNING).map(|s| s.trim().to_owned()),
+            bolts: pf_hash(src, HASH_BOLTS).map_or(1, |n| n.max(0.0) as u32),
             affect_friends: pf_hash(src, HASH_AFFECT_FRIENDS).unwrap_or(1.0) != 0.0,
             affect_enemies: pf_hash(src, HASH_AFFECT_ENEMIES).unwrap_or(1.0) != 0.0,
             hit_all: pf_hash(src, HASH_HIT_ALL).unwrap_or(0.0) != 0.0,
             radius: pf(src, "Radius").unwrap_or(0.0).max(0.0),
+            effect: src.prop_hash(HASH_EFFECT).map(|s| s.trim().to_owned()),
+            burn: BurnClass {
+                time: pf_hash(src, HASH_BURN_TIME).unwrap_or(0.0),
+                rate: pf_hash(src, HASH_BURN_RATE).unwrap_or(0.0),
+                effects: src
+                    .prop_hash_all(HASH_BURN_BONE)
+                    .into_iter()
+                    .zip(src.prop_hash_all(HASH_BURN_EFFECT))
+                    .take(BURN_SLOTS)
+                    .map(|(b, e)| (b.trim().to_owned(), e.trim().to_owned()))
+                    .collect(),
+            },
             bf2,
         }
     }
@@ -95,23 +125,7 @@ impl EmitterOrdnance {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct List<'a>(&'a [(u32, &'a str)]);
-
-    impl PropSource for List<'_> {
-        fn prop(&self, key: &str) -> Option<&str> {
-            let mut h: u32 = 0x811C_9DC5;
-            for b in key.bytes() {
-                h ^= u32::from(b | 0x20);
-                h = h.wrapping_mul(0x0100_0193);
-            }
-            self.prop_hash(h)
-        }
-
-        fn prop_hash(&self, hash: u32) -> Option<&str> {
-            self.0.iter().find(|p| p.0 == hash).map(|p| p.1)
-        }
-    }
+    use crate::weapon::test_props::List;
 
     /// `rep_weap_inf_arccaster_ord` (bf1_rep.ron).
     #[test]
@@ -141,6 +155,13 @@ mod tests {
         assert!(e.affect_friends && e.affect_enemies);
         assert!(!e.hit_all);
         assert!(!e.bf2);
+        assert_eq!(e.bolts, 1);
+    }
+
+    #[test]
+    fn force_lightning_reads_its_bolt_count() {
+        let props: &[(u32, &str)] = &[(2_470_609_998, "10"), (1_664_633_633, "5")];
+        assert_eq!(EmitterOrdnance::from_props(&List(props), true).bolts, 5);
     }
 
     /// `com_weap_inf_flamethrower_ord` (bf2_imp.ron): the hit-all mode and
@@ -168,6 +189,53 @@ mod tests {
         assert!(!e.affect_friends);
         assert!(e.affect_enemies);
         assert!(e.bf2);
+    }
+
+    #[test]
+    fn bf2_flamethrower_and_incinerator_read_their_burn() {
+        let flame: &[(u32, &str)] = &[
+            (2_470_609_998, "10"),
+            (3_236_038_708, "com_sfx_weap_flamethrower_ord"),
+            (276_226_006, "50.0"),
+            (1_747_252_337, "5.0"),
+            (1_496_297_824, "com_sfx_inf_damage_fire"),
+            (1_828_230_651, "bone_ribcage"),
+            (1_496_297_824, "com_sfx_inf_damage_fire"),
+            (1_828_230_651, "bone_head"),
+            (1_496_297_824, "com_sfx_inf_damage_fire"),
+            (1_828_230_651, "bone_pelvis"),
+        ];
+        let e = EmitterOrdnance::from_props(&List(flame), true);
+        assert_eq!(e.effect.as_deref(), Some("com_sfx_weap_flamethrower_ord"));
+        assert_eq!(e.burn.time, 5.0);
+        assert_eq!(e.burn.rate, 50.0);
+        let fire = "com_sfx_inf_damage_fire".to_owned();
+        assert_eq!(
+            e.burn.effects,
+            vec![
+                ("bone_ribcage".to_owned(), fire.clone()),
+                ("bone_head".to_owned(), fire.clone()),
+                ("bone_pelvis".to_owned(), fire),
+            ]
+        );
+
+        let incinerator: &[(u32, &str)] = &[
+            (2_470_609_998, "10"),
+            (3_236_038_708, "com_sfx_weap_incinerate_ord"),
+            (1_747_252_337, "1.5"),
+            (1_496_297_824, "com_sfx_inf_damage_disintergrate"),
+            (1_828_230_651, "bone_l_forearm"),
+            (1_496_297_824, "com_sfx_inf_damage_disintergrate"),
+            (1_828_230_651, "bone_r_forearm"),
+        ];
+        let e = EmitterOrdnance::from_props(&List(incinerator), true);
+        assert_eq!(e.burn.time, 1.5);
+        assert_eq!(e.burn.rate, 0.0);
+        assert_eq!(e.burn.effects.len(), 2);
+
+        let e = EmitterOrdnance::from_props(&List(&[(2_470_609_998, "30")]), true);
+        assert_eq!(e.burn, BurnClass::default());
+        assert_eq!(e.effect, None);
     }
 
     /// A radius `emitterordnance` (the droid incinerator) is not a cone; the

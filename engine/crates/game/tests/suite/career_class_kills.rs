@@ -320,6 +320,7 @@ fn a_player_killed_before_their_bolt_lands_still_gets_class_credit() {
             gravity: 0.0,
             charge: 1.0,
             missile: None,
+            fat: None,
         });
     }
     walk.step_tick(&[PadState::default()]);

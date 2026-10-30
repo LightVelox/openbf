@@ -265,11 +265,14 @@ mod tests {
             first_radius: 0.6,
             push: 0.0,
             lightning: Some("arccaster_lightning".into()),
+            bolts: 1,
             affect_friends: true,
             affect_enemies: true,
             hit_all: false,
             radius: 0.0,
             bf2: false,
+            effect: None,
+            burn: Default::default(),
         }
     }
 
@@ -284,11 +287,14 @@ mod tests {
             first_radius: 1.2,
             push: 3.0,
             lightning: Some("com_sfx_lightning".into()),
+            bolts: 1,
             affect_friends: true,
             affect_enemies: true,
             hit_all: false,
             radius: 0.0,
             bf2: true,
+            effect: None,
+            burn: Default::default(),
         }
     }
 
@@ -304,11 +310,14 @@ mod tests {
             first_radius: 2.0,
             push: 0.0,
             lightning: Some("com_sfx_flamethrower".into()),
+            bolts: 1,
             affect_friends: true,
             affect_enemies: true,
             hit_all: true,
             radius: 0.0,
             bf2: true,
+            effect: None,
+            burn: Default::default(),
         }
     }
 

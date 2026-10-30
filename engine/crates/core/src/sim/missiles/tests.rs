@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::collision::HullFilter;
+use crate::projectile::Shooter;
 use crate::sim::tests::flat_ground;
 use crate::sim::{buttons, Event, PadState};
 use crate::soldier::Stance;

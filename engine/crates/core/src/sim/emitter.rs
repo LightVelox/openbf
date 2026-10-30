@@ -108,6 +108,7 @@ impl Sim {
                         let Some(friendly) = self.unit(h).map(|u| u.team == team) else {
                             continue;
                         };
+                        self.ignite(h, unit, class);
                         let mult = self.buff_scale(Some(unit), h);
                         let Some(v) = self.unit_mut(h) else { continue };
                         let damage = v.health.take_damage(&desc, mult, friendly, ff);
@@ -136,6 +137,10 @@ impl Sim {
                 if em.bf2 {
                     if let Some(e) = &ord.explosion {
                         self.explode(e, body.pos, Some(unit), Some(team));
+                        self.events.push(Event::Blast {
+                            pos: body.pos,
+                            weapon_class: class as u32,
+                        });
                     }
                 }
             }
@@ -161,6 +166,26 @@ impl Sim {
                 to: body.pos,
             });
         }
+        if em.lightning.is_none() {
+            return;
+        }
+        let misses = if em.bf2 {
+            (em.bolts as usize).saturating_sub(shot.hits.len())
+        } else {
+            usize::from(shot.hits.is_empty())
+        };
+        if misses == 0 {
+            return;
+        }
+        let to = origin + aim * crate::perception::reach(self, origin, aim, em.cone_length);
+        for _ in 0..misses {
+            self.events.push(Event::Emitter {
+                unit,
+                weapon_class: class as u32,
+                from: origin,
+                to,
+            });
+        }
     }
 }
 
@@ -168,7 +193,7 @@ impl Sim {
 mod tests {
     use super::*;
     use crate::collision::{Body, Shape};
-    use crate::sim::tests::flat_ground;
+    use crate::sim::tests::{flat_ground, hits};
     use crate::sim::Event;
     use crate::unit::UnitSpec;
     use crate::vehicle::{SeatKind, VehicleKind, VehicleSpec};
@@ -186,11 +211,14 @@ mod tests {
             first_radius: 0.6,
             push: 0.0,
             lightning: Some("arccaster_lightning".into()),
+            bolts: 1,
             affect_friends: true,
             affect_enemies: true,
             hit_all: false,
             radius: 0.0,
             bf2: false,
+            effect: None,
+            burn: Default::default(),
         }
     }
 
@@ -205,11 +233,14 @@ mod tests {
             first_radius: 1.2,
             push: 3.0,
             lightning: Some("com_sfx_lightning".into()),
+            bolts: 1,
             affect_friends: true,
             affect_enemies: true,
             hit_all: false,
             radius: 0.0,
             bf2: true,
+            effect: None,
+            burn: Default::default(),
         }
     }
 
@@ -225,11 +256,14 @@ mod tests {
             first_radius: 2.0,
             push: 0.0,
             lightning: Some("com_sfx_flamethrower".into()),
+            bolts: 1,
             affect_friends: true,
             affect_enemies: true,
             hit_all: true,
             radius: 0.0,
             bf2: true,
+            effect: None,
+            burn: Default::default(),
         }
     }
 
@@ -267,11 +301,14 @@ mod tests {
             first_radius: 0.0,
             push: 15.0,
             lightning: None,
+            bolts: 1,
             affect_friends: true,
             affect_enemies: true,
             hit_all: true,
             radius: 0.0,
             bf2: true,
+            effect: None,
+            burn: Default::default(),
         }
     }
 
@@ -309,21 +346,21 @@ mod tests {
             .collect()
     }
 
-    fn hits(s: &Sim) -> Vec<(u32, f32)> {
-        s.events
-            .iter()
-            .filter_map(|e| match e {
-                Event::Hit { victim, damage, .. } => Some((victim.index, *damage)),
-                _ => None,
-            })
-            .collect()
-    }
-
     fn emitter_links(s: &Sim) -> Vec<(Vec3, Vec3)> {
         s.events
             .iter()
             .filter_map(|e| match e {
                 Event::Emitter { from, to, .. } => Some((*from, *to)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn blasts(s: &Sim) -> Vec<(Vec3, u32)> {
+        s.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Blast { pos, weapon_class } => Some((*pos, *weapon_class)),
                 _ => None,
             })
             .collect()
@@ -390,6 +427,62 @@ mod tests {
         assert_eq!(s.unit(at[1]).unwrap().health.cur, 300.0);
     }
 
+    #[test]
+    fn a_miss_draws_one_arc_to_the_cone_length() {
+        let (mut s, class) = sim_with(bf1(), arc_ord());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        let links = emitter_links(&s);
+        assert_eq!(links.len(), 1);
+        let (from, to) = links[0];
+        assert_eq!(from, s.units[unit.index as usize].muzzle());
+        assert!(to.y.abs() < 0.05, "the arc ends on the ground: {to}");
+        assert!(hits(&s).is_empty());
+
+        s.heightfield = None;
+        s.events.clear();
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        let (from, to) = emitter_links(&s)[0];
+        assert!(((to - from).length() - 30.0).abs() < 1e-3, "{from} {to}");
+    }
+
+    #[test]
+    fn a_miss_arc_stops_at_a_wall() {
+        let (mut s, class) = sim_with(bf2(), arc_ord());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        s.collision.push_body(Body::new(
+            Mat4::from_translation(Vec3::new(5.0, 1.0, 0.0)),
+            Shape::Box {
+                half: Vec3::new(0.2, 4.0, 4.0),
+            },
+        ));
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        let links = emitter_links(&s);
+        assert_eq!(links.len(), 1);
+        assert!((links[0].1.x - 4.8).abs() < 1e-3, "{:?}", links[0]);
+    }
+
+    #[test]
+    fn bf2_draws_its_unspent_bolts_as_misses() {
+        let (mut s, class) = sim_with(EmitterOrdnance { bolts: 3, ..bf2() }, arc_ord());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        let at = line(&mut s, 1);
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        let links = emitter_links(&s);
+        assert_eq!(hits(&s)[0].0, at[0].index);
+        assert_eq!(links.len(), 3);
+        assert_eq!(links[1], links[2]);
+        assert_eq!(links[1].0, s.units[unit.index as usize].muzzle());
+    }
+
+    #[test]
+    fn an_emitter_without_lightning_draws_no_miss() {
+        let (mut s, class) = sim_with(force_push(), no_damage());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        assert!(emitter_links(&s).is_empty());
+    }
+
     /// BF1 has no team test: an ally in the cone is zapped too.
     #[test]
     fn bf1_zaps_an_ally() {
@@ -424,6 +517,76 @@ mod tests {
         assert_eq!(hits(&s), vec![(a.index, 7.5), (b.index, 7.5)]);
         assert_eq!(s.unit(a).unwrap().health.cur, 292.5);
         assert_eq!(s.unit(b).unwrap().health.cur, 292.5);
+    }
+
+    #[test]
+    fn bf2_pushes_one_blast_per_hit_at_the_body() {
+        let (mut s, class) = sim_with(
+            flame(),
+            OrdnanceClass {
+                max_damage: 15.0,
+                min_damage: Some(5.0),
+                explosion: Some(ExplosionClass {
+                    damage: 5.0,
+                    damage_outer: 1.0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let unit = shooter(&mut s, Vec3::ZERO);
+        s.spawn(&UnitSpec::trooper(1, Vec3::new(3.0, 0.0, 0.0)))
+            .unwrap();
+        s.spawn(&UnitSpec::trooper(1, Vec3::new(4.0, 0.0, 0.0)))
+            .unwrap();
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        assert_eq!(emitter_links(&s).len(), 2, "both bodies take the flame");
+        assert_eq!(
+            blasts(&s),
+            [
+                (Vec3::new(3.0, 1.0, 0.0), class as u32),
+                (Vec3::new(4.0, 1.0, 0.0), class as u32),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_class_without_an_explosion_pushes_no_blast() {
+        let (mut s, class) = sim_with(
+            flame(),
+            OrdnanceClass {
+                max_damage: 15.0,
+                min_damage: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let unit = shooter(&mut s, Vec3::ZERO);
+        s.spawn(&UnitSpec::trooper(1, Vec3::new(3.0, 0.0, 0.0)))
+            .unwrap();
+        s.spawn(&UnitSpec::trooper(1, Vec3::new(4.0, 0.0, 0.0)))
+            .unwrap();
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        assert_eq!(hits(&s).len(), 2, "the query still lands");
+        assert!(blasts(&s).is_empty());
+
+        let (mut s, class) = sim_with(
+            bf1(),
+            OrdnanceClass {
+                max_damage: 250.0,
+                min_damage: Some(100.0),
+                explosion: Some(ExplosionClass {
+                    damage: 5.0,
+                    damage_outer: 1.0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let unit = shooter(&mut s, Vec3::ZERO);
+        line(&mut s, 2);
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        assert_eq!(hits(&s).len(), 2);
+        assert!(blasts(&s).is_empty(), "BF1 has no per-hit explosion");
     }
 
     #[test]
@@ -539,7 +702,10 @@ mod tests {
         assert_eq!(s.units[ally.index as usize].soldier.vel, Vec3::ZERO);
         let vel = s.units[enemy.index as usize].soldier.vel;
         assert!(vel.x > 1.0, "the enemy is pushed: {vel}");
-        assert_eq!(emitter_links(&s), vec![(s.unit(unit).unwrap().muzzle(), Vec3::new(9.0, 1.0, 0.0))]);
+        assert_eq!(
+            emitter_links(&s),
+            vec![(s.unit(unit).unwrap().muzzle(), Vec3::new(9.0, 1.0, 0.0))]
+        );
     }
 
     /// The line of sight gates a push as it gates a damaging link.

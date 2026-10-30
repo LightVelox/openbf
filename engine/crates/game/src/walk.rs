@@ -1602,10 +1602,11 @@ impl WalkSim {
             .collect()
     }
 
-    /// In-flight bolts of a class with no laser look (not `bolt` / `laser`:
-    /// a missile, a shell) as thin placeholder boxes
-    /// along their velocity. A laser class's bolts are drawn as the PS2's
-    /// ribbons by [`crate::bolt_vis`]. Returns (transform, team).
+    /// In-flight bolts of a class with nothing authored to draw (no laser
+    /// look, no model, no trail) as thin placeholder boxes along their
+    /// velocity. A laser class's bolts are drawn as the PS2's ribbons by
+    /// [`crate::bolt_vis`], a modelled round by its model. Returns
+    /// (transform, team).
     pub fn bolt_draws(&self) -> Vec<(Mat4, u8)> {
         const LEN: f32 = 1.2;
         const THICK: f32 = 0.08;
@@ -1615,11 +1616,8 @@ impl WalkSim {
             .filter(|b| {
                 self.sim.weapon_classes.get(b.weapon_class).is_none_or(|w| {
                     w.ordnance.laser.is_none()
-                        && !(w.ordnance.kind == core::weapon::OrdKind::Missile
-                            && w.ordnance
-                                .impact
-                                .as_ref()
-                                .is_some_and(|l| l.trail.is_some()))
+                        && w.ordnance.geometry.is_none()
+                        && w.ordnance.impact.as_ref().is_none_or(|l| l.trail.is_none())
                 })
             })
             .map(|b| {

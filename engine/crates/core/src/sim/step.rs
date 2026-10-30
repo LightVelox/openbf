@@ -979,18 +979,7 @@ impl Sim {
         self.tick_cloaks(dt);
         self.fly_missiles(dt);
         self.fly_shells(dt);
-        self.sweep_bolts(dt);
-        let mut done = Vec::new();
-        for (i, b) in self.bolts.iter_mut().enumerate() {
-            if b.advance(dt) {
-                done.push(i);
-            }
-        }
-        for &i in &done {
-            let b = self.bolts[i].clone();
-            self.resolve_bolt(&b);
-        }
-        self.bolts.retain(|b| b.remaining > 0.0);
+        self.fly_bolts(dt);
 
         // 5b. The thrown grenades (GREN).
         self.tick_stickies(dt);
@@ -1001,6 +990,7 @@ impl Sim {
 
         // 5c. The pickups (PWUP): flight, life, the touch.
         self.tick_buffs(dt);
+        self.tick_burns(dt);
         self.tick_pickups(dt);
 
         // 5c'. The health / ammo droids (PWST): each station's clock and pass.
