@@ -26,7 +26,9 @@
 //! vehicle derives straight from its engine base, so the entc-parent case is
 //! [H] and untested on data.
 
+mod aim;
 mod walker;
+pub use aim::AimerSpec;
 pub use walker::{WalkerClass, WALKER_BASES};
 
 use crate::classdb::{fnv1a_lowercase, ClassDb, ClassDef};
@@ -603,6 +605,7 @@ pub struct SeatSpec {
     pub aimer_pitch_rate: Option<f32>,
     /// A second `AimerNodeName` was read: later aimer keys are its.
     aimer_second: bool,
+    pub aimers: Vec<AimerSpec>,
 }
 
 /// A seat's pose key: the clip `human_<name>`, and whether it is a nine-pose.
@@ -712,6 +715,7 @@ impl SeatSpec {
             aimer_yaw_rate: None,
             aimer_pitch_rate: None,
             aimer_second: false,
+            aimers: Vec::new(),
         }
     }
 
@@ -728,6 +732,12 @@ impl SeatSpec {
     }
 
     fn set(&mut self, k: u32, v: &str) {
+        if k == h("AimerNodeName") {
+            self.aimers
+                .push(AimerSpec::new(v, self.weapons.len().saturating_sub(1)));
+        } else if let Some(a) = self.aimers.last_mut() {
+            a.set(k, v);
+        }
         if k == h("PilotType") {
             if let Some(t) = PilotType::parse(v) {
                 self.pilot_type = t;

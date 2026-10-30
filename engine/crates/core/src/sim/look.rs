@@ -53,16 +53,7 @@ pub(super) fn seat_look(
 }
 
 pub(super) fn walker_aim(w: &WalkerState, p: &WalkerParams, d: (f32, f32)) -> (f32, f32) {
-    let legs = w.leg_angle();
-    let (lo, hi) = (p.yaw_limits[0] + legs, p.yaw_limits[1] + legs);
-    let to = w.aim_yaw - d.0;
-    let yaw = if to > w.aim_yaw && hi > 0.0 {
-        to.min(w.aim_yaw.max(hi))
-    } else if to < w.aim_yaw && lo < 0.0 {
-        to.max(w.aim_yaw.min(lo))
-    } else {
-        to
-    };
+    let yaw = w.aim_yaw - d.0;
     let pitch = (w.aim_pitch + d.1).clamp(p.pitch_limits[0], p.pitch_limits[1]);
     (yaw, pitch)
 }

@@ -19,6 +19,7 @@ pub struct Camera {
     pub yaw: f32,
     /// Radians, positive looks up. Clamp near ±PI/2 yourself when driving from input.
     pub pitch: f32,
+    pub roll: f32,
     /// Vertical field of view, radians. The port is widescreen-native hor+
     /// (PLAN §Presentation): fov_y holds the traced PS2 vertical FOV and the
     /// aspect ratio widens the horizontal view — never stretch. The default
@@ -35,6 +36,7 @@ impl Default for Camera {
             position: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
+            roll: 0.0,
             fov_y: 70f32.to_radians(),
             near: 0.1,
             far: 2000.0,
@@ -53,11 +55,15 @@ impl Camera {
     /// World-space right axis (ignores pitch; horizontal strafe direction).
     pub fn right(&self) -> Vec3 {
         let (sy, cy) = self.yaw.sin_cos();
-        Vec3::new(cy, 0.0, -sy)
+        glam::Quat::from_axis_angle(self.forward(), self.roll) * Vec3::new(cy, 0.0, -sy)
     }
 
     pub fn view(&self) -> Mat4 {
-        Mat4::look_to_rh(self.position, self.forward(), Vec3::Y)
+        Mat4::look_to_rh(
+            self.position,
+            self.forward(),
+            self.right().cross(self.forward()),
+        )
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {

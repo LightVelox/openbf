@@ -1153,7 +1153,7 @@ const BULLET_BASES: [&str; 8] = [
 ];
 
 /// A class chain's PROPs, parent first, each class's in file order.
-fn chain_props<'a>(db: &'a ClassDb, class: &str) -> Vec<(u32, &'a str)> {
+pub(crate) fn chain_props<'a>(db: &'a ClassDb, class: &str) -> Vec<(u32, &'a str)> {
     db.chain(class)
         .iter()
         .rev()

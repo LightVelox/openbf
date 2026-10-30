@@ -5,15 +5,6 @@
 //! frame's ticks. Without it a 60 / 144 Hz frame repeats the last tick's
 //! picture and motion steps.
 //!
-//! What is blended (the drawn state the frame's builders read): each unit's
-//! feet, yaw and pitch (the chase camera hangs off them, so the camera blends
-//! too), each vehicle's place and turn, its guns' looks and a walker's aim,
-//! and the camera's zoom ease (`zoom_s`, `zoom_fov_mix`) and its collision's
-//! stored pull-in (`cam_pull`). Not blended: a
-//! walker's posed legs and the door / station animations (they step with
-//! their ticks), the bolts (their own blend, `BoltVis::draws`), effects and
-//! the soldiers' animation clocks (already advanced by the frame's dt).
-//!
 //! A unit or vehicle snaps - drawn where the tick left it, no blend - when
 //! its slot's generation or alive flag changed (a respawn, a death, a new
 //! vehicle), a unit's seat changed (boarding, leaving), or it moved farther
@@ -24,6 +15,9 @@
 //! tick's own values back, bit for bit, before anything else reads the sim
 //! (the tick, the black box, a menu action): no tick ever sees a blended
 //! value, so the sim hash is the same with or without it.
+
+mod walker;
+pub use walker::WalkerPose;
 
 use crate::walk::WalkSim;
 use core::sim::{LookPreview, PadState};
@@ -59,6 +53,7 @@ pub struct VehiclePose {
     pub looks: Vec<Option<(f32, f32)>>,
     /// `WalkerState::aim_yaw` / `aim_pitch`.
     pub aim: (f32, f32),
+    pub walker: Option<WalkerPose>,
 }
 
 /// One remote droid's or auto-turret's drawn pose, matched across ticks by its id.
@@ -114,6 +109,15 @@ impl Pose {
                 rot: v.rot,
                 looks: v.guns.iter().map(|g| g.as_ref().map(|g| g.look)).collect(),
                 aim: (v.walker.aim_yaw, v.walker.aim_pitch),
+                walker: (v.kind == core::vehicle::VehicleKind::Walker).then(|| {
+                    WalkerPose::capture(
+                        v,
+                        walk.sim
+                            .walker_params
+                            .get(v.class as usize)
+                            .and_then(Option::as_ref),
+                    )
+                }),
             }));
         self.droids.clear();
         self.droids.extend(walk.sim.droids.iter().map(|d| ItemPose {
@@ -157,6 +161,9 @@ impl Pose {
                 }
             }
             (v.walker.aim_yaw, v.walker.aim_pitch) = p.aim;
+            if let Some(p) = &p.walker {
+                p.write(v);
+            }
         }
         for (d, p) in walk.sim.droids.iter_mut().zip(&self.droids) {
             if d.id == p.id {
@@ -257,6 +264,9 @@ pub fn blend(prev: &Pose, cur: &Pose, t: f32) -> Pose {
             }
         }
         o.aim = lerp_look(p.aim, o.aim, t);
+        if let (Some(o), Some(p)) = (o.walker.as_mut(), p.walker.as_ref()) {
+            o.blend(p, t);
+        }
     }
     blend_items(&prev.droids, &mut out.droids, t);
     blend_items(&prev.turrets, &mut out.turrets, t);

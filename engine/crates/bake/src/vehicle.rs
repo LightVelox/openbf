@@ -329,7 +329,7 @@ pub fn bake_vehicles(
                     let key = t.to_ascii_lowercase();
                     if !skinned.contains(&key) {
                         let b = banks.iter().find(|b| b.name.eq_ignore_ascii_case(&bank));
-                        let glb = crate::walker::skin_glb(sk, b)
+                        let glb = crate::walker::skin_glb(sk, b, e)
                             .with_context(|| format!("walker skin {t}"))?;
                         std::fs::write(out.join("walkers").join(format!("{t}.glb")), glb)?;
                         skinned.push(key);

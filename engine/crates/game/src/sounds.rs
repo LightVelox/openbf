@@ -28,6 +28,7 @@
 //! product and floor as other positional starts; preparation needs no mixer.
 
 mod playback;
+mod walker;
 
 use crate::classdb::fnv1a_lowercase;
 use glam::Vec3;
@@ -467,6 +468,7 @@ enum LoopSource {
     Guided(u64, u8),
     Repair(core::unit::UnitHandle, usize),
     Shield(core::unit::UnitHandle),
+    WalkerFire(core::unit::UnitHandle, usize),
 }
 
 struct LoopRequest {

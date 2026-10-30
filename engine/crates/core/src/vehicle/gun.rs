@@ -38,15 +38,6 @@
 //!   `FUN_00223850` B1:138064, BF2 `FUN_0026cea0` B2:189959): `Sim::seat_gun`.
 //!   The barrel hangs at its bind offset ([`GunSetup::muzzle`]).
 //!
-//! PROVISIONAL (ours; each untraced on the PS2): a VEHICLE's gunner seat
-//! (aimer chains, a weapon's own aimer and BF2's 0..360° yaw mode are not
-//! built) and the hover pilot keep the port's look — the camera's
-//! own yaw / pitch, which the stick moves at the aimer's rates inside the
-//! aimer's limits; the eye — `EyePointOffset` from the aimer's pivot,
-//! turned with the look; the pivot — the `TurretNodeName` node's bind
-//! origin, a vehicle's fire point turning about it from its bind heading
-//! ([`GunSetup::bind_yaw`]) with the aimer; the vehicle's
-//! own turn is not taken out of the pilot's pitch (I10).
 
 use crate::fmath;
 use crate::weapon::WeaponState;
@@ -139,6 +130,7 @@ pub struct Turn {
     pub pitch: [f32; 2],
     /// Limits that span the circle: the angle wraps into ±180° instead.
     pub yaw_wrap: bool,
+    pub yaw_positive: bool,
     pub pitch_wrap: bool,
     /// The rate at full stick (rad/s): `MaxTurnSpeed` / `TurnRate`,
     /// `MaxPitchSpeed` / `PitchRate`.
@@ -179,10 +171,16 @@ impl Turn {
         };
         let (y, p) = (rad(yaw_deg), rad(pitch_deg));
         let wraps = |l: [f32; 2]| !(CLAMP_LO < l[0] && l[1] < CLAMP_HI);
+        let yaw_positive = slew == Slew::Linear
+            && y[0] > 0.0
+            && y[0] <= std::f32::consts::PI
+            && y[1] >= std::f32::consts::PI
+            && y[1] < std::f32::consts::TAU;
         Self {
             yaw: y,
             pitch: [-p[1], -p[0]],
-            yaw_wrap: wraps(y),
+            yaw_wrap: !yaw_positive && wraps(y),
+            yaw_positive,
             pitch_wrap: wraps(p),
             yaw_speed: speed.0,
             pitch_speed: speed.1,
@@ -216,6 +214,15 @@ impl Turn {
         let ry = slew(rate.0, -stick.0 * self.yaw_speed, self.yaw_filter);
         let rp = slew(rate.1, stick.1 * self.pitch_speed, self.pitch_filter);
         ((self.hold(look.0 + dt * ry, look.1 + dt * rp)), (ry, rp))
+    }
+
+    pub fn target(&self, yaw: f32, pitch: f32) -> (f32, f32) {
+        let yaw = if self.yaw_positive && yaw < 0.0 {
+            yaw + std::f32::consts::TAU
+        } else {
+            yaw
+        };
+        self.hold(yaw, pitch)
     }
 
     pub fn hold(&self, yaw: f32, pitch: f32) -> (f32, f32) {
@@ -288,6 +295,7 @@ pub struct GunSetup {
     /// class has a `TurretNodeName`, B1:136779-136783, B2:188004-188011);
     /// else its base is the model frame.
     pub framed: bool,
+    pub aimer_bind: glam::Quat,
 }
 
 impl GunSetup {
@@ -346,6 +354,8 @@ impl GunSetup {
     pub fn aim_of(&self, look: (f32, f32), rel: (f32, f32)) -> (f32, f32) {
         if self.turn.is_some() && self.framed {
             compose(look, rel)
+        } else if self.aimer_bind != glam::Quat::IDENTITY {
+            angles(self.aimer_bind * dir(rel.0, rel.1))
         } else {
             rel
         }
@@ -359,7 +369,9 @@ impl GunSetup {
     /// fire point is turned as it is (card TURR: Mygeeto's barrel 1.28 m
     /// to the side was moved onto the axis, 0.9 m off at 20 m).
     pub fn muzzle(&self, aim: (f32, f32)) -> Vec3 {
-        let rest = if self.turn.is_some() {
+        let rest = if self.aimer_bind != glam::Quat::IDENTITY {
+            self.pivot + self.aimer_bind.inverse() * (self.fire_point - self.pivot)
+        } else if self.turn.is_some() {
             self.fire_point
         } else {
             turned(self.fire_point, self.pivot, -self.bind_yaw(), 0.0)
@@ -497,12 +509,62 @@ mod tests {
             pilot: false,
             turn: None,
             framed: false,
+            aimer_bind: glam::Quat::IDENTITY,
         };
         let b = g.bind_yaw();
         assert!((b.to_degrees() - 89.6).abs() < 0.2, "{}", b.to_degrees());
         assert!(g.muzzle((b, 0.0)).distance(g.fire_point) < 1e-4);
         let m = g.muzzle((65f32.to_radians(), 0.0));
         assert!(m.z > 0.3 && (m.y - 0.911).abs() < 1e-4, "{m:?}");
+    }
+
+    #[test]
+    fn rear_yaw_arc_keeps_its_positive_angle_domain() {
+        let t = Turn::from_class(
+            Some([120.0, 240.0]),
+            Some([-17.0, 20.0]),
+            (1.0, 1.0),
+            (3.75, 3.75),
+            Slew::Linear,
+        );
+        assert!(t.yaw_positive && !t.yaw_wrap);
+        assert!((t.rest().0 - std::f32::consts::PI).abs() < 1e-5);
+        for (input, expected) in [(-170.0f32, 190.0f32), (100.0, 120.0), (270.0, 240.0)] {
+            assert!((t.target(input.to_radians(), 0.0).0 - expected.to_radians()).abs() < 1e-5);
+        }
+        assert!((t.hold(-1.0, 0.0).0 - 120.0f32.to_radians()).abs() < 1e-5);
+        let mut look = t.rest();
+        let mut rate = (0.0, 0.0);
+        for _ in 0..120 {
+            (look, rate) = t.step(look, rate, (1.0, 0.0), crate::TICK_DT);
+        }
+        assert!((look.0 - 120.0f32.to_radians()).abs() < 1e-5);
+        for _ in 0..180 {
+            (look, rate) = t.step(look, rate, (-1.0, 0.0), crate::TICK_DT);
+        }
+        assert!((look.0 - 240.0f32.to_radians()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_rear_aimer_keeps_its_authored_bind_direction_and_muzzle() {
+        let g = GunSetup {
+            weapons: Vec::new(),
+            fire_point: Vec3::new(1.0, 2.0, -3.0),
+            pivot: Vec3::new(1.0, 2.0, -1.0),
+            eye: Vec3::ZERO,
+            aimer: Aimer::default(),
+            pilot: false,
+            turn: None,
+            framed: false,
+            aimer_bind: glam::Quat::from_rotation_y(std::f32::consts::PI),
+        };
+        let aim = g.aim_of((0.0, 0.0), (0.0, 0.0));
+        assert!(dir(aim.0, aim.1).abs_diff_eq(-Vec3::Z, 1e-5));
+        assert!(g.muzzle(aim).abs_diff_eq(g.fire_point, 1e-5));
+        let aim = g.aim_of((0.0, 0.0), (0.4, 0.2));
+        assert!((g.muzzle(aim) - g.pivot)
+            .normalize()
+            .abs_diff_eq(dir(aim.0, aim.1), 1e-5));
     }
 
     fn dish(slew: Slew) -> Turn {

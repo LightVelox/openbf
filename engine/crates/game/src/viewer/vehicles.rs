@@ -87,6 +87,7 @@ struct Side {
     /// LOD0 model (lowercase) → the walker record that names it as its
     /// skin (card WSKN).
     walkers: HashMap<String, manifest::ManifestWalker>,
+    walker_seats: HashMap<String, Vec<crate::vehicle_class::SeatSpec>>,
 }
 
 /// Every side's baked vehicles of one game (`side_<game>/vehicles/*/`), in
@@ -106,6 +107,14 @@ pub enum ModelSource {
 pub enum TexSource {
     Map,
     Side(usize),
+}
+
+fn visibility_opacity(walker: bool, opacity: f32) -> f32 {
+    if walker {
+        opacity.max(crate::camera_collide::SEE_THROUGH_OPACITY)
+    } else {
+        opacity
+    }
 }
 
 fn lod0(g: &manifest::ManifestGeometry) -> &str {
@@ -131,23 +140,46 @@ impl VehicleSides {
                 .filter_map(|dir| {
                     let text = pak::read_to_string(dir.join("vehicles.ron")).ok()?;
                     match ron::from_str::<manifest::VehicleManifest>(&text) {
-                        Ok(m) => Some(Side {
-                            models: m
-                                .geometries
-                                .iter()
-                                .map(|g| (g.name.to_ascii_lowercase(), lod0(g).to_owned()))
-                                .collect(),
-                            textures: m.textures.iter().map(|t| t.to_ascii_lowercase()).collect(),
-                            walkers: m
+                        Ok(m) => {
+                            let mut db = crate::classdb::ClassDb::default();
+                            let _ = db.load(
+                                &assets_dir
+                                    .join("classes")
+                                    .join(format!("{game}_{}.ron", m.source)),
+                            );
+                            let walker_seats = m
                                 .vehicles
                                 .iter()
-                                .filter_map(|v| v.walker.as_ref())
-                                .filter_map(|w| {
-                                    Some((w.skin.as_ref()?.to_ascii_lowercase(), w.clone()))
+                                .filter_map(|v| {
+                                    Some((
+                                        v.walker.as_ref()?.skin.as_ref()?.to_ascii_lowercase(),
+                                        crate::vehicle_class::seats(&db, &v.class.name),
+                                    ))
                                 })
-                                .collect(),
-                            dir,
-                        }),
+                                .collect();
+                            Some(Side {
+                                walker_seats,
+                                models: m
+                                    .geometries
+                                    .iter()
+                                    .map(|g| (g.name.to_ascii_lowercase(), lod0(g).to_owned()))
+                                    .collect(),
+                                textures: m
+                                    .textures
+                                    .iter()
+                                    .map(|t| t.to_ascii_lowercase())
+                                    .collect(),
+                                walkers: m
+                                    .vehicles
+                                    .iter()
+                                    .filter_map(|v| v.walker.as_ref())
+                                    .filter_map(|w| {
+                                        Some((w.skin.as_ref()?.to_ascii_lowercase(), w.clone()))
+                                    })
+                                    .collect(),
+                                dir,
+                            })
+                        }
                         Err(e) => {
                             eprintln!("vehicles: {}: {e}", dir.display());
                             None
@@ -281,11 +313,11 @@ impl VehicleVisuals {
             let Some(Some(class)) = self.classes.get(v.class as usize) else {
                 continue;
             };
+            let walker = v.kind == core::vehicle::VehicleKind::Walker;
             let fade = faded
                 .iter()
                 .find(|(h, _)| h.index as usize == slot && h.gen == v.gen)
-                .map(|&(_, o)| render::Fade::see_through(o));
-            let walker = v.kind == core::vehicle::VehicleKind::Walker;
+                .map(|&(_, o)| render::Fade::see_through(visibility_opacity(walker, o)));
             let posed = match (&class.skin, walker) {
                 (Some(skin), true) => {
                     let scale = sim
@@ -348,7 +380,7 @@ fn pose_meshes(
     sk: &Skin,
     root_scale: f32,
 ) -> Result<Vec<MeshHandle>> {
-    let palette = sk.rig.palette(&v.walker, root_scale);
+    let palette = sk.rig.aimed_palette(v, root_scale);
     let (pos, nrm) = skin(&palette, &sk.positions, &sk.normals, &sk.joints);
     let fresh = posed.get(&slot).is_none_or(|(c, _)| *c != v.class);
     let mut handles = Vec::with_capacity(class.parts.len());
@@ -415,7 +447,15 @@ pub fn walker_rigs(
             let w = sides.0[i].walkers.get(&model.to_ascii_lowercase())?;
             let path = sides.dir(i).join("walkers").join(format!("{model}.glb"));
             let a = load_skinned_glb(&path).ok()?;
-            Some(std::sync::Arc::new(WalkerRig::new(a.skeleton, a.clips, w)))
+            Some(std::sync::Arc::new(
+                WalkerRig::new(a.skeleton, a.clips, w).with_seats(
+                    sides.0[i]
+                        .walker_seats
+                        .get(&model.to_ascii_lowercase())
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            ))
         })
         .collect()
 }
@@ -443,7 +483,17 @@ fn upload_class(
             if let (Some(w), false) = (walker, joints.is_empty()) {
                 let path = dir.join("walkers").join(format!("{model}.glb"));
                 match load_skinned_glb(&path) {
-                    Ok(a) => rig = Some(WalkerRig::new(a.skeleton, a.clips, w)),
+                    Ok(a) => {
+                        rig = Some(
+                            WalkerRig::new(a.skeleton, a.clips, w).with_seats(
+                                sides.0[i]
+                                    .walker_seats
+                                    .get(&model.to_ascii_lowercase())
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            ),
+                        )
+                    }
                     Err(e) => eprintln!("vehicles: {}: {e:#} — drawn rigid", path.display()),
                 }
             }
@@ -543,6 +593,7 @@ mod texture_cache_tests {
             dir: name.into(),
             models: HashMap::new(),
             walkers: HashMap::new(),
+            walker_seats: HashMap::new(),
             textures: ["shared".to_owned()].into_iter().collect(),
         };
         let sides = VehicleSides(vec![side("a"), side("b")]);
@@ -562,5 +613,18 @@ mod texture_cache_tests {
             );
         }
         assert_eq!(find_texture(&m, &sides, Some(0), "missing"), None);
+    }
+}
+
+#[cfg(test)]
+mod close_walker_tests {
+    #[test]
+    fn a_camera_inside_one_foot_never_hides_the_whole_walker() {
+        assert_eq!(
+            super::visibility_opacity(true, 0.0),
+            crate::camera_collide::SEE_THROUGH_OPACITY
+        );
+        assert_eq!(super::visibility_opacity(true, 1.0), 1.0);
+        assert_eq!(super::visibility_opacity(false, 0.0), 0.0);
     }
 }

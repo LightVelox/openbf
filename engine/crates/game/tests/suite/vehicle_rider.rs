@@ -280,7 +280,11 @@ fn an_animated_rider_rides_the_walker_skins_node() {
                 clip_time: k as f32 * 0.25,
                 ..Default::default()
             };
-            let Some(n) = rig.node_now(&w, 1.0, &name) else {
+            let Some(n) = rig
+                .skeleton
+                .index_of(&name)
+                .map(|n| rig.palette(&w, 1.0)[n] * rig.skeleton.global_bind[n])
+            else {
                 panic!("no {name} in the skin");
             };
             let at = n.w_axis.truncate();
@@ -419,6 +423,14 @@ fn a_seated_rider_is_drawn_on_his_vehicle() {
             true,
         ),
         (
+            "bf2_geo1",
+            ["rep", "cis"],
+            "rep_inf_trooper",
+            "rep_walk_atte",
+            1,
+            true,
+        ),
+        (
             "bf2_fel1",
             ["rep", "cis"],
             "rep_inf_ep3trooper",
@@ -494,6 +506,14 @@ fn a_seated_rider_is_drawn_on_his_vehicle() {
         }
         let player = walk.player;
         assert!(walk.sim.seat_unit(player, h, seat), "{map}: seat {seat}");
+        if let Some(v) = walk.sim.vehicle_mut(h) {
+            if v.kind == core::vehicle::VehicleKind::Walker {
+                for g in v.guns.iter_mut().flatten() {
+                    g.look = (1.0, 0.1);
+                    g.aim = g.look;
+                }
+            }
+        }
         let mut vis = game::soldier_vis::SoldierVisuals::load_cpu(&root, game_of, &walk.teams);
         let rigs = game::viewer::walker_rigs(&scene.manifest, &root, &walk.vehicle_geometry);
         vis.set_walker_rigs(rigs.clone());
@@ -501,22 +521,65 @@ fn a_seated_rider_is_drawn_on_his_vehicle() {
             walk.sim.tick += 1;
             vis.update(&walk, core::TICK_DT);
         }
+        let mut blend = game::render_blend::Blend::default();
+        blend.on = true;
+        if walk.sim.vehicle(h).unwrap().kind == core::vehicle::VehicleKind::Walker {
+            blend.before_tick(&walk);
+            let v = walk.sim.vehicle_mut(h).unwrap();
+            v.walker.clip_time += 0.033;
+            v.walker.pitch += 0.04;
+            for g in v.guns.iter_mut().flatten() {
+                g.look.0 += 0.2;
+                g.aim.0 += 0.2;
+            }
+            let hash = walk.sim.hash();
+            assert!(blend.apply(&mut walk, 0.5));
+            blend.restore(&mut walk);
+            assert_eq!(walk.sim.hash(), hash);
+            assert!(blend.apply(&mut walk, 0.5));
+        }
         let v = walk.sim.vehicle(h).unwrap();
         let want = Mat4::from_rotation_translation(v.rot, v.pos)
             * match &build.riders[ci][usize::from(seat)] {
-                RiderHang::Bind(b) => *b,
+                RiderHang::Bind(b) => rigs[ci]
+                    .as_deref()
+                    .and_then(|r| {
+                        let scale = walk.sim.walker_params[ci]
+                            .as_ref()
+                            .map_or(1.0, |p| p.root_scale);
+                        r.node_now(
+                            v,
+                            scale,
+                            build.seats[ci][usize::from(seat)]
+                                .pilot_position
+                                .as_deref()?,
+                        )
+                    })
+                    .unwrap_or(*b),
                 RiderHang::Node(name, b) => {
                     let scale = walk.sim.walker_params[ci]
                         .as_ref()
                         .map_or(1.0, |p| p.root_scale);
                     let n = rigs[ci]
                         .as_deref()
-                        .and_then(|r| r.node_now(&v.walker, scale, name))
+                        .and_then(|r| r.node_now(v, scale, name))
                         .expect("a posed walker skin");
                     assert!(!n.abs_diff_eq(*b, 0.01), "{map}: mid-step is off the bind");
                     n
                 }
             };
+        if let Some(rig) = rigs[ci].as_deref() {
+            if let Some(name) = build.seats[ci][usize::from(seat)].fire_point.as_deref() {
+                let scale = walk.sim.walker_params[ci]
+                    .as_ref()
+                    .map_or(1.0, |p| p.root_scale);
+                let local = rig.node_now(v, scale, name).expect("walker muzzle");
+                let want = v.pos + v.rot * local.w_axis.truncate();
+                assert!(vis.fire_points(&walk)[player.index as usize]
+                    .unwrap()
+                    .abs_diff_eq(want, 1e-4));
+            }
+        }
         let got = vis
             .drawn(&walk)
             .into_iter()
@@ -537,6 +600,7 @@ fn a_seated_rider_is_drawn_on_his_vehicle() {
             (false, None) => {}
             (d, g) => panic!("{map} {class} seat {seat}: drawn {d}, got {g:?}"),
         }
+        blend.restore(&mut walk);
         ran += 1;
     }
     if ran == 0 {

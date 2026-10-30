@@ -57,11 +57,11 @@ impl SoldierVisuals {
             })
             .collect();
         vis.set_turrets(tp::rigged_turrets(scene));
-        vis.set_walker_rigs(crate::viewer::walker_rigs(
-            &scene.manifest,
-            assets_dir,
-            &walk.vehicle_geometry,
-        ));
+        vis.set_walker_rigs(if walk.walker_rigs.is_empty() {
+            crate::viewer::walker_rigs(&scene.manifest, assets_dir, &walk.vehicle_geometry)
+        } else {
+            walk.walker_rigs.clone()
+        });
         vis
     }
 
@@ -473,6 +473,7 @@ impl SoldierVisuals {
             };
             if v.gen == u.gen {
                 v.shot_tick = Some(walk.sim.tick);
+                v.shot_class = Some(*weapon_class as usize);
             }
         }
     }
@@ -727,7 +728,14 @@ impl SoldierVisuals {
             // A rider is hidden but in a seat that shows him (cards VTURG,
             // VRIDE), who is drawn in every view, his own too.
             let model = match (u.mount, v.seat_model) {
-                (Some(_), Some(m)) => m,
+                (Some(mount), Some(m)) => walk
+                    .sim
+                    .vehicle(mount.vehicle)
+                    .filter(|v| v.kind == core::vehicle::VehicleKind::Walker)
+                    .and_then(|_| {
+                        rider_now(&self.walker_rigs, &self.hover_nine, walk, mount, self.bf2)
+                    })
+                    .map_or(m, |r| r.model),
                 (Some(_), None) => continue,
                 // In the scope view the player's own body is not drawn.
                 (None, _) if i == walk.player.index as usize && walk.player_body_hidden() => {
@@ -916,12 +924,43 @@ impl SoldierVisuals {
                 });
             }
         }
+        for (i, u) in walk.sim.units.iter().enumerate() {
+            if let Some(frame) = u
+                .mount
+                .filter(|_| u.alive)
+                .and_then(|m| self.walker_fire_frame(walk, m))
+            {
+                out[i] = Some(frame.w_axis.truncate());
+            }
+        }
         out
     }
 
-    /// The muzzle flashes to draw this frame (see the module doc): one per
-    /// drawn unit whose weapon flashes and whose last shot's t is still > 0
-    /// on the sim clock.
+    fn walker_fire_frame(&self, walk: &WalkSim, mount: core::vehicle::Mount) -> Option<Mat4> {
+        let v = walk.sim.vehicle(mount.vehicle)?;
+        let unit = v.seats.get(mount.seat as usize)?.occupant?;
+        let state = v.guns.get(mount.seat as usize)?.as_ref()?;
+        let setup = walk
+            .sim
+            .seat_setup
+            .get(v.class as usize)?
+            .as_ref()?
+            .guns
+            .get(mount.seat as usize)?
+            .as_ref()?;
+        let (weapon, state) = setup
+            .weapons
+            .iter()
+            .zip(&state.weapons)
+            .max_by_key(|(_, s)| s.shots_fired)?;
+        crate::walker_shots::frame(
+            walk,
+            unit,
+            weapon.class,
+            state.shots_fired.saturating_sub(1),
+        )
+    }
+
     pub fn flash_draws(&self, walk: &WalkSim) -> Vec<ParticleDraw> {
         let Some(model) = &self.flash else {
             return Vec::new();
@@ -937,7 +976,11 @@ impl SoldierVisuals {
             let Some(look) = walk
                 .sim
                 .weapon_classes
-                .get(self.hand_of(u, &walk.sim.weapon_classes).class)
+                .get(if u.mount.is_some() {
+                    v.shot_class.unwrap_or(usize::MAX)
+                } else {
+                    self.hand_of(u, &walk.sim.weapon_classes).class
+                })
                 .and_then(|w| w.flash.as_ref())
                 .filter(|f| f.draws() && f.model.as_deref() == Some(model.name.as_str()))
             else {
@@ -947,7 +990,14 @@ impl SoldierVisuals {
             let Some(color) = look.color_at(t) else {
                 continue;
             };
-            let m = core::flash::matrix(u.aim_frame().0, look.radius, *p);
+            let dir = u
+                .mount
+                .and_then(|m| self.walker_fire_frame(walk, m))
+                .map_or_else(
+                    || u.aim_frame().0,
+                    |m| m.z_axis.truncate().normalize_or_zero(),
+                );
+            let m = core::flash::matrix(dir, look.radius, *p);
             out.extend(model.draws(m, color, *p));
         }
         out

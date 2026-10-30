@@ -156,3 +156,57 @@ fn a_mouse_log_replays_to_the_same_sim() {
     };
     assert_ne!(run(&still).1, a.1, "the mouse turned the soldier");
 }
+
+#[test]
+fn walker_mouse_yaw_crosses_the_turn_window_while_pitch_remains_limited() {
+    use crate::vehicle::walker::{WalkerParams, WalkerState};
+    let p = WalkerParams {
+        yaw_limits: [-0.2, 0.2],
+        pitch_limits: [-0.4, 0.3],
+        ..Default::default()
+    };
+    let w = WalkerState::default();
+    assert_eq!(super::walker_aim(&w, &p, (-2.4, 2.0)), (2.4, 0.3));
+    assert_eq!(super::walker_aim(&w, &p, (2.4, -2.0)), (-2.4, -0.4));
+}
+
+#[test]
+fn the_hull_catches_an_outside_view_at_the_authored_rate_without_turning_the_view() {
+    use crate::vehicle::{
+        walker::{self, flags, WalkerParams},
+        SeatKind, VehicleKind, VehicleSpec,
+    };
+    use glam::Vec3;
+    for yaw in [-1.5, 1.5] {
+        let p = WalkerParams {
+            flags: flags::AIM_WINDOW | flags::CAMERA_TURN,
+            yaw_limits: [-0.2, 0.2],
+            stopped_turn_speed: 0.1,
+            ..Default::default()
+        };
+        let mut v = VehicleSpec {
+            kind: VehicleKind::Walker,
+            class: 0,
+            home_team: None,
+            neutral_when_empty: false,
+            spawn_pad: None,
+            pos: Vec3::ZERO,
+            yaw: 0.0,
+            max_health: 1.0,
+            health_type: crate::weapon::HealthType::Vehicle,
+            seats: vec![SeatKind::Pilot],
+        }
+        .build(1);
+        v.input.human = true;
+        v.walker.aim_yaw = yaw;
+        let before = v.rot * crate::vehicle::gun::dir(yaw, 0.0);
+        let rot = v.rot;
+        walker::input(&mut v, &p, crate::TICK_DT);
+        assert!(
+            (rot.angle_between(v.rot) - 2.0 * p.stopped_turn_speed * crate::TICK_DT).abs() < 1e-4
+        );
+        assert!(v.walker.aim_yaw.abs() > 0.2);
+        let after = v.rot * crate::vehicle::gun::dir(v.walker.aim_yaw, 0.0);
+        assert!(before.abs_diff_eq(after, 1e-5));
+    }
+}

@@ -72,6 +72,7 @@ fn play_event_sounds(
     }
     sl.play_repair_loops(audio, &walk.sim, &listener);
     sl.play_shield_loops(audio, &walk.sim, &listener);
+    sl.walker_fire_loops(audio, walk, &listener);
     sl.guided_loops(audio, &walk.sim, &listener);
     // The soldiers' steps and stance sounds (card FOLY).
     if let Some(foley) = foley {

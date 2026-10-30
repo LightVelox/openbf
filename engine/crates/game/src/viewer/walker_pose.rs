@@ -38,6 +38,7 @@ pub const LAYERS: [&str; 3] = ["", "_leftup", "_rightup"];
 /// and each leg pair's layer mask.
 pub struct WalkerRig {
     pub skeleton: Skeleton,
+    aim: super::walker_aim::WalkerAim,
     clips: Vec<Clip>,
     /// Per anim-table entry: its base, `_leftup` and `_rightup` clip.
     entries: Vec<[Option<usize>; 3]>,
@@ -72,6 +73,7 @@ impl WalkerRig {
             .collect();
         let bone_root = skeleton.index_of(BONE_ROOT);
         Self {
+            aim: Default::default(),
             skeleton,
             clips,
             entries,
@@ -128,13 +130,67 @@ impl WalkerRig {
         self.skeleton.palette(&locals)
     }
 
-    /// Node `name`'s model-space matrix as walker state `w` poses it: what
-    /// an `AnimatedPilotPosition` rider hangs by (card VRIDE,
-    /// `analysis/re-vehicle-riders.md` 2.1 [O]). `None` when the skeleton
-    /// has no such node.
-    pub fn node_now(&self, w: &WalkerState, root_scale: f32, name: &str) -> Option<Mat4> {
+    pub fn with_seats(mut self, seats: Vec<crate::vehicle_class::SeatSpec>) -> Self {
+        self.aim = super::walker_aim::WalkerAim::new(&self.skeleton, seats);
+        self
+    }
+
+    pub fn nodes(&self, v: &core::vehicle::Vehicle, root_scale: f32) -> Vec<Mat4> {
+        let walk: Vec<_> = self
+            .palette(&v.walker, root_scale)
+            .iter()
+            .zip(&self.skeleton.global_bind)
+            .map(|(p, b)| *p * *b)
+            .collect();
+        self.aim.pose(&self.skeleton, &walk, v)
+    }
+
+    pub fn aimed_palette(&self, v: &core::vehicle::Vehicle, root_scale: f32) -> Vec<Mat4> {
+        let palette = self.palette(&v.walker, root_scale);
+        let walk: Vec<_> = palette
+            .iter()
+            .zip(&self.skeleton.global_bind)
+            .map(|(p, b)| *p * *b)
+            .collect();
+        let now = self.aim.pose(&self.skeleton, &walk, v);
+        now.iter()
+            .enumerate()
+            .map(|(n, m)| {
+                if *m == walk[n] {
+                    palette[n]
+                } else {
+                    *m * self.skeleton.inverse_bind[n]
+                }
+            })
+            .collect()
+    }
+
+    pub fn seat_frame(
+        &self,
+        v: &core::vehicle::Vehicle,
+        root_scale: f32,
+        turret: Option<&str>,
+        look: (f32, f32),
+    ) -> Mat4 {
+        let carried =
+            turret
+                .and_then(|name| self.skeleton.index_of(name))
+                .map_or(Mat4::IDENTITY, |n| {
+                    let parent = self.skeleton.parents[n]
+                        .map_or(Mat4::IDENTITY, |p| self.nodes(v, root_scale)[p]);
+                    parent * self.skeleton.local_bind[n]
+                });
+        super::turret_pose::turret_node(&carried, look.0, -look.1)
+    }
+
+    pub fn node_now(
+        &self,
+        v: &core::vehicle::Vehicle,
+        root_scale: f32,
+        name: &str,
+    ) -> Option<Mat4> {
         let n = self.skeleton.index_of(name)?;
-        Some(self.palette(w, root_scale)[n] * self.skeleton.global_bind[n])
+        Some(self.nodes(v, root_scale)[n])
     }
 }
 
