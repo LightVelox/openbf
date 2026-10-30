@@ -44,3 +44,6 @@ control. Game files and images stay ignored.
 
 The maintainer requested a commit on main and packed dist/openbf.exe refresh.
 This card does not assert upstream integration or exact original actor triggers.
+
+## Planner note (2026-09-30, M-ALPHA)
+`defer: post-alpha` — not needed for the alpha's six showcase maps or its checklist. Value 2 (kept).

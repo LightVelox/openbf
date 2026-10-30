@@ -199,6 +199,13 @@
 //! Between them a `grenades <key>:` line (card GRAI): the grenades the bots
 //! threw, in all and per weapon class.
 //!
+//! `SNIPE_CENSUS=1` adds a `snipe <key>:` line: the AI seconds on foot with a
+//! scoped rifle in hand and of those on a sniper's spot, the distance of
+//! each scoped-rifle shot at a unit (median, p90, max, and per 20 m band,
+//! the last 100 m and over), and the samples (every 15 ticks) where an
+//! enemy soldier on foot stood 60-128 m off in the sniper's view cone with
+//! a clear line, with those where the sniper saw it.
+//!
 //! `SPAWN_CENSUS=1` (card CWSP) adds a `spawns <key>:` line the same way:
 //! where each team's units appeared — the opening wave (the alive units
 //! after the first tick), the respawns of the first 60 s, and the whole
@@ -386,7 +393,8 @@
 //! - `SWEEP_MISSION_DIR=<dir>` reads the missions from another folder (the
 //!   faction-swap copies of a balance run);
 //! - `SWEEP_PROXY=<team>:<average|good>[,skill=N][,reaction=TICKS]
-//!   [,view=X][,circles=0|1][,strafe=P][,roll=P][,move=P][,grenade=P]`
+//!   [,view=X][,circles=0|1][,strafe=P][,roll=P][,move=P][,grenade=P]
+//!   [,hand=0|1][,hfloor=RAD][,hacquire=RAD][,hsettle=S][,hup=M][,head=0|1][,hunts=0|1][,class=N|-1][,mend=SHARE][,picks=0|1]`
 //!   makes the first bot of `<team>` on foot after the opening wave a HUMAN
 //!   PROXY (`core::ai::proxy`): the sim treats it as a human for every
 //!   human-only rule, it plays with that strength's fixed profile (the
@@ -516,6 +524,7 @@ impl Cfg {
 
 /// `<team>:<strength>[,key=value...]` (module header).
 fn parse_proxy(v: &str) -> Result<(u8, core::ai::proxy::Profile, String), String> {
+    use core::ai::proxy::hand::Hand;
     let (team, rest) = v.split_once(':').ok_or("want <team>:<strength>")?;
     let team: u8 = team
         .trim()
@@ -543,6 +552,17 @@ fn parse_proxy(v: &str) -> Result<(u8, core::ai::proxy::Profile, String), String
             "roll" => p.react[1] = f,
             "move" => p.react[2] = f,
             "grenade" => p.grenade = f,
+            // [ours] The hand (`core::ai::proxy::hand`): on/off and its numbers.
+            "hand" => p.hand = (f != 0.0).then_some(p.hand.unwrap_or(Hand::DEFAULT)),
+            "hfloor" => p.hand.get_or_insert(Hand::DEFAULT).floor = f,
+            "hacquire" => p.hand.get_or_insert(Hand::DEFAULT).acquire = f,
+            "hsettle" => p.hand.get_or_insert(Hand::DEFAULT).settle = f,
+            "hup" => p.hand.get_or_insert(Hand::DEFAULT).up = f,
+            "head" => p.headshots = f != 0.0,
+            "hunts" => p.hunts = f != 0.0,
+            "mend" => p.mend = f,
+            "picks" => p.picks = f != 0.0,
+            "class" => p.class = (f >= 0.0).then_some(f as u8),
             _ => return Err(format!("{k}: unknown key")),
         }
         label.push(',');
@@ -1173,6 +1193,111 @@ impl Shots {
             self.long.len()
         );
         out
+    }
+}
+
+/// `SNIPE_CENSUS` (env): what the AI snipers do (module header).
+#[derive(Default)]
+struct SnipeCensus {
+    /// AI unit-ticks on foot with a scoped rifle in hand; of those on a
+    /// sniper's spot.
+    rifle: u64,
+    perch: u64,
+    /// The distance of every scoped-rifle shot at a unit target, m.
+    shots: Vec<f32>,
+    /// Samples (every 15 ticks, a scoped bot on foot): an enemy soldier
+    /// 60-128 m off, in the view cone, with a clear line (could be shot);
+    /// of those, one the bot holds as seen.
+    open: u64,
+    open_seen: u64,
+}
+
+impl SnipeCensus {
+    fn observe(&mut self, sim: &core::sim::Sim) {
+        let scoped = |c: usize| sim.weapon_classes[c].ai_distance_table();
+        for ev in &sim.events {
+            if let core::sim::Event::Shot {
+                unit, weapon_class, ..
+            } = ev
+            {
+                let Some(u) = sim
+                    .unit(*unit)
+                    .filter(|u| !u.is_player && u.mount.is_none())
+                else {
+                    continue;
+                };
+                if !scoped(*weapon_class as usize) {
+                    continue;
+                }
+                if let Some(t) = u.ai.target.and_then(|t| t.live_unit(sim)) {
+                    self.shots
+                        .push((t.capsule().center() - u.muzzle()).length());
+                }
+            }
+        }
+        let sample = sim.tick.is_multiple_of(15);
+        for (_, u) in sim.alive_units() {
+            if u.is_player || u.mount.is_some() || !scoped(u.weapon_class) {
+                continue;
+            }
+            self.rifle += 1;
+            if u.ai.snipe.cur.is_some_and(|c| c.arrived) {
+                self.perch += 1;
+            }
+            if !sample {
+                continue;
+            }
+            let eye = u.muzzle();
+            let view = u.aim_frame().0;
+            let mut open = false;
+            let mut seen = false;
+            for (h, o) in sim.alive_units() {
+                if o.team == u.team || o.mount.is_some() {
+                    continue;
+                }
+                let p = o.capsule().center();
+                let off = p - eye;
+                let d2 = off.dot(off);
+                if !(3600.0..16384.0).contains(&d2)
+                    || !core::perception::in_cone(view, off, d2, 0.0)
+                    || !core::perception::los(sim, eye, p)
+                {
+                    continue;
+                }
+                open = true;
+                seen |= core::perception::contact_of(&u.ai, h).is_some_and(|c| c.seen_now);
+            }
+            self.open += u64::from(open);
+            self.open_seen += u64::from(open && seen);
+        }
+    }
+
+    fn line(&mut self, key: &str) -> String {
+        let hz = core::TICK_HZ as f32;
+        self.shots.sort_by(f32::total_cmp);
+        let n = self.shots.len();
+        let q = |f: f32| {
+            if n == 0 {
+                0.0
+            } else {
+                self.shots[((n - 1) as f32 * f) as usize]
+            }
+        };
+        let mut bins = [0u32; 6];
+        for d in &self.shots {
+            bins[((d / 20.0) as usize).min(5)] += 1;
+        }
+        format!(
+            "snipe {key}: rifle_s {:.0} perch_s {:.0} | shots {n} median {:.1} p90 {:.1} max {:.1} | by 20 m {:?} | open60-128 {} seen {}\n",
+            self.rifle as f32 / hz,
+            self.perch as f32 / hz,
+            q(0.5),
+            q(0.9),
+            q(1.0),
+            bins,
+            self.open,
+            self.open_seen,
+        )
     }
 }
 
@@ -4235,6 +4360,7 @@ fn run_map(
     let mut noprog = NoProgress::default();
     let mut deaths = deaths_on().then(Deaths::default);
     let mut shots = std::env::var_os("SWEEP_SHOTS").map(|_| Shots::default());
+    let mut snipe = std::env::var_os("SNIPE_CENSUS").map(|_| SnipeCensus::default());
     let mut droid_census = std::env::var_os("DROID_CENSUS").map(|_| DroidCensus::default());
     // `ANIM_CENSUS` (card ANIML): the soldiers' animators run beside the
     // round, without a renderer, and are counted.
@@ -4356,7 +4482,7 @@ fn run_map(
             tally.tick(&w.sim, Some((*i, "proxy")));
         }
         if let Some(m) = matchlog.as_mut() {
-            m.tick(&w.sim, (0, 0));
+            m.tick(&w.sim, &core::sim::PadState::default());
         }
         // Scratch observer (VBAIL local validation, EXIT_WATCH=1, stderr only):
         // every AI hover/walker exit by unit generation + tick + vehicle, and
@@ -4624,6 +4750,9 @@ fn run_map(
             d.observe(&w.sim);
         }
         if let Some(s) = shots.as_mut() {
+            s.observe(&w.sim);
+        }
+        if let Some(s) = snipe.as_mut() {
             s.observe(&w.sim);
         }
         if let Some(d) = droid_census.as_mut() {
@@ -5255,6 +5384,9 @@ fn run_map(
     }
     if let Some(s) = shots.as_mut() {
         census.push_str(&s.line(key, &w.sim));
+    }
+    if let Some(s) = snipe.as_mut() {
+        census.push_str(&s.line(key));
     }
     if let Some(d) = &droid_census {
         census.push_str(&d.line(key));

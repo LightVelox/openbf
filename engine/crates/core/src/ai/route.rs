@@ -1149,7 +1149,9 @@ pub(super) fn retarget(
         }
     }
     let plan = &sim.commander[usize::from(u.team).min(1)];
-    match plan.of(me.index) {
+    // [ours] A hunting unit goes where the fight is (`proxy::front`).
+    let objective = super::proxy::front(sim, u).or(plan.of(me.index));
+    match objective {
         // Card PARR: a last leg at a post walks to a point of its capture
         // region, not to its centre — but for a defender with a spot.
         Some(crate::commander::Objective::Attack(cp)) => {

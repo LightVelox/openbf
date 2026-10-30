@@ -13,8 +13,7 @@
 //! - the aim error against him: BF2's whole error against a human, 0.3 of it
 //!   against a bot (`gunner_foot::error_vector`), and his error block updated
 //!   every tick (`Sim::aim_blocks`);
-//! - the D12 human-damage multiplier on a bot's hit into him, and a bot's
-//!   friendly fire not hurting him (`resolve_bolt`, `blast_unit`);
+//! - a bot's friendly fire not hurting him (`resolve_bolt`, `blast_unit`);
 //! - the bleed handicap's "team with a human" (`Sim::apply_team_handicap`);
 //! - card DTEAM's per-team human count: [`humans_on`].
 //!
@@ -24,17 +23,37 @@
 //! a bot's spread multiplier, the AI aim error). It gets no damage buff: its
 //! edge over a bot is only its fixed [`Profile`].
 //!
+//! [ours] The stronger stand-in (2026-10-29, the maintainer: "a little bit
+//! worse than how I played"): a proxy may also play by a player's rules
+//! where a bot's would hold it back - each a [`Profile`] field:
+//! - `hand`: aims and fires as a pad does ([`hand`]): the lead point with a
+//!   settling error, followed straight (the assist's rate match), the
+//!   trigger held while on him, out to the round's reach, a player's
+//!   weapon spread ([`hand_weapons`]);
+//! - `headshots`: its head hits count, as a player's do on every tier;
+//! - `class`: respawns as one class, as a player picks his;
+//! - `hunts`: goes to the nearest post its team does not hold ([`front`]);
+//! - `mend`: hurt, breaks off to a health droid ([`mend`]);
+//! - `picks`: shoots who shoots at it first ([`pick`]);
+//! - `skill` over 20 ([`skill_over`]): the curves carried on (measured; not
+//!   in a strength).
+//!
+//! [ours] PROVISIONAL: `hunts`, `mend` and `picks` also serve the tier
+//! columns for ordinary bots. The other player rules remain proxy-only.
+//!
 //! The profile is a fixed "human" row, the same on every tier (a human does
 //! not get better when the host picks Elite): its aim skill, its reaction,
 //! what it does when hit, how readily it runs from a grenade, how far it
 //! sees and whether it strafes (circles) instead of standing. Two strengths,
-//! [`Strength::Average`] and [`Strength::Good`]; the numbers are PROVISIONAL
-//! until card DBASE calibrates "good" against the maintainer's own match
-//! (`scripts/human_profile.py`, `analysis/difficulty-proposal.md` §5).
+//! [`Strength::Average`] (PROVISIONAL) and [`Strength::Good`] (fitted to the
+//! maintainer's own matches on 2026-10-29, a little under him; its row says
+//! which numbers the fit supports - `scripts/human_profile.py`,
+//! `analysis/difficulty-proposal.md` §5).
 
 use crate::sim::Sim;
 use crate::skill::{Difficulty, Skill, Tier};
 use crate::unit::Unit;
+use glam::Vec3;
 
 /// The two proxy strengths of `analysis/difficulty-proposal.md` §5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +81,9 @@ impl Strength {
         }
     }
 
-    /// This strength's row. PROVISIONAL (ours, the proposal's defaults with
-    /// the damage multipliers dropped: a proxy must be fair).
+    /// This strength's row (ours). Average: PROVISIONAL, the proposal's
+    /// defaults with the damage multipliers dropped (a proxy must be fair).
+    /// Good: fitted to the maintainer's matches (its comment).
     pub fn profile(self) -> Profile {
         match self {
             Strength::Average => Profile {
@@ -73,14 +93,36 @@ impl Strength {
                 grenade: 0.60,
                 view_mult: 1.25,
                 circles: false,
+                hand: None,
+                headshots: false,
+                hunts: false,
+                class: None,
+                mend: 0.0,
+                picks: false,
             },
+            // [ours] Fitted 2026-10-29 to the maintainer's two BF1 Yavin 4
+            // Arena matches at Normal, set a little under him on purpose
+            // (`human_profile.py calibrate`, 16 seeds): kills/min 5.4 of his
+            // 8.3, K/D 8.7 of 23.8, accuracy 0.37 of 0.37, life 73 s of 110.
+            // Fit-supported: `hand.floor` (the accuracy), `class` 0 (the
+            // rifleman he played), `headshots` (his rule; 13 % of his rifle
+            // hits were heads). The rest stays PROVISIONAL.
             Strength::Good => Profile {
                 skill: 20,
                 reaction_ticks: 6,
                 react: [0.35, 0.25, 0.30],
                 grenade: 0.95,
-                view_mult: 1.5,
+                view_mult: 2.0,
                 circles: true,
+                hand: Some(hand::Hand {
+                    floor: 0.006,
+                    ..hand::Hand::DEFAULT
+                }),
+                headshots: true,
+                hunts: true,
+                class: Some(0),
+                mend: 0.35,
+                picks: true,
             },
         }
     }
@@ -107,11 +149,34 @@ pub struct Profile {
     /// target) instead of the bot's own drawn style; a scoped weapon still
     /// stands.
     pub circles: bool,
+    /// [ours] Aims and fires with a human's hand ([`hand`]) instead of the
+    /// bot gunner's error, bursts and AI ranges. `None`: the bot gunner.
+    pub hand: Option<hand::Hand>,
+    /// [ours] Its head hits count as a human's do (the PS2 drops a bot's
+    /// below our Hard; a player's always count).
+    pub headshots: bool,
+    /// [ours] Goes where the fight is ([`front`]): the nearest post its
+    /// team does not hold, never a rear post to defend - a player hunting
+    /// kills, not the commander's pick.
+    pub hunts: bool,
+    /// [ours] The class it respawns as (an index into its team's table), as
+    /// a player picks his on the spawn screen; `None`: the bots' weighted
+    /// draw.
+    pub class: Option<u8>,
+    /// [ours] Under this share of its health it breaks off to the nearest
+    /// health droid ([`mend`]); 0: never.
+    pub mend: f32,
+    /// [ours] Picks its target as a player does ([`pick`]): the one
+    /// shooting at it first, then a hurt one, then the nearest.
+    pub picks: bool,
 }
 
 impl Profile {
     /// `tier` with this profile's columns in place of the tier's.
     pub fn over(&self, mut tier: Tier, map_view: f32) -> Tier {
+        tier.picks = self.picks;
+        tier.mend = self.mend;
+        tier.hunts = self.hunts;
         tier.reaction_ticks = self.reaction_ticks;
         tier.react = self.react;
         tier.grenade = self.grenade;
@@ -119,14 +184,35 @@ impl Profile {
         tier
     }
 
-    /// The skill vector: the level's curves, no tier override.
+    /// The skill vector: the level's curves, no tier override. [ours] Over
+    /// 20 (a proxy only; no tier goes there) the curves run on past their
+    /// end ([`skill_over`]).
     pub fn skill(&self) -> Skill {
-        Skill::from_level(self.skill)
+        skill_over(self.skill)
     }
 
     /// Feed into the sim hash (only a proxy's unit eats it).
     pub fn hash_into(&self, eat: &mut impl FnMut(&[u8])) {
         eat(&[0xD7, self.skill, u8::from(self.circles)]);
+        if let Some(h) = &self.hand {
+            eat(&[0x4A]);
+            h.hash_into(eat);
+        }
+        if self.headshots {
+            eat(&[0x4E]);
+        }
+        if self.hunts {
+            eat(&[0x48]);
+        }
+        if let Some(c) = self.class {
+            eat(&[0x43, c]);
+        }
+        if self.mend > 0.0 {
+            eat(&self.mend.to_bits().to_le_bytes());
+        }
+        if self.picks {
+            eat(&[0x50]);
+        }
         eat(&self.reaction_ticks.to_le_bytes());
         for v in self
             .react
@@ -136,6 +222,30 @@ impl Profile {
             eat(&v.to_bits().to_le_bytes());
         }
     }
+}
+
+/// The highest proxy skill (5 levels past the originals' 20).
+pub const SKILL_MAX: u8 = 25;
+
+/// [ours] [`Skill::from_level`] carried past 20 on the same curves (t over
+/// 1), with the same floors at zero; the skill's discrete columns (burst,
+/// pause, tap, charge, grenade, dodge) stay at 20's. A level up to 20 is the
+/// table's own.
+pub fn skill_over(level: u8) -> Skill {
+    let mut k = Skill::from_level(level);
+    if level <= 20 {
+        return k;
+    }
+    let t = f32::from(level.min(SKILL_MAX) - 1) / 19.0;
+    let lerp = |a: f32, b: f32| a + (b - a) * t;
+    k.spread_mult = lerp(3.0, 1.0).max(0.0);
+    k.dispersion_mult = lerp(2.0, 0.0).max(0.0);
+    k.aim_accel = 0.8 + 13.2 * t * t * t;
+    k.aim_damping = lerp(0.8, 2.4);
+    k.err_decay = lerp(0.1, 1.1);
+    k.err_floor = lerp(1.6, 0.4).max(0.0);
+    k.err_cap = lerp(2.2, 1.2).max(0.0);
+    k
 }
 
 /// Card DTEAM's hook: how many humans team `team` has, proxies included -
@@ -158,6 +268,119 @@ pub fn humans_on(sim: &Sim, team: u8) -> u8 {
         .filter(|u| u.team == team && u.proxy_human.is_some())
         .count();
     u8::try_from(players + proxies).unwrap_or(u8::MAX)
+}
+
+/// [ours] A proxy with a hand carries a human's weapon state (its spread
+/// rests at a player's floor, `WeaponState::human`); every other unit keeps
+/// its own. Called when the flag is set and at each respawn.
+pub fn hand_weapons(u: &mut Unit) {
+    if u.proxy_human.is_some_and(|p| p.hand.is_some()) {
+        u.weapon.human = true;
+        for w in u.held.iter_mut() {
+            w.state.human = true;
+        }
+    }
+}
+
+/// [ours] A hunting unit's objective: the nearest post (straight line)
+/// its team does not hold and may take, else the nearest enemy. `None` for
+/// every unit that is not a hunter (the commander's plan stands).
+pub fn front(sim: &Sim, u: &Unit) -> Option<crate::commander::Objective> {
+    if !sim.unit_tier(u).hunts {
+        return None;
+    }
+    let at = u.soldier.pos;
+    let post = sim
+        .cps
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.owner != Some(u.team) && !c.ai_no_capture(u.team))
+        .map(|(i, c)| (i, (c.def.pos - at).length_squared()))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i as u32);
+    Some(post.map_or(crate::commander::Objective::Hunt, |i| {
+        crate::commander::Objective::Attack(i)
+    }))
+}
+
+/// The farthest (m) a mending unit goes for a health droid.
+pub const MEND_REACH: f32 = 80.0;
+/// The share of its health a mending unit stays at the droid for.
+pub const MEND_FULL: f32 = 0.95;
+
+/// [ours] Where a hurt unit goes to heal: the nearest standing health droid
+/// within [`MEND_REACH`] while its health is under its tier's `mend`
+/// share, and on until [`MEND_FULL`] once it is at the droid. `None` for
+/// every other unit and moment.
+pub fn mend(sim: &Sim, u: &Unit) -> Option<Vec3> {
+    let low = sim.unit_tier(u).mend;
+    if low <= 0.0 || u.mount.is_some() || u.health.max <= 0.0 {
+        return None;
+    }
+    let share = u.health.cur / u.health.max;
+    if share >= MEND_FULL {
+        return None;
+    }
+    let at = u.soldier.pos;
+    let (pos, d2, radius) = sim
+        .stations
+        .iter()
+        .filter(|s| {
+            !s.destroyed
+                && sim
+                    .station_classes
+                    .get(usize::from(s.class))
+                    .is_some_and(|c| c.health[0] > 0.0)
+        })
+        .map(|s| (s.pos, (s.pos - at).length_squared(), s.radius))
+        .filter(|&(_, d2, _)| d2 < MEND_REACH * MEND_REACH)
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let there = d2 < (radius + 1.0) * (radius + 1.0);
+    (share < low || there).then_some(pos)
+}
+
+/// [`pick`]'s weights, in metres of range: an enemy aiming at the unit
+/// counts as this much nearer...
+pub const PICK_THREAT: f32 = 15.0;
+/// ...one it has hurt (under 70 % health) this much...
+pub const PICK_HURT: f32 = 10.0;
+/// ...and the target it already has this much (no flicking between two).
+pub const PICK_KEEP: f32 = 5.0;
+
+/// [ours] A picking unit's target out of the enemies it SEES now: the
+/// nearest after [`PICK_THREAT`], [`PICK_HURT`] and [`PICK_KEEP`]. `None`
+/// for every other unit, or with nobody seen.
+pub fn pick(
+    sim: &Sim,
+    me: crate::unit::UnitHandle,
+    st: &crate::ai::state::AiState,
+) -> Option<crate::unit::UnitHandle> {
+    let u = sim.unit(me)?;
+    if !sim.unit_tier(u).picks {
+        return None;
+    }
+    let eye = u.capsule().center();
+    st.contacts
+        .iter()
+        .flatten()
+        .filter(|c| c.seen_now)
+        .filter_map(|c| {
+            let h = c.handle.unit()?;
+            let e = sim.unit(h).filter(|e| e.team != u.team)?;
+            let mut score = (e.capsule().center() - eye).length();
+            if e.ai.target == Some(me.into()) {
+                score -= PICK_THREAT;
+            }
+            if e.health.cur < 0.7 * e.health.max {
+                score -= PICK_HURT;
+            }
+            if st.target == Some(h.into()) {
+                score -= PICK_KEEP;
+            }
+            Some((h, score))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| h)
 }
 
 impl Sim {
@@ -186,6 +409,7 @@ impl Sim {
         match self.unit_mut(h) {
             Some(u) if u.controller == crate::unit::Controller::Ai && !u.is_player => {
                 u.proxy_human = profile;
+                hand_weapons(u);
                 true
             }
             _ => false,
@@ -194,12 +418,11 @@ impl Sim {
 }
 
 /// Card DPRX's difficulty targets: the proxy team's win rate with a GOOD
-/// proxy, averaged over both sides of each map (the maintainer, 2026-10-28;
-/// PROVISIONAL until he confirms them after DBASE). `(tier, low, high)` as
-/// fractions; `high` 1.0 = no ceiling.
+/// proxy, averaged over both sides of each map (the maintainer, 2026-10-29).
+/// `(tier, low, high)` as fractions; `high` 1.0 = no ceiling.
 pub const TARGETS: [(Difficulty, f32, f32); 4] = [
     (Difficulty::Easy, 0.90, 1.0),
-    (Difficulty::Normal, 0.65, 0.80),
+    (Difficulty::Normal, 0.77, 0.90),
     (Difficulty::Hard, 0.45, 0.60),
     (Difficulty::Elite, 0.25, 0.40),
 ];
@@ -221,6 +444,8 @@ pub fn passes(d: Difficulty, wins: u32, rounds: u32) -> bool {
     let r = wins as f32 / rounds as f32;
     r >= lo && r <= hi
 }
+
+pub mod hand;
 
 #[cfg(test)]
 mod tests;

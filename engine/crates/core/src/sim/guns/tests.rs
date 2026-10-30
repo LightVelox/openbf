@@ -34,6 +34,7 @@ fn gun(fire: [f32; 3], pivot: [f32; 3], yaw: [f32; 2], pilot: bool) -> GunSetup 
         turn: None,
         framed: false,
         aimer_bind: glam::Quat::IDENTITY,
+        gunner: None,
     }
 }
 

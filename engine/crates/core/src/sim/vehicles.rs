@@ -316,6 +316,12 @@ impl Sim {
         let pilot = v.seats[usize::from(seat)].kind == SeatKind::Pilot;
         let ground = matches!(v.kind, VehicleKind::Hover | VehicleKind::Walker);
         self.units[u.index as usize].mount = Some(Mount { vehicle: vh, seat });
+        // A rider leaves his foot stance: the PS2 seats him in its rider
+        // state (BF1 state 12, re-turret-collision 3.2) and a drawn gunner
+        // is drawn in the seat's pose. A seated unit never steps, so a
+        // crouch kept here would keep his bolt prims crouched under his
+        // drawn head for the whole ride (playtest 2026-10-29).
+        self.units[u.index as usize].soldier.stance = crate::soldier::Stance::Stand;
         self.units[u.index as usize].ai.pending_board = None;
         if let Some(r) = self.units[u.index as usize].ai.ride.as_mut() {
             r.board = None;

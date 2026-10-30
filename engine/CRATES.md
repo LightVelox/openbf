@@ -20,7 +20,7 @@ module's `//!` header is its spec.
 | `input` | gilrs pad → `PadState` | core; gilrs |
 | `audio` | kira playback behind the `backend` feature; the streamed music decoder | pak; kira (optional), anyhow |
 | `net` | empty home for the locked LAN feature | — |
-| `game` | the binary + library: assets, viewer, play loop, goldens | core, manifest, pak, input, render, ui, audio; glam, winit, gilrs, ron, serde(_json), gltf, ktx2, wgpu, anyhow; dev: bake, mungefs, image |
+| `game` | the binary + library: assets, viewer, play loop, goldens | core, manifest, pak, input, render, ui, audio; glam, winit, gilrs, ron, serde(_json), gltf, ktx2, wgpu, anyhow, image; dev: bake, mungefs |
 
 Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest`) → `game` → `core`, `render`, `ui`,
 `audio`. Use `scripts/size_report.sh` for current per-crate and total source, test and example counts.
@@ -142,7 +142,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/sim/doors.rs` 79 — door ticking and opening-leaf queries · `tick_doors`, `door_opening`, `opening_leaf_over` (DR2 / MOUTH2 / DOORS).
 - `core/src/sim/trace.rs` 200 — SHASH read-only canonical per-tick hash stream, quantization and bounded full tuples · `TraceWriter`, `POSITION_QUANTUM`, `HEALTH_QUANTUM`, `CAPTURE_QUANTUM`, `TIMER_QUANTUM`.
 - `core/src/sim/trace/tests.rs` 176 — SHASH replay equality/first divergence, independent wire vectors, field sensitivity, read-only controls and legacy hash pins.
-- `core/src/sim/input.rs` 1436 — pad/button definitions, input logs and replay, player aim-assist acquisition and reticle picks; includes replay, pad-slot and assist tests · `PadState`, `buttons`, `InputLog`, `AimTarget`, `Sim::run_log`, `Sim::magnet_at`, `cone_score`; see the module header and `analysis/re-aim-assist.md`.
+- `core/src/sim/input.rs` 1436 — pad/button definitions, input logs and replay, player aim-assist acquisition and reticle picks; includes replay, pad-slot and assist tests · `PadState` (`fire_lag`: a press fired part way into its tick's turn), `buttons`, `InputLog`, `AimTarget`, `Sim::run_log`, `Sim::magnet_at`, `cone_score`; see the module header and `analysis/re-aim-assist.md`.
 - `core/src/sim/spawn.rs` 268 — shared spawn stages, class weights, wave clock and placement helpers; facade for runtime and regression modules.
 - `core/src/sim/spawn/runtime.rs` 1238 — spawning, no-overspawn shedding, AI class weights, spawn screens/post selection, the class gate with the slot's career costs (UNLK3) and spawn-floor reachability · `Sim::spawn`, `Sim::spawn_ai`, `Sim::spawn_posts`, `Sim::class_refusal`, `Sim::spawn_cost`, `Sim::floor_flood`, `Sim::floor_path`.
 - `core/src/sim/spawn/class_change.rs` 217 — issue #28: change class at a friendly command post while alive (use-button reach and facing, in-place swap, health carried, per-class per-life ammo) · `Sim::class_change_post`, `class_change_open`, `class_change_accept`.
@@ -157,7 +157,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/sim/round.rs` 587 — command-post registration/capture, conquest bleed, difficulty handicap and round outcome; includes capture/defeat/handicap tests · `Sim::add_cp`; rules are in the module header.
 - `core/src/sim/seats.rs` 872 — human/bot vehicle entry, explicit AI-call/player-order claim-budget reconciliation, follower boarding, pickup clock/output and claim-maintenance write-back, all-AI bailout dispatch/census, takeover and exit placement, driver input and rider transport · `Sim::use_pass`, `Sim::ai_use_pass`, `Sim::enter_target`, `Sim::enter_seat`, `Sim::enter_vehicle`, `Sim::exit_vehicle`, `Sim::shut_in`, `Sim::shut_in_solid`, `driver_input`; see module header, `analysis/re-vehicles.md` §5 and `analysis/re-hover.md` §5.2.
 - `core/src/sim/droidekas.rs` 263 — the droideka's sim step: pad edges into fold/deploy/shield/jump, the bot form order, collision capsules by form, fire gating and barrels, events (`Event::Droideka`), shield and ordnance spheres in the world · `Sim::step_droideka`, `Unit::droideka_shield`, `Unit::droideka_spheres`, `Unit::droideka_muzzle`, `Unit::droideka_eye`, `Unit::separation_radius`.
-- `core/src/sim/seats/tests.rs` 594 — vehicle entry/refusal/takeover, follower boarding/seat contention, driving, exit placement and input-shaping regressions on flat ground with the TAT1 skiff fixture.
+- `core/src/sim/seats/tests.rs` 598 — vehicle entry/refusal/takeover, follower boarding/seat contention, driving, exit placement and input-shaping regressions on flat ground with the TAT1 skiff fixture.
 - `core/src/sim/guns.rs` 497 — mounted weapon ticking, seat switching and live look/eye/barrel queries for human and bot riders · `Sim::next_seat`, `Sim::switch_pass`, `Sim::seat_gun`, `Sim::seat_look`, `SeatLook`; shared weapon firing and bot fairness checks are specified in the header and `analysis/re-vehicles.md` §5/§9.
 - `core/src/sim/guns/tests.rs` 683 — seat-switch/charge-tenure, human charge release, firing/aimer, occupancy-hash and bot-gunner regressions, including Mygeeto turret camera/building, barrel and muzzle alignment (TURR).
 - `core/src/sim/step.rs` 1200 — fixed-tick orchestration and after-writeback wait-start and routed-departure calls, unit separation, soldier wall/zoom handling and human aim rays · `Sim::step`, `Sim::aim_hit`, `Sim::tick_zoom`; tick order is in `sim.rs`, aim details in `analysis/re-aim-assist.md` §10 and zoom details in `analysis/re-zoom.md` §5; regressions live in `core/src/sim/step/tests.rs`.
@@ -165,7 +165,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/sim/vehicles.rs` 1938 — vehicle slots, pickup/charge-tenure, pending-call and boarding-maintenance lifecycle, occupancy/team synchronization, hull damage/death, pad spawning/decay, vehicle ticking and collision hull synchronization; includes lifecycle/hash/pad/hull tests · `Sim::spawn_vehicle`, `Sim::seat_unit`, `Sim::unseat_unit`, `Sim::vehicle_team`, `Sim::damage_vehicle`, `Sim::impact_vehicle`, `Sim::destroy_vehicle`, `Sim::add_vehicle_pad`, `Sim::tick_walkers`, `Sim::sync_hulls`. Only the seat/unseat writers update both `Seat.occupant` and `Unit.mount`; lifecycle rules are specified in the header.
 - `core/src/sim/step/tests/jet.rs` 162 — JETP in the sim: the spawn tank and the second tap, the infinite-fuel cheat, a jet replay's hash, a hover against a wall, the mission ceiling.
 - `core/src/sim/step/tests/ramps.rs` 81 — running jump clearance across uphill, level and downhill mesh floors, both games' rules, walk/sprint speeds and press timings; BF1 uphill takeoff preserves its climbing momentum.
-- `core/src/sim/look.rs` 152 — keyboard + mouse look: seat-gun look by angle, hover/walker mouse driving (walker free yaw with authored hull following), the between-tick view preview · `LookPreview`, `MOUSE_STEER`, `Sim::look_preview`, `seat_look`, `walker_aim`, `mouse_drive`; rules in `AGENTS.md` (Keyboard + mouse).
+- `core/src/sim/look.rs` 176 — keyboard + mouse look: seat-gun look by angle, hover/walker mouse driving (walker free yaw with authored hull following), the between-tick view preview (the mouse's, and a controller's held stick with the aim assist) · `LookPreview`, `MOUSE_STEER`, `Sim::look_preview`, `seat_look`, `walker_aim`, `mouse_drive`; rules in `AGENTS.md` (Keyboard + mouse).
 - `core/src/sim/look/tests.rs` 158 — mouse aim/respawn independence, mouse look past the turn rate, pitch/prone limits, zoom scaling, preview == tick, old-log compatibility and mouse-log replay.
 - `core/src/rng.rs` 49 — SCE `rand()`, the seeded RNG · `SimRng`
 - `core/src/lcg.rs` 140 — the gameplay LCG (spread, delays) · `GameLcg`
@@ -239,7 +239,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/stall.rs` 802 — last-resort stalled-bot recovery/recycling (OURS, PROVISIONAL) and its regressions · `watch`, `send_off`; net-progress/failed-window rules and the once-per-place floor-walk escape are specified in its header/source docs; off-level recovery belongs to `LostState`/bounds.
 - `core/src/ai/command.rs` 358 — squad-order AI scratch state and cleanup, with follow/hold/release regressions · `CmdState`, `AiState::cmd_clear`; execution belongs to `squad::steer`.
 - `core/src/ai/draw.rs` 427 — deterministic per-unit hash randomness, named salts and stance draws; includes stance regressions · `unit_rand`, `unit_unit`, `unit_dir`, `route_rand`, `stance_hold`; header specifies its separation from the sim LCG.
-- `core/src/ai/route.rs` 1618 — bot objectives, graph legs, same-storey hub/waypoint/post selection and route advancement · `plan_leg`, `start_hub`, `level_hub`, `mover`, `post_hub`, `advance_route`, `hub_point`, `post_point`, `aim_last_leg`; `first_leg` / `floor_walked` serve SPNC's census. Rules are in the module/method docs; regressions are in `core/src/ai/route/tests.rs`.
+- `core/src/ai/route.rs` 1620 — bot objectives, graph legs, same-storey hub/waypoint/post selection and route advancement · `plan_leg`, `start_hub`, `level_hub`, `mover`, `post_hub`, `advance_route`, `hub_point`, `post_point`, `aim_last_leg`; `first_leg` / `floor_walked` serve SPNC's census. Rules are in the module/method docs; regressions are in `core/src/ai/route/tests.rs`.
 - `core/src/ai/route/tests.rs` 1158 — AI route, same-storey/arrival, post/hub waypoint and barrier/corner-detour regressions, including deck spawn, per-unit hub points and progress-window continuation (DAGS/HUBP/MOUTH).
 - `core/src/ai/avoid.rs` 1230 — foot-bot obstacle avoidance and parked-vehicle footprints (OURS, PROVISIONAL) · `pick`, `clear`, `footprint`, `foot_ahead`, `at_foot_of`; side commitment, leave/corner/rim rules and traversal regressions live here; see `analysis/bot-design.md` 4.7. Probe ownership is `steer.rs`.
 - `core/src/ai/steer.rs` 1366 — AI wall/hull, barrier, floor/steep-band/ramp and opening-door probes; includes walking regressions · `rotate_xz`, `way_ahead`, `Stop`, `StopKind`; `way_ahead` is diagnostic only. Probe rules are specified in the header/source docs; heading selection belongs to `avoid.rs`.
@@ -248,7 +248,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/team.rs` 557 — derived think-window unit grid, follow spacing and team Cover/Flank roles · `UnitGrid`, `Sim::units_within`, `follow_ease`, `board`, `flank_cap`; shared perception stays in `perception::tell`. Grid lifetime/order, role rules and constants are specified in the header and `analysis/bot-design.md` 4.1/4.3/6.2; derived grid is not hashed.
 - `core/src/ai/team/tests.rs` 471 — unit-grid equivalence/lifetime, follow spacing and Cover/Flank role regressions, including diamond-route behavior.
 - `core/src/ai/behave.rs` 77 — foot-bot behavior facade, shared `Tick`, and the `think` / `lost_jump` exports; see `analysis/bot-design.md` 3.
-- `core/src/ai/behave/brain.rs` 946 — foot-bot tick priority chain, next-think call delivery and explicit human boarding over retained commands, valid boarding maintenance, guard goal, failed-walk recovery and hub arrival; hands one aim request to the gunner and one move request to the mover, writing no sticks.
+- `core/src/ai/behave/brain.rs` 963 — foot-bot tick priority chain, next-think call delivery and explicit human boarding over retained commands, valid boarding maintenance, guard goal, failed-walk recovery and hub arrival; hands one aim request to the gunner and one move request to the mover, writing no sticks.
 - `core/src/ai/behave/position.rs` 590 — fight and hold positions, hit reactions, grenade escape and lost-bot jump probes.
 - `core/src/ai/behave/position/tests.rs` 1153 — the 24 behavior regressions spanning tick dispatch, fight positions, reactions, grenades and return to the level.
 - `core/src/ai/abilities.rs` 183 — pure officer support, remote-droid and auto-turret (the BF2 cluster rule) selection through secondary fire and switch inputs · `input` (re-exported as `ai::ability_input` in `ai.rs`).
@@ -284,7 +284,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/gunner.rs` 239 — seated-bot aim/fire requests, shared foot-gunner charge release/fire gates and barrel-cone checks · `aim`, `Look`; `Sim::seat_gun` executes them. Rules and PROVISIONAL AI-gunner limitations are in the module header; building-turret aim state belongs to `ManState::aim`.
 - `core/src/ai/arcm.rs` 221 — failed-link memory, team arc exclusions and back-and-forth detection · `ArcmState`, `Osc`, `ArcFails`; OURS, `analysis/bot-design.md` §9 D20.
 - `core/src/ai/dfocus.rs` 249 — Card DFOCUS (D25, OURS): focus fire on HUMAN players at Hard and Elite. The holders of a human's hit tokens (`super::tokn`) are his focusers: at
-- `core/src/ai/proxy.rs` 226 — Card DPRX (OURS, a measuring tool): the HUMAN PROXY - a bot the sim treats as a human player for every human-only rule, so the sweep and the arena
+- `core/src/ai/proxy.rs` 451 — fixed human proxy profiles and shared tier targeting, health-droid and post choices · `Profile`, `Strength`, `front`, `mend`, `pick`, `TARGETS`.
 - `core/src/ai/tokn.rs` 263 — Card TOKN (D24, OURS): damage pacing against HUMAN players - hit tokens. Each human has a budget of tokens per difficulty ([`budget`]); a bot's
 - `core/src/ai/unseen.rs` 170 — Card UNSN (D23, OURS): a bot the stall watch gives up is moved on, not killed, when no human can see it happen. The recycle of card RCYC
 - `core/src/ai/wake.rs` 135 — early bot think on hits, near misses and newly seen enemies, with wake cooldown · `HIT`, `NEAR`, `SEEN`; OURS, `analysis/bot-design.md` §9 D21.
@@ -292,13 +292,14 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `core/src/ai/wake/tests.rs` 153 — Card HYST: the early think's tests.
 - `core/src/ai/unseen/tests.rs` 179 — tests for `core/src/ai/unseen`
 - `core/src/ai/tokn/tests.rs` 251 — tests for `core/src/ai/tokn`
-- `core/src/ai/proxy/tests.rs` 119 — tests for `core/src/ai/proxy`
-- `core/src/ai/dfocus/tests.rs` 345 — tests for `core/src/ai/dfocus`
+- `core/src/ai/proxy/hand.rs` 136 — proxy-only player aim and held-trigger model · `Hand`, `aim`, `tolerance`, `holds`, `tap`.
+- `core/src/ai/proxy/tests.rs` 515 — tests for `core/src/ai/proxy`
+- `core/src/ai/dfocus/tests.rs` 371 — tests for `core/src/ai/dfocus`
 - `core/src/ai/arcm/tests.rs` 290 — Card ARCM: the back-and-forth detector, the bot's closed arcs, the team's count and the route draw round them.
 - `core/src/commander.rs` 2339 — persistent per-bot Conquest post goals and defend-hint allocation · `TeamPlan`, `plan`, `draw_post`, `defend_cap`, `post_threatened`; per-game redraw rules and port defender limits are specified in the header and `analysis/re-conquest-goal.md`.
 - `core/src/perception.rs` 1405 — contact memory, view/LOS, target acquisition and teammate contact sharing · `scan` (enemy remote droids are candidates too: `Foe`, `alive`, `foe_motion`, `droid_view_distance`), `tell`, `choose_target`, `choose_target_with`, `los_seat`, `past_buildings`; turret muzzle/own-building/arc behavior is specified with the helpers (TURR). Fairness requires a held perception contact; see module header.
-- `core/src/skill.rs` 942 — the four difficulty tiers (Easy, Normal, Hard, Elite; the maintainer 2026-10-28), skill vector, tier-dependent grenade/reaction choices and the per-team human-surplus rule (card DTEAM) · `Difficulty`, `Skill`, `Tier`, `Tier::react`, `team_skill`, `TeamSkill`; provisional tier values and provenance are specified in the module header.
-- `core/src/squad.rs` 1307 — BF1 squad orders, pending-call cancellation on actual player orders, tenure-bound mounted release delivery, pending acknowledgments and follow/hold/release execution, generation-bound ground-pilot PILE IN/EVERYONE OUT, own-search suppression and follower vehicle goals · `Order`, `Pending`, `BoardIssuer`, `Command`, `steer`; rules and replay regressions live here and in `analysis/re-squad-orders.md` (SQACK).
+- `core/src/skill.rs` 994 — the four difficulty tiers (Easy, Normal, Hard, Elite; the maintainer, 2026-10-28), skill vector, tier-dependent grenade/reaction choices and the per-team human-surplus rule (card DTEAM) · `Difficulty`, `Skill`, `Tier`, `Tier::react`, `team_skill`, `TeamSkill`; provisional tier values and provenance are specified in the module header.
+- `core/src/squad.rs` 1306 — BF1 squad orders, pending-call cancellation on actual player orders, tenure-bound mounted release delivery, pending acknowledgments and follow/hold/release execution, generation-bound ground-pilot PILE IN/EVERYONE OUT, own-search suppression and follower vehicle goals · `Order`, `Pending`, `BoardIssuer`, `Command`, `steer`; rules and replay regressions live here and in `analysis/re-squad-orders.md` (SQACK).
 
 ## game — the binary and its library
 - `game/src/main/sim_trace.rs` 131 — SHASH headless CLI, input validation and fixture/baked conquest setup · `run`.
@@ -312,9 +313,9 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `game/src/assets.rs` 1434 — baked-map loading into a CPU scene, texture tiers, collision/hull body extraction and mesh-reader re-exports · `load_scene`, `Scene`, `TextureTier`, `mode_layer_index`, `body_layers`, `hull_parts`.
 - `game/src/assets/mesh.rs` 476 — static/skinned GLB mesh readers, material extras (including `uv_scroll`) and the streaming fixture · `load_glb`, `load_glb_joints`, `load_skinned_glb`, `CpuSkinnedMesh`, `SkinnedAsset`.
 - `game/src/main/windowed/menu_actions.rs` 39 — settings autosave for pause-menu actions · `persist_setting`.
-- `game/src/main/windowed/mouse.rs` 73 — the window's pointer-lock and mouse glue for `App` · `sync_grab`, `release_mouse`, `mouse_window_event`.
-- `game/src/kbm.rs` 440 — keyboard + mouse → `PadState`: the one bindings table, held keys and latched taps, mouse look in `LOOK_UNIT`s, merging with the controller, pointer lock (Locked, else Confined + hidden) and menu keys · `Kbm`, `Bindings`, `Trigger`, `Bind`, `menu_key`, `menu_bits`, `RAD_PER_COUNT`.
-- `game/src/kbm/tests.rs` 311 — every pad bit bound, controller pass-through, WASD, taps, sensitivity/invert, stick takeover and a 144 Hz frame-to-tick replay.
+- `game/src/main/windowed/mouse.rs` 182 — native menu PNG cursor, focus/screen capture policy and mouse glue for `App` · `sync_grab`, `release_mouse`, `mouse_window_event`.
+- `game/src/kbm.rs` 459 — keyboard + mouse → `PadState`: the one bindings table, held keys and latched taps, mouse look in `LOOK_UNIT`s, merging with the controller, pointer lock (Locked, else Confined + hidden) and menu keys · `Kbm`, `Bindings`, `Trigger`, `Bind`, `menu_key`, `menu_bits`, `RAD_PER_COUNT`.
+- `game/src/kbm/tests.rs` 386 — every pad bit bound, controller pass-through, WASD, taps, sensitivity/invert, stick takeover and a 144 Hz frame-to-tick replay.
 - `game/src/viewer.rs` 57 — viewer facade and stable re-exports; its module header owns the XFRM transform convention and routes to the parts below.
 - `game/src/viewer/look.rs` 1360 — manifest-derived water, fog, cull/LOWR, far-fade and lighting state · `water_look`, `speckle_look`, `water_shading`, `far_cull`, `lowres_range`, `apply_lighting`.
 - `game/src/viewer/scene.rs` 1691 — scene GPU upload and draw ranges for terrain, water, foliage, models/LOWD and sky; moving door/turret/station records, texture cache and untextured census · `upload_scene`, `SceneGpu`, `SpeckleAnim`, `sky_wrap_v`, `pose_doors`; posing lives in `turret_pose` / `stations`.
@@ -384,7 +385,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `game/src/blackbox.rs` 2412 — dev-mode playtest history and rotating snapshots on F9, quit, panic and stuck alarm; read-only on the sim and excluded from its hash · `BlackBox`, `Snapshot`, `Meta`, `on`, `write_rotating`, `read`, `SoundRow`, `sound_digest`. `blackbox::SCHEMA` owns schema age and supported older reads; module header owns history/build diagnostics; operation in `AGENTS.md`’s playtest guidance.
 - `game/src/blackbox/rotating.rs` 173 — serialized snapshot file rotation shared by the hotkey writer and panic hook, with same-thread recursion protection and filesystem regression tests · `write`, `PREVIOUS`.
 - `game/src/blackbox/session.rs` 323 — Card DPRX: the black box's MATCH-LONG tally of one subject - the human, or in a headless round the sweep's human proxy (`core::ai::proxy`). The rings
-- `game/src/fx.rs` 1857 — particle-effect lookup with disc-specific rules for imported SBD trails, lifecycle and draw submission, event-driven impact/explosion hooks, gain effects that follow their unit (one live per unit and kind) and PROVISIONAL fallback quads · `Fx`, `Library`, `LiveEffect`; module header and `analysis/re-fx.md` §5–§7; muzzle flashes come from `soldier_vis`.
+- `game/src/fx.rs` 1962 — particle-effect lookup with disc-specific rules for imported SBD trails, lifecycle and draw submission, event-driven impact/explosion hooks, gain effects that follow their unit (one live per unit and kind) and PROVISIONAL fallback quads · `Fx`, `Library`, `LiveEffect`; module header and `analysis/re-fx.md` §5–§7; muzzle flashes come from `soldier_vis`.
 - `game/src/fx/abilities.rs` 66 — officer activation effects and timed recipient auras · `follow_buffs`.
 - `game/src/fx/repair.rs` 71 — repair-pulse muzzle effects, owner following and initial-burst placement at the drawn weapon tip.
 - `game/src/fx/children.rs` 126 — EMITTER particles replay their child templates along native path nodes (0.3 s samples, 0.1 s merge, secant velocities), with the parent's colour replacing the child's and native child offsets · `path`, `frame_at`, `draw`; `analysis/re-fx.md` §13; referees `game/src/fx/tests/resupply.rs` (live PCSX2 node captures) and `game/tests/suite/resupply_feedback.rs`.
@@ -408,7 +409,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `game/src/vo.rs` 987 — BF2 `VOSound` entry parsing, context/ranking, speaker selection and event requests · `Vo`, `VoLines`, `Entry`, `Said`, `Who`, `Body`, `context`, `best`, `class_lines`, `EVENTS`, `ASKED`; module header and `analysis/re-unit-chatter.md` 3.
 - `game/src/pause.rs` 199 — pause-menu action dispatch, Respawn confirmation state and the rows' share of the D-pad (Left/Right kept for the Morse cheats, CHEAT2) · `PauseMenu`, `apply_menu_action`, `rows_input`, `pause_sound`; `analysis/re-spawn-flow.md` §7, BUGX scene tests.
 - `game/src/profile.rs` 443 — autosaved settings, validated custom controls and career stats, including backward-compatible per-class kills and recorded capture totals · `Profile`, `Career`, `BattleStats`
-- `game/src/render_blend.rs` 686 — presentation interpolation, including the eased camera position, with snap handling and bit-exact restoration before sim readers · `Blend`, `Pose`, `blend`, `fraction`, `lerp_angle`; `OPENBF_RENDER_BLEND=0` disables it; module header owns fields, thresholds and restore contract.
+- `game/src/render_blend.rs` 686 — presentation interpolation, including the eased camera position, with snap handling and bit-exact restoration before sim readers; a controller's aim drawn the frame's share into the next tick's turn and a FIRE press stamped with it · `Blend`, `Blend::stamp`, `Pose`, `blend`, `blend_in_looking`, `fraction`, `lerp_angle`; `OPENBF_RENDER_BLEND=0` disables it; module header owns fields, thresholds and restore contract.
 - `game/src/hud_feed.rs` 623 — BF2 HUD art loading and per-frame `ui::hud_tree` / `ui::hud_draw` → `render::hud` wiring, including weapon model/icon fallbacks · `HudView`; module/API docs own BF1 row keys and material-alpha rules.
 - `game/src/minimap.rs` 1039 — map/class minimap configuration and per-frame battle/spawn-map feeds, including command walkers; mission-resolved still feeds and asset-free caller regressions for captures/goldens · `MapStatic`, `ClassIcon`, `bounds_of`, `still`, `spawn_still`; module/API docs and `analysis/re-hud-map.md` §8.
 - `game/src/gallery.rs` 1330 — headless map/unit/walkabout sheets with floor placement and class-specific held weapons · `map_sheet`, `vantage_camera`, `model_class`; `soldier_spot` owns grounding and `step_water` pins water per eye for goldens.
@@ -428,7 +429,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `render/src/hud.rs` 477 — window-pixel HUD rendering (clamped and repeating sheets) from `ui::hud_draw` · `HudPass`, `HudVertex`, `HudBatch`, `HudTexture`; display-value blending and mesh depth rules in the module header (`Renderer::display_view_format`).
 - `render/src/grass.rs` 494 — grasspatch sprite buffers and draws (also shared by leaves) · `Renderer::set_grass`, `GrassClass`, `GrassPatch`, `GrassSprite`, `sprite_quad`; view geometry/fade in the module header; GS blend remains PROVISIONAL ([O]).
 - `render/src/leaf.rs` 375 — leafpatch per-view sprite buffers and object draws over the grass pass · `Renderer::set_leaves`, `LeafClass`, `LeafObject`, `LeafSprite`; twist, wind and fades in the module header (`analysis/re-leafpatch.md` §6–§7); BF2 lighting remains PROVISIONAL.
-- `render/src/light_beam.rs` 320 — command-post hologram lightbeam geometry and visibility · `Beam`, `vertices`, `view_factor`, `fan`, `crosses_near`; fan/alpha rules and near-plane caveat in the module header (CPHOL).
+- `render/src/light_beam.rs` 544 — command-post hologram lightbeam geometry and visibility · `Beam`, `vertices`, `view_factor`, `fan`, `crosses_near`; fan/alpha rules and near-plane caveat in the module header (CPHOL).
 - `render/src/grass.wgsl` 78 — `vs_grass` / `fs_grass` (grass and leaves; BF2 leaves' static `Lit` on the vertex
   normal), appended to `shader.wgsl` as one module
 - `render/src/bolt.rs` 314 — laser-bolt ribbon geometry and draws · `Renderer::set_bolts`, `BoltDraw`, `ribbon`; geometry, blend/depth rules and shared particle ordering in the module header (`analysis/re-bolt.md` §3, [O]).
@@ -482,10 +483,10 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `ui/src/stats_draw.rs` 796 — Team / Personal / Career Stats drawn in the HUD pass over black, every place measured on the statsref PS2 frames · `Ctx::stats_page`; `[M]` geometry, colours and stretches in the constants' docs.
 - `ui/src/spawn_draw.rs` 856 — BF2 side/class/spawn-map screens in the HUD pass · `SpawnPage`, `window_point`; veil, button/help geometry and Hor+ layout in the module header (`analysis/re-spawn-flow.md` §2–§4, `analysis/re-bf2-shell.md` §3).
 - `ui/src/loading.rs` 72 — the BF1 loading screen · `draw_loading`
-- `ui/src/overlay.rs` 188 — egui ↔ winit ↔ wgpu glue · `EguiOverlay`
-- `ui/src/cursor.rs` 152 — the shell's drawn pointer and its hover gate: hover moves menu focus only on fresh motion or a click · `draw`, `Pointer`
+- `ui/src/overlay.rs` 237 — egui ↔ winit ↔ wgpu glue; reapplies the game-owned native cursor after platform output · `EguiOverlay`
+- `ui/src/cursor.rs` 110 — the shell's pointer activity gate: hover moves menu focus only on fresh motion or a click; native cursor image and policy live in `game/src/main/windowed/mouse.rs` · `Pointer`
 - `ui/src/hud_scope.rs` 129 — The sniper scope's overlay — the PS2's `ScopeDisplay` HUD element (`analysis/re-zoom.md` §8 [V][O]; BF1 vtable 0x540880, update
-- `input/src/lib.rs` 791 — gilrs → deterministic PS2-layout `PadState` (keyboard + mouse merge in `game/src/kbm.rs`) · `Mapping`, `pad_from_gamepad`, `stick_arms`, `TRIGGER_PRESS`; always initialize via `open_gilrs` (project SDL mappings/DB/env); diagnostics: `log_pads`, `pad_warning`, `input/examples/pads.rs`; mapping rules in the module/API docs.
+- `input/src/lib.rs` 1037 — gilrs → deterministic PS2-layout `PadState` (keyboard + mouse merge in `game/src/kbm.rs`) · `Mapping`, `pad_from_gamepad`, `stick_arms`, `TRIGGER_PRESS`; always initialize via `open_gilrs` (project SDL mappings/DB/env); diagnostics: `log_pads`, `pad_warning`, `input/examples/pads.rs`; mapping rules in the module/API docs.
 - `audio/src/lib.rs` 329 — kira playback through the master limiter; a looping voice with settable gain, rate and pan; a one-shot that can be cut (card UCRY) · `Audio`, `Voice`, `Shot`
 - `audio/src/limiter.rs` 170 — master lookahead limiter · `Limiter`; stereo linking, full-scale behavior and PROVISIONAL timing constants in the module header/API docs (MIXH).
 - `audio/src/stream.rs` 357 — streamed SPU2 ADPCM music over `pak::open` and kira · `StreamTake`, `TakeReader`, `MusicVoice`, `Audio::play_stream`; stereo block layout in the module header; baked body paths: `manifest::music_body`.
@@ -573,6 +574,7 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 | AI routes, barriers, where a post or a unit is on the graph | `core/src/nav.rs` | `mungefs/src/plan.rs`, `game/src/layout.rs`, `game/tests/suite/locate_ps2.rs` (locate against 1,004 live PS2 path goals, `game/tests/data/locate_ps2.txt`) |
 | blocked route groups (`plnp`) | `core/src/route_patch.rs` | `game/src/mission.rs` (`arc_blocks`), `scripts/gen_missions.py` |
 | squad orders | `core/src/squad.rs` | `core/src/ai/command.rs`, `game/src/event_sounds.rs` (the player's line), `game/src/announce.rs` (the units' answers through the voice queue, `Commander::orders`), `game/src/squad_vis.rs` (the dev-mode marker), `ui/src/hud_squad.rs` (the D-pad cross in the HUD), `game/src/event_feed.rs` (the cross's state and its count of takers, `EventFeed::squad`), `game/tests/suite/hud_layout.rs` (the cross against three PS2 frames), `game/tests/suite/squad_orders_ps2.rs` (the PS2's scenes on the port) |
+| squad vehicle map regressions | `game/tests/suite/squad_vehicle_maps.rs` | Loaded BF1/BF2 ground vehicle calls, retained Hold/Follow, full-seat refusal, pilot release orders and lifecycle cancellation; registered by `game/tests/suite/main.rs`. |
 | aim assist | `core/src/aim_assist.rs` | `core/src/sim/input.rs` (`acquire_magnet`, `apply_assist`) |
 | the zoom (R3): a weapon's steps, what cancels it, the zoomed turn rate, the shoulder and scope cameras, the zoomed FOV | `core/src/weapon.rs` (`zoom_press`), `core/src/sim/step.rs` (`tick_zoom`), `core/src/unit.rs` (`Zoom`, `camera_section`, `scope_point`) | `game/src/walk.rs` (`step_tick`, `fov_y`) |
 | where a human's shot goes, the chase camera's tilt, the reticle's height | `core/src/unit.rs` (`camera_section`, `ideal_camera`, `aim_ray`, `fire_point`), `core/src/sim/step.rs` (`aim_hit`, `human_shot`) | `game/src/walk.rs` (`WalkSim::camera`, `reticle_y`), `ui/src/hud.rs` (`HudModel::reticle_y`, `reticle_y`), `game/tests/suite/hud_layout.rs`, `analysis/re-aim-assist.md` §10 |
@@ -680,12 +682,24 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `core/src/sim/guided/tests.rs` 373 — guided launch, control, collision, detonation and hand-back tests.
 - `game/tests/suite/guided_rockets.rs` 357 — all 14 inherited guided launchers, award gating, camera/interpolation restoration, smooth mouse/controller turning at 60/75/144 Hz and all-side/map-local equipment census.
 
-- `game/src/fx/chunks.rs` 467 — cosmetic droid and vehicle chunk launch, bounded pool and floor contacts.
+- `game/src/fx/chunks.rs` 923 — cosmetic droid and vehicle chunk launch, bounded pool and floor contacts.
 - `bake/src/attached_effects.rs` 149 — ordered AttachEffect replay and baked hardpoint frames/repeat bounds.
 - `game/src/fx/props.rs` 160 — static prop effect frames and optional repeat timers, presentation only.
 - `render/src/bloom.rs` 299 — selective BF2 pre-clamp emissive gather and authored blur · `Bloom`
 - `render/src/bloom.wgsl` 50 — threshold, five-tap blur and display-space composite · bloom fragment entry points
-- `render/src/falling.rs` 365 — airborne leaf pool, flutter/tumble, visibility retirement and world quads · `LeafEmitter`
+- `render/src/falling.rs` 487 — airborne leaf pool, flutter/tumble, visibility retirement and world quads · `LeafEmitter`
+
+
+## PR #77 effect modules and referees
+
+- `mungefs/src/lightbeam.rs` 267 — LightBeam config parsing and defensive numeric defaults · `LightBeamConfig`.
+- `game/src/forest.rs` 105 — scene bird configuration and read-only simulation actor snapshots · `configure`, `submit_actors`.
+- `game/src/fx/chunks/tests.rs` 433 — chunk launch, inertia, contacts, lifetime, pool and real-data regressions.
+- `render/src/falling/birds.rs` 313 — bounded anchor bird pool, motion, atlas wings and lifecycle · `ForestBirdType`.
+- `render/src/falling/ground.rs` 294 — terrain gusts and actor contact impulses · `LeafActor`.
+- `game/examples/forest_capture.rs` 100 — offscreen forest isolation captures and non-emitter control.
+- `game/examples/vehicle_chunks.rs` 169 — offscreen vehicle destruction and chunk effect captures.
+- `render/tests/suite/particle_blend.rs` 167 — GPU referees for display-byte blending and leaf/bird cutouts.
 
 - `core/src/sim/guns/seat_switch.rs` 102 — seat cycling in either direction, friendly AI takeover and reseating without a new bail/RNG draw.
 - `game/tests/walker_controls.rs` 164 — actual Geonosis pilot yaw/body following, both AI-held gun seats, their weapons, rear bind direction/arc and main gunner camera origin.

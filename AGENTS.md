@@ -100,7 +100,9 @@ controller-only replays must stay bit-identical. The rules:
   (`walker_aim`); the drawn aim keeps its heading while the legs turn the hull. Seats and building turrets: the look
   turns by the angle.
 - Between ticks the view draws the mouse look not yet consumed (`Sim::look_preview`, `render_blend::blend_in_looking`),
-  so the drawn view is where the next tick's aim lands.
+  so the drawn view is where the next tick's aim lands. A controller on foot gets the same (2026-10-29): the view
+  draws the frame's share of the turn the next tick's look step takes under the held stick, the aim assist included,
+  and a FIRE press carries that share (`PadState::fire_lag`) so its tick fires part way into the turn, where it was drawn.
 - Bindings are one table (`game/src/kbm.rs`, `Bindings::pc_default`). Pointer lock follows the battle: it is taken on a
   click, and freed on pause, in the shell and spawn screens, on focus loss and on exit.
 

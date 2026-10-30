@@ -33,7 +33,9 @@
 //! The critical-hit flash (hitmark, `analysis/re-target-hud.md` §12): the
 //! viewer's sniper-rifle headshot, or his rocket launcher's hit on a
 //! vehicle's weak spot, lights BF2's `hitCritical` reticle mark
-//! ([`EventFeed::hit_critical`]).
+//! ([`EventFeed::hit_critical`]). Every other hit he deals an enemy soldier
+//! lights the plain `hit` flash ([`EventFeed::hit_body`], [ours]
+//! 2026-10-29).
 //!
 //! The statistics (§5, §9): kills less two per team kill, and BF2's points
 //! from its own table (PS2 RAM [M]) — see [`points`].
@@ -386,6 +388,9 @@ pub struct EventFeed {
     /// The viewer's last marked critical hit: its tick and the
     /// victim's relation colour ([`EventFeed::hit_critical`]).
     critical: Option<(u64, [u8; 3])>,
+    /// The tick of the viewer's last body hit on an enemy
+    /// ([`EventFeed::hit_body`]).
+    body: Option<u64>,
     /// What was said lately, and when (the one-line rule).
     recent: Vec<(String, u64)>,
     /// The tick whose events were already read.
@@ -433,6 +438,7 @@ impl EventFeed {
             out: Vec::new(),
             ambush: Vec::new(),
             critical: None,
+            body: None,
             recent: Vec::new(),
             seen: None,
             owners: Vec::new(),
@@ -627,13 +633,16 @@ impl EventFeed {
                     damage,
                     ..
                 } if shooter == viewer
-                    && damage > 0.0
                     && sim
                         .units
                         .get(victim.index as usize)
                         .is_some_and(|u| u.gen == victim.gen && u.team != my_team) =>
                 {
-                    self.battle.hits = self.battle.hits.saturating_add(1);
+                    // The plain hit flash: any enemy body hit ([ours]).
+                    self.body = Some(tick);
+                    if damage > 0.0 {
+                        self.battle.hits = self.battle.hits.saturating_add(1);
+                    }
                 }
                 Event::VehicleHit {
                     shooter: Some(shooter),
@@ -840,6 +849,16 @@ impl EventFeed {
             .map(|(_, c)| c)
     }
 
+    /// The plain hit flash at `tick` (`HudModel::hit_body`, [ours] the
+    /// maintainer 2026-10-29): enemy red while the 0.5 s hit timer of the
+    /// viewer's last hit on an enemy soldier runs, any weapon, blasts too;
+    /// else `None`. The HUD sends the critical mark instead while one runs.
+    pub fn hit_body(&self, tick: u64) -> Option<[u8; 3]> {
+        self.body
+            .filter(|&at| tick.saturating_sub(at) < HIT_TIMER_TICKS)
+            .map(|_| ui::hud::target_color::ENEMY)
+    }
+
     /// The chevron edges lit since the last call (`HudModel::ambush`).
     pub fn take_ambush(&mut self) -> Vec<Edge> {
         std::mem::take(&mut self.ambush)
@@ -854,7 +873,9 @@ impl EventFeed {
     /// the classes' `HideHealthBar` drop (§2: two BF2 classes) is not ported.
     pub fn target(&self, sim: &Sim, slot: usize) -> Option<HudTarget> {
         let Some((t, relation)) = sim.reticle_pick.get(slot).copied().flatten() else {
-            return self.station_target(sim, slot);
+            return self
+                .wreck_target(sim, slot)
+                .or_else(|| self.station_target(sim, slot));
         };
         let fraction = |h: &core::weapon::Health| {
             if h.max > 0.0 {
@@ -895,6 +916,58 @@ impl EventFeed {
                     shield: None,
                 })
             }
+        }
+    }
+
+    /// A wreck the viewer's cutter is on - a fallen building turret or a
+    /// destroyed droid (issue #35): its name and rebuild progress, shown as
+    /// a live target's health (the originals show it the same way, the
+    /// maintainer 2026-10-29). A fallen turret is neutral (team 0 on the
+    /// PS2, `re-build-zones.md` §1).
+    fn wreck_target(&self, sim: &Sim, slot: usize) -> Option<HudTarget> {
+        let (i, me) = sim.units.iter().enumerate().find(|(_, u)| {
+            u.alive
+                && u.mount.is_none()
+                && matches!(u.controller, core::unit::Controller::Player { slot: s } if usize::from(s) == slot)
+        })?;
+        match sim.cutter_target(i)? {
+            Target::Station(si) => {
+                let s = sim.stations.get(usize::from(si)).filter(|s| s.destroyed)?;
+                Some(HudTarget {
+                    id: (1 << 62) | u64::from(si),
+                    name: self
+                        .stations
+                        .get(usize::from(s.class))
+                        .cloned()
+                        .unwrap_or_default(),
+                    health_fraction: (s.health.cur / s.health.max.max(1e-6)).clamp(0.0, 1.0),
+                    relation: match s.team {
+                        None => 0,
+                        Some(t) if t == me.team => 1,
+                        Some(_) => -1,
+                    },
+                    team0: s.team.is_none(),
+                    shield: None,
+                })
+            }
+            Target::Building(bi) => {
+                let t = sim.building_turrets.get(usize::from(bi))?;
+                let h = t.down?;
+                Some(HudTarget {
+                    // Bit 61: a building's id is no unit's, vehicle's or station's.
+                    id: (1 << 61) | u64::from(bi),
+                    name: self
+                        .vehicles
+                        .get(t.spec.class as usize)
+                        .cloned()
+                        .unwrap_or_default(),
+                    health_fraction: (h / t.spec.max_health.max(1e-6)).clamp(0.0, 1.0),
+                    relation: 0,
+                    team0: true,
+                    shield: None,
+                })
+            }
+            _ => None,
         }
     }
 
@@ -1227,7 +1300,91 @@ mod tests {
         s.sim.reticle_pick[0] = Some((AimTarget::Unit(r0), -1));
         assert_ne!(s.feed.target(&s.sim, 0).unwrap().id, t.id);
         s.sim.reticle_pick[0] = None;
+        // A destroyed droid shows nothing with the rifle up; under a cutter it
+        // reads its rebuild progress (`a_wreck_under_the_cutter_...`).
         s.sim.stations[0].destroyed = true;
+        assert_eq!(s.feed.target(&s.sim, 0), None);
+    }
+
+    /// Issue #35: with the cutter up, a destroyed droid or a fallen turret
+    /// it is on reads its name and rebuild progress like a live target's
+    /// health; with the rifle up, or off the cutter, a wreck shows nothing.
+    #[test]
+    fn a_wreck_under_the_cutter_reads_its_rebuild_progress() {
+        use core::sim::{BuildingTurret, Station, TurretFall};
+        use core::vehicle::{VehicleHandle, VehicleSpec};
+        use core::weapon::{HealthType, Repair, WeaponClass};
+        let mut s = scene();
+        s.sim.reticle_pick.resize(1, None);
+        let mut health = [0.0; 8];
+        (health[3], health[4], health[5], health[6]) = (200.0, 100.0, 50.0, 50.0);
+        s.sim.weapon_classes.push(WeaponClass {
+            name: "fusioncutter".into(),
+            repair: Some(Repair { health }),
+            target_team: 6,
+            lock_on_range: 4.0,
+            lock_on_angle: 90.0 * core::weapon::DEG,
+            shot_delay: [0.5; 2],
+            ..WeaponClass::default()
+        });
+        let cutter = s.sim.weapon_classes.len() - 1;
+        let rifle = s.sim.unit(s.me).unwrap().weapon_class;
+        let me = s.sim.unit(s.me).unwrap();
+        let (eye, dir) = me.aim_ray(s.sim.ground_rules, s.sim.views());
+        let at = eye + dir * 2.0;
+        s.feed.stations = vec!["Health Droid".into()];
+        let mut st = Station::new(0, at, 2.0);
+        (st.sphere_centre, st.sphere_radius) = (at, 0.8);
+        st.health.health_type = HealthType::Building;
+        st.health.cur = st.health.max * 0.75;
+        st.destroyed = true;
+        s.sim.stations.push(st);
+        // Rifle up: the wreck shows nothing (as before).
+        assert_eq!(s.feed.target(&s.sim, 0), None);
+        s.sim.unit_mut(s.me).unwrap().weapon_class = cutter;
+        let t = s
+            .feed
+            .target(&s.sim, 0)
+            .expect("the wreck under the cutter");
+        assert_eq!(
+            (t.name.as_str(), t.health_fraction, t.relation, t.team0),
+            ("Health Droid", 0.75, 0, true)
+        );
+        // Off the cutter's cone: nothing.
+        s.sim.stations[0].sphere_centre = eye - dir * 3.0;
+        assert_eq!(s.feed.target(&s.sim, 0), None);
+        s.sim.stations.clear();
+        // A fallen turret on its pad: its class's name and health / MaxHealth.
+        s.feed.vehicles = vec!["Laser Turret".into()];
+        s.sim.building_turrets.push(BuildingTurret {
+            spec: VehicleSpec {
+                kind: VehicleKind::Turret,
+                class: 0,
+                home_team: None,
+                neutral_when_empty: true,
+                spawn_pad: None,
+                pos: at,
+                yaw: 0.0,
+                max_health: 800.0,
+                health_type: HealthType::Building,
+                seats: vec![SeatKind::Gunner(0)],
+            },
+            rot: Quat::IDENTITY,
+            aim_sphere: Some((glam::Vec3::ZERO, 0.8)),
+            instance: 99,
+            handle: VehicleHandle { index: 0, gen: 0 },
+            fall: TurretFall::Pad,
+            fallen_parts: Vec::new(),
+            standing_parts: Vec::new(),
+            down: Some(200.0),
+        });
+        let t = s.feed.target(&s.sim, 0).expect("the fallen turret");
+        assert_eq!(
+            (t.name.as_str(), t.health_fraction, t.relation, t.team0),
+            ("Laser Turret", 0.25, 0, true)
+        );
+        assert_eq!(t.color(), ui::hud::target_color::NONE);
+        s.sim.unit_mut(s.me).unwrap().weapon_class = rifle;
         assert_eq!(s.feed.target(&s.sim, 0), None);
     }
 
@@ -1317,6 +1474,37 @@ mod tests {
     /// sniper rifle lights the mark for the PS2's 0.5 s hit timer, in the
     /// victim's relation colour; a rifle's critical hit, another unit's, or
     /// a plain body hit lights nothing.
+    /// [ours] (the maintainer, 2026-10-29): every hit the viewer deals an
+    /// enemy soldier, any weapon, blasts too, lights the plain hit flash
+    /// for the 0.5 s hit timer; a team-mate, a bot's hit and a hit taken
+    /// do not.
+    #[test]
+    fn an_enemy_body_hit_lights_the_plain_flash() {
+        let mut s = scene();
+        let (me, mate, rebel) = (s.me, s.mate, s.rebels[0]);
+        let hit = |shooter, victim, age| Event::Hit {
+            shooter,
+            victim,
+            damage: 50.0,
+            age,
+            health_left: 250.0,
+            dir: Vec3::X,
+        };
+        happen(&mut s, &[hit(me, mate, 0.1)]);
+        assert_eq!(s.feed.hit_body(s.sim.tick), None, "a team-mate");
+        happen(&mut s, &[hit(rebel, me, 0.1)]);
+        assert_eq!(s.feed.hit_body(s.sim.tick), None, "a hit taken");
+        happen(&mut s, &[hit(rebel, mate, 0.1)]);
+        assert_eq!(s.feed.hit_body(s.sim.tick), None, "a bot's hit");
+        happen(&mut s, &[hit(me, rebel, 0.1)]);
+        let at = s.sim.tick;
+        assert_eq!(s.feed.hit_body(at), Some(ui::hud::target_color::ENEMY));
+        assert!(s.feed.hit_body(at + HIT_TIMER_TICKS - 1).is_some());
+        assert_eq!(s.feed.hit_body(at + HIT_TIMER_TICKS), None, "0.5 s");
+        happen(&mut s, &[hit(me, rebel, core::sim::BLAST_AGE)]);
+        assert!(s.feed.hit_body(s.sim.tick).is_some(), "a blast");
+    }
+
     #[test]
     fn a_sniper_headshot_lights_the_critical_mark() {
         let mut s = scene();

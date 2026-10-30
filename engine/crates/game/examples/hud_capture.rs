@@ -35,6 +35,8 @@ fn main() -> Result<()> {
     scene.apply_mode_layer("con");
     let mut r = render::Renderer::new_headless(w, h).map_err(|e| anyhow!("{e}"))?;
     let gpu = upload_scene(&mut r, &scene)?;
+    // `HUD_GAME=bf1` rows take the BF1 table rule (`ui::hud::HudWeapon::bf2`).
+    let bf2 = std::env::var("HUD_GAME").map_or(true, |g| g != "bf1");
     let model = ui::hud::HudModel {
         tickets: [147, 145],
         hp: 300.0,
@@ -55,6 +57,7 @@ fn main() -> Result<()> {
                 Err(_) => Some(250),
             },
             clip_fraction: 1.0,
+            bf2,
         }),
         // Card GREN's picture: `HUD_GRENADES=4` shows the grenade row.
         weapon2: std::env::var("HUD_GRENADES")
@@ -68,6 +71,7 @@ fn main() -> Result<()> {
                 name: String::new(),
                 total: Some(n),
                 clip_fraction: 1.0,
+                bf2,
             }),
         reticle: Some(0),
         // `HUD_GAME=bf1` puts the reticle at BF1's height.
@@ -103,6 +107,7 @@ fn main() -> Result<()> {
                 name: String::new(),
                 total: Some(146),
                 clip_fraction: 1.0,
+                bf2,
             }),
             ..model.clone()
         };

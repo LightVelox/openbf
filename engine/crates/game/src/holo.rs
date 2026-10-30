@@ -385,6 +385,7 @@ pub fn holo_draws(
             r1: c.size * 0.8 * 0.5 * h.fade * h.pop,
             soft: (0.2 * c.height).min(1.0),
             visible: c.visible,
+            view: None,
             gs_rgb: if art.bf1 { 0.5 } else { 1.0 },
             top: render::BEAM_TOP_ALPHA,
             cross: None,

@@ -23,9 +23,10 @@ pub struct Fog {
     pub far: f32,
 }
 
-/// The near scene's fade into the sky, on a map that draws NO far layer.
+/// A distance fade band in metres from the eye, also used by [`crate::Beam::view`].
 ///
-/// `begin`/`end` are `NearSceneRange`'s b and c in metres from the eye: the
+/// For [`Lighting::far_fade`], this fades the near scene into the sky on a map
+/// that draws NO far layer. `begin`/`end` are `NearSceneRange`'s b and c: the
 /// PS2 composites its near-scene buffer over the far-scene buffer through a
 /// depth-keyed alpha palette — alpha 0 nearer than b, a ramp b..c, fully the
 /// far buffer past c (`analysis/re-fog.md` §2.5 [V code, D look]). A map that

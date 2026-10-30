@@ -31,10 +31,15 @@
 //!
 //! | tier | base skill | t | view mult | reaction s (ticks) | pressure ×human | err cap | bleed handicap |
 //! |---|---|---|---|---|---|---|---|
-//! | Easy | 14 | 0.684 | 1.0 | 0.3 (9) | 1.0 | 1.52 m | — |
+//! | Easy | 14 | 0.684 | 1.0 | 0.3 (9) | 0.8 | 1.52 m | — |
 //! | Normal | 17 | 0.842 | 1.0 | 0.3 (9) | 1.0 | 1.36 m | — |
 //! | Hard | 20 | 1.0 | 1.25 | 0.2 (6) | 1.3 | 1.2 m | — |
 //! | Elite | 20 | 1.0 | 1.5 | 0.15 (5) | 1.6 | **0.5 m** | ×1.25 |
+//!
+//! [ours] PROVISIONAL (the maintainer, 2026-10-29): Hard and Elite bots also
+//! go to a health droid under 35 % health (`mend`); Elite bots also prefer
+//! threats (`picks`) and attack the nearest unheld post (`hunts`). These are
+//! the human proxy's choices (`ai::proxy::{mend, pick, front}`).
 //!
 //! Card DRETIRE (the maintainer, 2026-10-28): the "human damage ×" column (D12: a
 //! bot's bolt or blast into a human ×1.15 at Hard, ×1.3 at Elite) is gone,
@@ -73,8 +78,9 @@
 //! is one row down (Easy's 14), Easy (a new player's team should win) takes
 //! no offset. The proposal's Elite "−3, then −2 each" reached its floor at a
 //! 4th human; with the cap at 3 it is −3 each, as Hard. PROVISIONAL, the
-//! proxy gate's to tune. The Easy and Normal rows share every column but the
-//! base skill, so "Easy row" under a Normal host only names the columns.
+//! proxy gate's to tune. The Easy row differs from Normal's in more than the
+//! base skill (pressure 0.8, no scope sight), so a surplus team on the Easy
+//! row under a Normal host plays those columns too.
 //!
 //! The level is set at each bot's spawn ([`crate::sim::Sim::bot_skill`]), so
 //! a human joining, leaving or changing team reaches a bot at its next life;
@@ -211,13 +217,17 @@ impl Difficulty {
             Difficulty::Easy => Tier {
                 view_mult: 1.0,
                 reaction_ticks: 9,
-                pressure: 1.0,
+                pressure: 0.8,
                 err_cap: None,
                 bleed_handicap: 1.0,
                 react: [0.30, 0.15, 0.20],
                 grenade: 0.60,
                 grenade_delay: (18, 39),
                 cover: false,
+                scope_sight: 0.0,
+                picks: false,
+                mend: 0.0,
+                hunts: false,
             },
             Difficulty::Normal => Tier {
                 view_mult: 1.0,
@@ -229,6 +239,10 @@ impl Difficulty {
                 grenade: 0.60,
                 grenade_delay: (18, 39),
                 cover: false,
+                scope_sight: 0.75,
+                picks: false,
+                mend: 0.0,
+                hunts: false,
             },
             Difficulty::Hard => Tier {
                 view_mult: 1.25,
@@ -240,6 +254,10 @@ impl Difficulty {
                 grenade: 0.85,
                 grenade_delay: (0, 24),
                 cover: true,
+                scope_sight: 1.0,
+                picks: false,
+                mend: 0.35,
+                hunts: false,
             },
             Difficulty::Elite => Tier {
                 view_mult: 1.5,
@@ -253,6 +271,10 @@ impl Difficulty {
                 grenade: 0.95,
                 grenade_delay: (0, 24),
                 cover: true,
+                scope_sight: 1.0,
+                picks: true,
+                mend: 0.35,
+                hunts: true,
             },
         }
     }
@@ -384,6 +406,18 @@ pub struct Tier {
     /// they are every tier's and no column:
     /// `perception::tell` and `ai::team`'s flank board.)
     pub cover: bool,
+    /// OURS, PROVISIONAL (the maintainer, 2026-10-29: "Easy would be what it
+    /// was before, Normal is farther sniper sight, Hard and Elite are the full
+    /// fix"): the share of a scoped rifle's `MaxRange` a still sniper sees a
+    /// standing soldier at (`perception::scope_reach`); 0 = off, the plain
+    /// sight and the old perch, band and stay rules.
+    pub scope_sight: f32,
+    /// [ours] PROVISIONAL: prefer visible threats, then hurt enemies.
+    pub picks: bool,
+    /// [ours] PROVISIONAL: seek a health droid below this health share.
+    pub mend: f32,
+    /// [ours] PROVISIONAL: attack the nearest unheld post, never defend.
+    pub hunts: bool,
 }
 
 /// Everything the AI reads off its integer skill, computed once per think.
@@ -735,7 +769,7 @@ mod tests {
                 14,
                 1.0,
                 9,
-                1.0,
+                0.8,
                 1.0,
                 [0.30, 0.15, 0.20],
                 0.60,
@@ -787,6 +821,23 @@ mod tests {
             assert_eq!((t.react, t.grenade, t.grenade_delay), (hit, gren, delay));
             assert_eq!(t.cover, cover, "{d:?}");
         }
+        assert_eq!(
+            Difficulty::ALL.map(|d| d.tier().picks),
+            [false, false, false, true]
+        );
+        assert_eq!(
+            Difficulty::ALL.map(|d| d.tier().mend),
+            [0.0, 0.0, 0.35, 0.35]
+        );
+        assert_eq!(
+            Difficulty::ALL.map(|d| d.tier().hunts),
+            [false, false, false, true]
+        );
+        // The scope's sight (the maintainer, 2026-10-29): Easy off.
+        assert_eq!(
+            Difficulty::ALL.map(|d| d.tier().scope_sight),
+            [0.0, 0.75, 1.0, 1.0]
+        );
         assert_eq!(Difficulty::Elite.tier().err_cap, Some(0.5));
         for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
             assert_eq!(d.tier().err_cap, None, "{d:?}: the skill's own cap");
@@ -819,6 +870,7 @@ mod tests {
             assert!(a.base_skill() <= b.base_skill(), "{a:?} -> {b:?}");
             assert!(ta.view_mult <= tb.view_mult && ta.reaction_ticks >= tb.reaction_ticks);
             assert!(ta.pressure <= tb.pressure);
+            assert!(ta.scope_sight <= tb.scope_sight);
             assert!(a.skill().err_cap >= b.skill().err_cap, "{a:?} -> {b:?}");
         }
     }

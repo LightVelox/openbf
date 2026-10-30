@@ -52,15 +52,7 @@ pub fn weapon_rows(walk: &crate::walk::WalkSim) -> [Option<HudWeapon>; 2] {
             1.0
         }
     };
-    let row = |hud: &crate::walk::WeaponHud, total: Option<u32>, clip_fraction: f32| HudWeapon {
-        key: hud.key.clone(),
-        class: hud.class.clone(),
-        icon: hud.icon.clone(),
-        // The localised weapon name waits for the Locl tables.
-        name: String::new(),
-        total,
-        clip_fraction,
-    };
+    let row = hud_weapon;
     if let Some(d) = sim.controlled_droid(walk.player) {
         // The remote's slot: a held slot, else the primary.
         let slot = me
@@ -150,25 +142,40 @@ fn seat_weapon_rows(walk: &crate::walk::WalkSim) -> [Option<HudWeapon>; 2] {
             .get(seat)
             .and_then(Option::as_ref)
             .and_then(|s| s.weapons.get(channel));
-        Some(HudWeapon {
-            key: visual.key.clone(),
-            class: visual.class.clone(),
-            icon: visual.icon.clone(),
-            name: String::new(),
-            total: if weapon.infinite {
+        Some(hud_weapon(
+            visual,
+            if weapon.infinite {
                 None
             } else {
                 state.and_then(|s| s.rounds(c))
             },
-            clip_fraction: state.map_or(1.0, |s| {
+            state.map_or(1.0, |s| {
                 if c.rounds_per_clip > 0 {
                     s.clip as f32 / c.rounds_per_clip as f32
                 } else {
                     1.0
                 }
             }),
-        })
+        ))
     })
+}
+
+/// A weapon row of the HUD model for `hud`.
+pub fn hud_weapon(
+    hud: &crate::walk::WeaponHud,
+    total: Option<u32>,
+    clip_fraction: f32,
+) -> HudWeapon {
+    HudWeapon {
+        key: hud.key.clone(),
+        class: hud.class.clone(),
+        bf2: hud.bf2,
+        icon: hud.icon.clone(),
+        // The localised weapon name waits for the Locl tables.
+        name: String::new(),
+        total,
+        clip_fraction,
+    }
 }
 
 /// How long a first frame lets the fades run before it is drawn: a capture
@@ -400,43 +407,15 @@ impl HudView {
     /// Feed `model`, advance the fades by `dt` seconds and lay the HUD out
     /// for a `size` window. The first call settles the fades.
     pub fn update(&mut self, model: &HudModel, dt: f32, size: [u32; 2]) {
-        // `[ours]` per row: a BF1 class keys BF2's table by its own name when
-        // its geometry has no entry, and a weapon with no BF2 mesh shows its
-        // icon sheet instead.
+        // Each weapon row's model, else its icon sheet ([`Self::weapon_mesh`]).
         let mut model = model.clone();
         for (row, w) in [(1, &mut model.weapon), (2, &mut model.weapon2)] {
             let Some(w) = w else {
                 continue;
             };
-            let files = &self.mesh_files;
-            let has = |n: &str| files.contains_key(n);
-            let event = format!("player1.weapon{row}.change");
-            let listed = |key: &str| {
-                self.hud
-                    .name_mesh(&event, key, &has)
-                    .filter(|mesh| !mesh.eq_ignore_ascii_case(key))
-            };
-            if listed(&w.key).is_none() && !w.class.is_empty() && listed(&w.class).is_some() {
-                w.key.clone_from(&w.class);
-            }
-            // A model the layout does not place (a BF1 geometry drawn by the
-            // fallback alone: no MeshInfo, or one with a rotation and no
-            // Position, which puts it at the group's origin) loses to the
-            // weapon's icon.
-            let placed = |mesh: &str| {
-                self.hud
-                    .find(&format!("player1weapon{row}mesh"))
-                    .is_some_and(|i| {
-                        let infos = &self.hud.elems[i].mesh_info;
-                        infos
-                            .iter()
-                            .any(|k| k.mesh == mesh && k.pos != glam::Vec3::ZERO)
-                    })
-            };
-            let drawable = self
-                .hud
-                .name_mesh(&event, &w.key, &has)
-                .is_some_and(|m| w.icon.is_none() || !m.eq_ignore_ascii_case(&w.key) || placed(&m));
+            let (key, mesh) = self.weapon_mesh(row, w);
+            w.key = key;
+            let drawable = mesh.is_some();
             w.icon = match (&w.icon, drawable) {
                 (Some(icon), false) => self.texture_file(icon).map(|p| {
                     if !self.art.sheet_aspect.contains_key(icon) {
@@ -543,6 +522,53 @@ impl HudView {
     /// a picture of an element the game does not light (hitmark's plain
     /// `target.hit` arc, `analysis/re-target-hud.md` §12). The next
     /// [`HudView::update`] lays it out.
+    /// The model weapon row `row` (1 or 2) shows for `w`: the key its
+    /// `hudtransforms` table is read with and the model that names; `None`
+    /// when the row shows `w.icon` in its place (or nothing). `[ours]` per
+    /// row: a BF1 class keys BF2's table by its own name when its geometry
+    /// has no entry, and a weapon with no BF2 mesh shows its icon sheet.
+    pub fn weapon_mesh(&self, row: u8, w: &HudWeapon) -> (String, Option<String>) {
+        let files = &self.mesh_files;
+        let has = |n: &str| files.contains_key(n);
+        let event = format!("player1.weapon{row}.change");
+        let listed = |key: &str| {
+            self.hud
+                .name_mesh(&event, key, &has)
+                .filter(|mesh| !mesh.eq_ignore_ascii_case(key))
+        };
+        let mut key = w.key.clone();
+        // A BF2 class's key that names a model keeps it, as on the PS2: the
+        // engineer's detpack sends `com_weap_inf_detpack`, while the table's
+        // `rep_weap_inf_detpack` row is the time bomb's model.
+        let unresolved = if w.bf2 {
+            self.hud.name_mesh(&event, &key, &has).is_none()
+        } else {
+            listed(&key).is_none()
+        };
+        if unresolved && !w.class.is_empty() && listed(&w.class).is_some() {
+            key.clone_from(&w.class);
+        }
+        // A model the layout does not place (a BF1 geometry drawn by the
+        // fallback alone: no MeshInfo, or one with a rotation and no
+        // Position, which puts it at the group's origin) loses to the
+        // weapon's icon.
+        let placed = |mesh: &str| {
+            self.hud
+                .find(&format!("player1weapon{row}mesh"))
+                .is_some_and(|i| {
+                    let infos = &self.hud.elems[i].mesh_info;
+                    infos
+                        .iter()
+                        .any(|k| k.mesh == mesh && k.pos != glam::Vec3::ZERO)
+                })
+        };
+        let mesh = self
+            .hud
+            .name_mesh(&event, &key, &has)
+            .filter(|m| w.icon.is_none() || !m.eq_ignore_ascii_case(&key) || placed(m));
+        (key, mesh)
+    }
+
     pub fn send(&mut self, event: &str, value: ui::hud_tree::EventValue) {
         let files = &self.mesh_files;
         self.hud.send(event, value, &|n| files.contains_key(n));

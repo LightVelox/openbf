@@ -432,3 +432,46 @@ fn a_turret_whose_support_goes_falls_and_lands_again() {
     assert!(t.landed, "{:?}", t.pos);
     assert!((t.pos.y + 5.0).abs() < 0.05, "{:?}", t.pos);
 }
+
+/// Playtest 2026-10-29 (Kamino): the turret killed an enemy building
+/// turret's gunner, then kept shooting the empty, now neutral turret.
+/// A vehicle is a target only while its live team is hostile; a held one
+/// is dropped as soon as it is not.
+#[test]
+fn it_drops_a_building_turret_whose_gunner_it_killed() {
+    use crate::vehicle::{SeatKind, VehicleKind, VehicleSpec};
+    let (mut sim, _, weapon) = setup();
+    sim.respawn_delay = 1000.0;
+    deploy(&mut sim);
+    let at = sim.turrets[0].pos.with_y(0.0) - Vec3::Z * 20.0;
+    let v = sim.spawn_vehicle(&VehicleSpec {
+        kind: VehicleKind::Turret,
+        class: 0,
+        home_team: None,
+        neutral_when_empty: true,
+        spawn_pad: None,
+        pos: at,
+        yaw: 0.0,
+        max_health: 100_000.0,
+        health_type: HealthType::Building,
+        seats: vec![SeatKind::Gunner(0)],
+    });
+    sim.vehicle_mut(v).unwrap().aim_sphere = Some((Vec3::Y * 1.5, 1.0));
+    let gunner = sim.spawn(&UnitSpec::trooper(1, at + Vec3::X)).unwrap();
+    assert!(sim.seat_unit(gunner, v, 0));
+    let g = gun(&sim, weapon);
+    // The disc's autoturret guns take vehicles (`AITarget` mask).
+    sim.weapon_classes[g].ai_target_kind |= 1 << HealthType::Vehicle as u32;
+    let events = run(&mut sim, 5.0);
+    assert_eq!(sim.turrets[0].target, Some(Aim::Vehicle(v)));
+    assert!(shots(&events, g) >= 4, "it fights the crewed turret");
+
+    sim.kill_environment(gunner, crate::sim::DeathCause::Fall);
+    assert_eq!(sim.vehicle_team(v), None, "empty: neutral");
+    run(&mut sim, 0.5);
+    assert_eq!(sim.turrets[0].target, None, "the empty turret is dropped");
+    // A salvo already started may finish (4 rounds, up to 0.3 s apart).
+    run(&mut sim, 1.0);
+    let events = run(&mut sim, 5.0);
+    assert_eq!(shots(&events, g), 0, "no shot at the empty turret");
+}

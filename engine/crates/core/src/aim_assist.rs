@@ -13,6 +13,12 @@
 //! (BF1 solves ordnance intercept in FUN_0026d3f0 — ported when weapons land
 //! at P4; dummy targets at P3 pass their own position).
 //!
+//! OURS (the maintainer, 2026-10-29): the tracking and pull terms are
+//! clamped to [`speed_cap`] stick units, not the PS2's one: at most
+//! [`ASSIST_SPEED_X_BF1`] times BF1's turn rate. The weight on both,
+//! 1 - |yaw push|, reads the push before the pad's look scale (BF1's 0 at
+//! a full push) and keeps a floor of [`W_FLOOR`].
+//!
 //! The intensity slider (PLAN §Movement & feel, an openbf addition) scales
 //! the two PULL terms only; the 0.5 slowdown stays authentic at slider 1.0
 //! and blends toward 1.0 (no slowdown) at slider 0.
@@ -29,7 +35,9 @@
 //! [`LEAD_VEL_TAU`], times the round's flight time, and that offset eases
 //! in over [`LEAD_EASE_TAU`] at most [`LEAD_MAX_RATE`]; term 1 rate-matches
 //! the lead point's sideways motion (the target's own, plus the offset's
-//! easing) in full, whatever the move stick, gated as term 2 is (`armed`).
+//! easing) in full, whatever the move stick, while term 2's timer is live
+//! (fire within the last [`MAGNET_TIMER_SECS`]; the maintainer, 2026-10-29:
+//! no following a target the player is not shooting at).
 //! So a runner who turns about is followed as he goes, and the lead swings
 //! to his other side at no more than [`LEAD_MAX_RATE`]: the reticle's path
 //! bends, it never jumps. The slowdown, term 2's gain, timer and fall-off
@@ -41,6 +49,26 @@ use glam::Vec3;
 pub const SLOWDOWN: f32 = 0.5;
 pub const GAIN: f32 = 0.75; // shared by tracking + magnetism
 pub const MAGNET_TIMER_SECS: f32 = 1.0;
+
+/// BF1's soldier turn rate (rad/s): the R its assist divides by, so its
+/// tracking and pull, clamped to one stick unit, turn at most this fast.
+pub const BF1_TURN_RATE: f32 = 0.675;
+/// OURS (the maintainer, 2026-10-29): the assist's own turn is capped at
+/// this many times BF1's. The port's stick unit is the class MaxTurnSpeed
+/// (4.0 rad/s, ~5.9x BF1's), so the PS2's one-unit clamp let the assist
+/// turn ~5.9x faster than on BF1.
+pub const ASSIST_SPEED_X_BF1: f32 = 3.0;
+
+/// OURS (the maintainer, 2026-10-29): the least weight the tracking and
+/// pull keep under a full push. BF1's is 0 (a full stick breaks free);
+/// the port's was 0.2, as the weight read the stick after `LOOK_SCALE`.
+pub const W_FLOOR: f32 = 0.1;
+
+/// The clamp on the tracking and pull terms in stick units: one stick unit
+/// turns `turn_rate` (both divided by the zoom alike).
+pub fn speed_cap(turn_rate: f32) -> f32 {
+    (ASSIST_SPEED_X_BF1 * BF1_TURN_RATE / turn_rate.max(1e-3)).min(1.0)
+}
 
 /// Aim sticks in [-1, 1], post-deadzone. `yaw`/`pitch` are modified in place
 /// by [`apply`]; `move_mag` is |move stick| (BF1 reads the axis written to
@@ -90,8 +118,12 @@ pub struct AssistEnv {
     pub armed: bool,
     /// OURS (the module doc's lead): the velocity of the point the pull aims
     /// at (the target's, plus its lead offset's easing), which term 1
-    /// rate-matches in full; `None` = the PS2's term 1.
+    /// rate-matches in full while the pull's timer is live; `None` = the
+    /// PS2's term 1.
     pub lead_vel: Option<Vec3>,
+    /// The yaw stick a full push delivers on this pad (`LOOK_SCALE` for a
+    /// human pad, 1 for a raw one): the weight reads the push before it.
+    pub look_scale: f32,
 }
 
 /// Persistent per-controller state (ctrl+0x30 in BF1).
@@ -151,27 +183,37 @@ impl Lead {
 /// One tick of FUN_0025fea8, given a valid magnet target. `intensity` = 1.0
 /// is PS2-authentic; the caller skips this entirely when no target exists.
 pub fn apply(dt: f32, sticks: &mut Sticks, env: &AssistEnv, st: &mut AssistState, intensity: f32) {
-    // Weight from how hard the player is already steering (1 - |yaw stick|).
-    let w = 1.0 - sticks.yaw.abs();
+    // Weight from how hard the player is already steering (1 - |yaw push|),
+    // the push read before the pad's look scale. [ours] floor: BF1 skips
+    // the pull and tracking at w = 0 (a full push).
+    let push = (sticks.yaw.abs() / env.look_scale.max(1e-3)).min(1.0);
+    let w = (1.0 - push).max(W_FLOOR);
 
     // Sticky slowdown (blend toward no-op as intensity drops below 1).
     let slow = 1.0 + (SLOWDOWN - 1.0) * intensity;
     sticks.yaw *= slow;
     sticks.pitch *= slow;
-    if w <= 0.0 {
-        return;
-    }
 
     let r = match env.zoom_factor {
         Some(z) => env.turn_rate / z,
         None => env.turn_rate,
     };
+    // [ours] ±cap where the PS2 clamps to ±1 (`speed_cap`).
+    let cap = speed_cap(env.turn_rate);
+
+    // Term 2 timer: refilled while fire is held, if armed. Refilled before
+    // term 1 so the lead's tracking sees this tick's press.
+    if env.armed && env.fire_held {
+        st.magnet_timer = MAGNET_TIMER_SECS;
+    }
 
     // Term 1: velocity tracking (yaw only, rate-matched, no dt). With the
     // lead (ours), the target's own motion is taken out of it and matched in
-    // full, the player's own share left as the PS2's.
+    // full, the player's own share left as the PS2's - only while the pull
+    // is live (fire within MAGNET_TIMER_SECS, [ours] 2026-10-29).
     let fwd_dist = (env.target_center - env.self_pos).dot(env.aim_fwd);
-    let track = match env.lead_vel.filter(|_| env.armed) {
+    let pulling = env.armed && st.magnet_timer > 0.0;
+    let track = match env.lead_vel.filter(|_| pulling) {
         None => {
             let lat_vel = (env.self_vel - env.target_vel).dot(env.lat);
             (sticks.move_mag.abs() * w * GAIN * lat_vel) / (fwd_dist * r)
@@ -181,12 +223,8 @@ pub fn apply(dt: f32, sticks: &mut Sticks, env: &AssistEnv, st: &mut AssistState
             w * (own - v.dot(env.lat)) / (fwd_dist * r)
         }
     };
-    sticks.yaw += track.clamp(-1.0, 1.0) * intensity;
+    sticks.yaw += track.clamp(-cap, cap) * intensity;
 
-    // Term 2 timer: refilled while fire is held, if armed.
-    if env.armed && env.fire_held {
-        st.magnet_timer = MAGNET_TIMER_SECS;
-    }
     if st.magnet_timer > 0.0 {
         let mut pull = w * st.magnet_timer * GAIN;
         let radii = env.target_radius + env.self_radius;
@@ -197,7 +235,7 @@ pub fn apply(dt: f32, sticks: &mut Sticks, env: &AssistEnv, st: &mut AssistState
         if pull > 0.0 {
             if let Some(lead) = env.lead_point {
                 let dir = (lead - env.self_pos).normalize_or_zero();
-                let step = (dir.dot(env.lat) / (r * dt)).clamp(-1.0, 1.0);
+                let step = (dir.dot(env.lat) / (r * dt)).clamp(-cap, cap);
                 sticks.yaw -= pull * step * intensity;
             }
         }
@@ -233,6 +271,7 @@ mod tests {
             fire_held: false,
             armed: false,
             lead_vel: None,
+            look_scale: 1.0,
         }
     }
 
@@ -250,8 +289,10 @@ mod tests {
         assert_eq!(st.magnet_timer, 0.0);
     }
 
+    /// [ours]: a full stick keeps the floor's share, not BF1's bypass
+    /// (here 0.1 x 0.0375 of tracking, the move stick's strafe).
     #[test]
-    fn t2_full_stick_bypasses_everything_but_slowdown() {
+    fn t2_full_stick_keeps_only_the_floor() {
         let mut e = env();
         e.self_vel = Vec3::X * 5.0; // would produce tracking if not bypassed
         let mut s = Sticks {
@@ -261,7 +302,11 @@ mod tests {
         };
         let mut st = AssistState::default();
         apply(DT, &mut s, &e, &mut st, 1.0);
-        assert!((s.yaw - 0.5).abs() < EPS);
+        assert!(
+            (s.yaw - (0.5 + W_FLOOR * 0.0375)).abs() < EPS,
+            "yaw {}",
+            s.yaw
+        );
         assert!((s.pitch - 0.3).abs() < EPS);
     }
 
@@ -305,9 +350,10 @@ mod tests {
         };
         let mut st = AssistState::default();
         apply(DT, &mut s, &e, &mut st, 1.0);
-        // pull = 1 * 1 * 0.75 * (1 - 19/49); step = clamp(0.1/(5/30)) = 0.6
+        // pull = 1 * 1 * 0.75 * (1 - 19/49); step = clamp(0.1/(5/30)) = 0.6,
+        // over the [ours] cap 3 x 0.675 / 5 = 0.405.
         let pull = 0.75 * (1.0 - 19.0 / 49.0);
-        assert!((s.yaw - (-pull * 0.6)).abs() < 1e-4, "yaw {}", s.yaw);
+        assert!((s.yaw - (-pull * 0.405)).abs() < 1e-4, "yaw {}", s.yaw);
         assert!((st.magnet_timer - (1.0 - DT)).abs() < EPS);
     }
 
@@ -409,6 +455,7 @@ mod tests {
         apply(DT, &mut ps2, &e, &mut AssistState::default(), 1.0);
         assert_eq!(ps2.yaw, 0.0, "the PS2's term 1 needs the move stick");
         e.lead_vel = Some(Vec3::X * 5.0);
+        e.fire_held = true;
         let mut ours = still;
         apply(DT, &mut ours, &e, &mut AssistState::default(), 1.0);
         // −5 / (20 × 5): the target's whole angular rate, turning right.
@@ -418,5 +465,115 @@ mod tests {
         let mut off = still;
         apply(DT, &mut off, &e, &mut AssistState::default(), 1.0);
         assert_eq!(off.yaw, 0.0);
+    }
+
+    /// The lead's tracking runs only while the pull's timer is live (fire
+    /// within the last second), as BF1's pull; otherwise term 1 is the PS2's.
+    #[test]
+    fn the_lead_tracks_only_while_the_pull_is_live() {
+        let mut e = env();
+        e.armed = true;
+        e.target_vel = Vec3::X * 5.0;
+        e.lead_vel = Some(Vec3::X * 5.0);
+        let still = Sticks {
+            move_mag: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+        };
+        let mut st = AssistState::default();
+        let mut idle = still;
+        apply(DT, &mut idle, &e, &mut st, 1.0);
+        assert_eq!(idle.yaw, 0.0, "no fire yet: the PS2's term 1");
+        e.fire_held = true;
+        let mut firing = still;
+        apply(DT, &mut firing, &e, &mut st, 1.0);
+        assert!((firing.yaw + 0.05).abs() < EPS, "firing: {}", firing.yaw);
+        e.fire_held = false;
+        let mut after = still;
+        apply(DT, &mut after, &e, &mut st, 1.0);
+        assert!((after.yaw + 0.05).abs() < EPS, "timer live: {}", after.yaw);
+        for _ in 0..40 {
+            apply(DT, &mut still.clone(), &e, &mut st, 1.0);
+        }
+        let mut late = still;
+        apply(DT, &mut late, &e, &mut st, 1.0);
+        assert_eq!(late.yaw, 0.0, "timer out: the PS2's term 1");
+    }
+
+    /// The assist's own turn is capped at three times BF1's (0.675 rad/s):
+    /// the tracking and the pull each at most 3 x 0.675 / R stick units,
+    /// zoomed or not (the zoom divides the assist's rate and the cap alike).
+    #[test]
+    fn the_assist_turns_no_faster_than_three_times_bf1() {
+        let cap = 3.0 * 0.675 / 5.0;
+        let still = Sticks {
+            move_mag: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+        };
+        for zoom in [None, Some(4.0)] {
+            // Tracking a 50 m/s crossing at 20 m: 0.5 stick unzoomed.
+            let mut e = env();
+            e.zoom_factor = zoom;
+            e.armed = true;
+            e.fire_held = true;
+            e.target_vel = Vec3::X * 50.0;
+            e.lead_vel = Some(Vec3::X * 50.0);
+            let mut s = still;
+            apply(DT, &mut s, &e, &mut AssistState::default(), 1.0);
+            assert!((s.yaw + cap).abs() < EPS, "{zoom:?} track {}", s.yaw);
+            // The pull toward a lead point 0.1 rad off: 0.6 stick unzoomed.
+            let mut e = env();
+            e.zoom_factor = zoom;
+            e.armed = true;
+            e.fire_held = true;
+            let d = 30.0_f32;
+            e.lead_point = Some(Vec3::new(0.1 * d, 0.0, -(1.0 - 0.01_f32).sqrt() * d));
+            let mut s = still;
+            apply(DT, &mut s, &e, &mut AssistState::default(), 1.0);
+            let pull = 0.75 * (1.0 - 19.0 / 49.0);
+            assert!((s.yaw + pull * cap).abs() < 1e-4, "{zoom:?} pull {}", s.yaw);
+        }
+    }
+
+    /// The weight reads the push before the pad's look scale, so a full
+    /// stick gives BF1's 0, kept at a floor of 0.1 ([ours]): a full push
+    /// on a human pad (0.8 after `LOOK_SCALE`) leaves a tenth of the pull.
+    #[test]
+    fn the_weight_reads_the_push_before_the_look_scale_with_a_floor() {
+        let mut e = env();
+        e.armed = true;
+        e.fire_held = true;
+        e.target_vel = Vec3::X * 5.0;
+        e.lead_vel = Some(Vec3::X * 5.0);
+        e.look_scale = 0.8;
+        // (stick, weight): full push, half push.
+        for (yaw, w) in [(0.8, 0.1), (0.4, 0.5)] {
+            let mut s = Sticks {
+                move_mag: 0.0,
+                yaw,
+                pitch: 0.0,
+            };
+            apply(DT, &mut s, &e, &mut AssistState::default(), 1.0);
+            let want = yaw * 0.5 - w * 0.05;
+            assert!(
+                (s.yaw - want).abs() < EPS,
+                "stick {yaw}: {} vs {want}",
+                s.yaw
+            );
+        }
+        // A raw pad's full stick: the floor, not BF1's bypass.
+        e.look_scale = 1.0;
+        let mut s = Sticks {
+            move_mag: 0.0,
+            yaw: 1.0,
+            pitch: 0.0,
+        };
+        apply(DT, &mut s, &e, &mut AssistState::default(), 1.0);
+        assert!(
+            (s.yaw - (0.5 - 0.1 * 0.05)).abs() < EPS,
+            "raw full: {}",
+            s.yaw
+        );
     }
 }

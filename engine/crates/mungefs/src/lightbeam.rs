@@ -1,3 +1,4 @@
+//! LightBeam config trees for prop halos (`analysis/re-halo.md`, unaudited).
 use crate::config::{parse_tree, ConfigNode};
 use crate::{Chunk, UcfbError};
 
@@ -113,9 +114,9 @@ impl LightBeamConfig {
                     b.length = l.max(0.0);
                     placed |= l > 0.0;
                 }
-                key::POSITION => b.position = c.floats_or_zero(),
+                key::POSITION => b.position = std::array::from_fn(|i| v(i).unwrap_or(0.0)),
                 key::DIRECTION => {
-                    b.direction = c.floats_or_zero();
+                    b.direction = std::array::from_fn(|i| v(i).unwrap_or(0.0));
                     placed = true;
                 }
                 _ => {}
@@ -225,7 +226,10 @@ mod tests {
         assert_eq!(b.length, 0.0);
         assert_eq!(b.initial_radius, [0.5, 0.5]);
         assert_eq!(b.final_radius, [0.1, 0.1]);
-        assert_eq!((b.fade_factor, b.fade_length, b.draw_distance), (0.2, 1.0, 0.0));
+        assert_eq!(
+            (b.fade_factor, b.fade_length, b.draw_distance),
+            (0.2, 1.0, 0.0)
+        );
     }
 
     #[test]
@@ -236,6 +240,20 @@ mod tests {
         assert_eq!((aimed.length, aimed.direction), (10.0, [1.0, 0.0, 0.0]));
         let bad = parse("x", vec![data(key::FINAL_WIDTH, &[2.0, -1.0], &[])]).unwrap();
         assert_eq!(bad.final_radius, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn nonfinite_vector_components_use_the_numeric_fallback() {
+        let b = parse(
+            "fixture",
+            vec![
+                data(key::POSITION, &[f32::NAN, f32::INFINITY, 2.0], &[]),
+                data(key::DIRECTION, &[1.0, f32::NEG_INFINITY, 0.0], &[]),
+            ],
+        )
+        .unwrap();
+        assert_eq!(b.position, [0.0, 0.0, 2.0]);
+        assert_eq!(b.direction, [1.0, 0.0, 0.0]);
     }
 
     #[test]

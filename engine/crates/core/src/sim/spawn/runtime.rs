@@ -687,6 +687,7 @@ impl Sim {
         self.assist.resize(n, AssistState::default());
         self.assist_lead.resize(n, None);
         self.magnet.resize(n, None);
+        self.magnet_hidden.resize(n, 0);
         self.reticle_pick.resize(n, None);
         self.spawn_choice.resize(n, 0);
         self.prev_spawn_bits.resize(n, 0);
@@ -760,8 +761,9 @@ impl Sim {
     /// ([`CLASS_FLOOR`] of an EVEN share, the same for every class): each one
     /// alive takes one unit off its class's weight; a class at or past its
     /// share keeps only the floor, so sixteen riflemen or sixteen droidekas
-    /// can happen and almost never do. A class at its authored `max` (BF2
-    /// `SetupTeams`) has weight 0 — the disc's own cap.
+    /// can happen and almost never do. [ours] (the maintainer 2026-10-29) a
+    /// class's authored `max` (BF2 `SetupTeams`, the droideka's 4) does not
+    /// cap the roll: it only refuses a human (`class_refusal`).
     pub fn ai_class_weights(&self, team: u8) -> Vec<f32> {
         let table = &self.classes[usize::from(team.min(1))];
         let cap = self.ai_alive_cap.max(1) as f32;
@@ -776,12 +778,8 @@ impl Sim {
                         u.alive && !u.is_player && u.team == team && usize::from(u.spec.class) == c
                     })
                     .count() as u32;
-                if table[c].max.is_some_and(|m| alive >= m) {
-                    0.0
-                } else {
-                    let share = cap * class_share(c) / parts;
-                    (share - alive as f32).max(0.0) + floor
-                }
+                let share = cap * class_share(c) / parts;
+                (share - alive as f32).max(0.0) + floor
             })
             .collect()
     }
@@ -890,7 +888,16 @@ impl Sim {
                 table[c].spec(old.team, pos, yaw, old.controller, c as u8, base)
             }
             None => match ai_class {
-                Some(c) => table[usize::from(c)].spec(old.team, pos, yaw, old.controller, c, base),
+                // [ours] A proxy with a class picks it, as a player does (the
+                // draw above is still spent).
+                Some(c) => {
+                    let c = self.units[i]
+                        .proxy_human
+                        .and_then(|p| p.class)
+                        .filter(|&k| usize::from(k) < table.len())
+                        .unwrap_or(c);
+                    table[usize::from(c)].spec(old.team, pos, yaw, old.controller, c, base)
+                }
                 None => UnitSpec { pos, yaw, ..old },
             },
         };
@@ -905,6 +912,7 @@ impl Sim {
         unit.deaths = self.units[i].deaths;
         // Card DPRX: a proxy comes back a proxy.
         unit.proxy_human = self.units[i].proxy_human;
+        crate::ai::proxy::hand_weapons(&mut unit);
         self.units[i] = unit;
         let h = UnitHandle {
             index: i as u32,

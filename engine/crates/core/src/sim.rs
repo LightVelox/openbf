@@ -70,7 +70,7 @@ pub use building_turrets::{BuildingTurret, TurretFall};
 pub use droid_death::PUSHED_DEAD_HEALTH;
 pub use droidekas::{capsule_of as droideka_capsule, FLOOR_SNAP as DROIDEKA_FLOOR_SNAP};
 pub use guns::SeatLook;
-pub use input::{buttons, AimTarget, InputLog, PadState, LOOK_UNIT};
+pub use input::{buttons, AimTarget, InputLog, PadState, LOOK_SCALE, LOOK_UNIT};
 pub use look::{LookPreview, MOUSE_STEER};
 pub use pickups::{
     DropTable, ItemClass, Pickup, BODY_AHEAD, BODY_RADIUS, DROP_HEIGHT, DROP_SIDE_SPEED,

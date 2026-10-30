@@ -309,3 +309,78 @@ fn a_steady_mouse_turns_the_blended_view_evenly_through_the_ticks() {
     }
     assert!(ticked >= 10);
 }
+
+#[test]
+fn grab_tries_locked_then_confined_and_only_marks_success() {
+    for locked_works in [true, false] {
+        let mut k = Kbm::default();
+        k.click_in();
+        let mut tried = Vec::new();
+        k.sync_grab_with(true, |mode| {
+            tried.push(mode);
+            if mode == CursorGrabMode::Locked && !locked_works {
+                Err(())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        let expected = if locked_works {
+            vec![CursorGrabMode::Locked]
+        } else {
+            vec![CursorGrabMode::Locked, CursorGrabMode::Confined]
+        };
+        assert_eq!(tried, expected);
+        assert!(k.grabbed());
+    }
+}
+
+#[test]
+fn failed_grabs_stay_visible_and_do_not_accept_look_or_retry_without_click() {
+    let mut k = Kbm::default();
+    k.click_in();
+    let mut tried = Vec::new();
+    assert!(k
+        .sync_grab_with(true, |mode| {
+            tried.push(mode);
+            Err(())
+        })
+        .is_err());
+    assert_eq!(tried, [CursorGrabMode::Locked, CursorGrabMode::Confined]);
+    assert!(!k.grabbed());
+    k.motion(100.0, 100.0);
+    assert!(!k.look().has_look());
+    k.sync_grab_with(true, |_| -> Result<(), ()> {
+        panic!("retried without a click")
+    })
+    .unwrap();
+    k.click_in();
+    k.sync_grab_with(true, |_| Ok::<_, ()>(())).unwrap();
+    assert!(k.grabbed());
+}
+
+#[test]
+fn pause_menus_and_focus_loss_release_motion_and_require_a_new_click() {
+    let mut k = Kbm::default();
+    k.click_in();
+    k.sync_grab_with(true, |_| Ok::<_, ()>(())).unwrap();
+    k.motion(100.0, 100.0);
+    let mut tried = Vec::new();
+    k.sync_grab_with(false, |mode| {
+        tried.push(mode);
+        Ok::<_, ()>(())
+    })
+    .unwrap();
+    assert_eq!(tried, [CursorGrabMode::None]);
+    assert!(!k.grabbed());
+    assert!(!k.look().has_look());
+    k.sync_grab_with(true, |_| -> Result<(), ()> {
+        panic!("regrabbed without click")
+    })
+    .unwrap();
+    k.click_in();
+    k.sync_grab_with(false, |_| -> Result<(), ()> { panic!("grabbed in a menu") })
+        .unwrap();
+    k.sync_grab_with(true, |_| -> Result<(), ()> { panic!("kept a menu click") })
+        .unwrap();
+}

@@ -491,7 +491,7 @@ fn sqveh_follower_walks_to_leaders_vehicle_and_boards_within_two_seconds() {
 }
 
 #[test]
-fn sqveh_full_vehicle_releases_follower_within_one_think() {
+fn sqveh_full_vehicle_keeps_follower_on_foot() {
     let (mut s, p, v) = world(Vec3::new(0.0, 2.0, -6.0), None, true);
     let bot = sqveh_follower(&mut s, p, Vec3::ZERO);
     for k in 1..4 {
@@ -503,8 +503,9 @@ fn sqveh_full_vehicle_releases_follower_within_one_think() {
         s.step(&[PadState::default()]);
     }
     assert!(s.unit(bot).unwrap().mount.is_none());
-    assert!(s.unit(bot).unwrap().command.is_none());
-    assert_eq!(s.nav_stats.releases, 1);
+    assert!(matches!(s.unit(bot).unwrap().command.map(|c| c.kind),
+        Some(crate::squad::CommandKind::Follow(h)) if h == p));
+    assert_eq!(s.nav_stats.releases, 0);
 }
 
 #[test]
@@ -525,9 +526,12 @@ fn sqveh_two_followers_compete_for_one_seat_without_displacing_riders() {
             .count(),
         1
     );
-    assert!(bots.iter().all(|&b| s.unit(b).unwrap().command.is_none()));
+    for bot in bots {
+        let u = s.unit(bot).unwrap();
+        assert_eq!(u.command.is_some(), u.mount.is_none());
+    }
     assert_eq!(s.vehicle(v).unwrap().seats[0].occupant, Some(p));
-    println!("SQVEH competition: 2 followers / 1 free seat -> 1 boarded, 1 released");
+    println!("SQVEH competition: 2 followers / 1 free seat -> 1 boarded, 1 following on foot");
 }
 
 #[test]

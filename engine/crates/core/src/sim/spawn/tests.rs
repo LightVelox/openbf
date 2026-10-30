@@ -205,7 +205,12 @@ fn ai_classes_are_drawn_by_share_and_by_what_is_not_yet_alive() {
         let h = s.spawn_ai(0, Vec3::new(0.0, 0.0, 5.0), 0.0).expect("spawn");
         got[usize::from(s.units[h.index as usize].spec.class)] += 1;
     }
-    assert!(got[0] <= 1, "the authored max holds: {got:?}");
+    // [ours] (the maintainer 2026-10-29): the authored max no longer caps
+    // the roll; class 0 (the default, 4 parts) fields past its max of 1.
+    assert!(
+        got[0] > 1,
+        "the authored max does not cap the roll: {got:?}"
+    );
     assert_eq!(s.ai_spawned, [8, 0]);
     // The cursor only advances on a spawn that happened.
     assert_eq!(s.spawn_ai(1, Vec3::ZERO, 0.0), None, "team 1 has no table");
@@ -262,26 +267,30 @@ fn vacating_a_player_slot_frees_it_without_a_ticket() {
     assert!(s.units.iter().all(|u| !u.is_player || !u.alive));
 }
 
-/// A class at its `max` is never drawn, and is drawn again once one dies.
+/// [ours] (the maintainer 2026-10-29): a class at or past its authored
+/// `max` keeps at least the floor weight, so the roll can field more of it.
 #[test]
-fn a_class_at_its_max_is_skipped() {
+fn a_class_at_its_max_keeps_the_floor() {
     let mut s = class_sim(vec![class(1, None), class(4, Some(1)), class(1, Some(1))]);
     let node = Vec3::new(0.0, 0.0, 5.0);
+    let floor = CLASS_FLOOR * s.ai_alive_cap.max(1) as f32 / 3.0;
     let mut n = [0u32; 3];
     for _ in 0..12 {
         let h = s.spawn_ai(0, node, 0.0).expect("spawn");
         n[usize::from(s.units[h.index as usize].spec.class)] += 1;
+        let w = s.ai_class_weights(0);
+        assert!(w.iter().all(|&x| x >= floor), "{w:?} {n:?}");
     }
-    assert_eq!((n[1], n[2]), (1, 1), "one of each capped class: {n:?}");
-    assert_eq!(s.ai_class_weights(0)[1], 0.0);
-    // Kill the class-1 unit and class 1 has a weight again.
-    let i = s
+    // Two of class 2 (max 1) alive still leave it its floor.
+    for u in s
         .units
-        .iter()
-        .position(|u| u.spec.class == 1)
-        .expect("a class-1 unit");
-    s.units[i].alive = false;
-    assert!(s.ai_class_weights(0)[1] > 0.0);
+        .iter_mut()
+        .filter(|u| u.alive && !u.is_player)
+        .take(2)
+    {
+        u.spec.class = 2;
+    }
+    assert!(s.ai_class_weights(0)[2] >= floor);
 }
 
 /// Two sims built the same way from the same table hash alike, and the

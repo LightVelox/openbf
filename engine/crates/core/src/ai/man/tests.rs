@@ -45,6 +45,7 @@ fn gun_setup(weapon: usize, yaw: Option<[f32; 2]>) -> GunSetup {
         )),
         framed: true,
         aimer_bind: glam::Quat::IDENTITY,
+        gunner: None,
     }
 }
 

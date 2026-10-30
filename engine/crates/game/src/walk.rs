@@ -255,8 +255,10 @@ pub struct WeaponHud {
     /// `[V][O]`): the weapon class's `HUDTag`, else its own `GeometryName`,
     /// else its name. `hudtransforms` turns it into a mesh.
     pub key: String,
-    /// The weapon class's own name (`ui::hud::HudWeapon::class`).
+    /// The weapon class's own name.
     pub class: String,
+    /// The class is a BF2 disc's (`ui::hud::HudWeapon::bf2`).
+    pub bf2: bool,
     /// The class's `IconTexture` (BF1's HUD sheet), for a weapon with no BF2
     /// mesh to show.
     pub icon: Option<String>,
@@ -1022,8 +1024,8 @@ impl WalkSim {
             blend.before_tick(self);
             self.blend = blend;
             self.step_tick(&pads);
-            if pads.iter().any(PadState::has_look) {
-                pads.to_mut().iter_mut().for_each(PadState::clear_look);
+            if pads.iter().any(|p| p.has_look() || p.fire_lag != 0) {
+                pads.to_mut().iter_mut().for_each(PadState::clear_once);
             }
             each(self);
             self.accum -= core::TICK_DT;

@@ -768,7 +768,6 @@ impl App {
                 if let Some(w) = warning {
                     ui::hud::draw_pad_warning(ctx, w);
                 }
-                ui::cursor::draw(ctx);
             });
             let view = &mut front.view;
             if let Err(e) = r.render_with_overlay(

@@ -155,7 +155,7 @@ impl Sim {
                 t.look = t.base_yaw + self.lcg.uniform(-LOOK_SPREAD, LOOK_SPREAD);
             }
         }
-        let point = t.target.and_then(|a| self.turret_aim(a));
+        let point = t.target.and_then(|a| self.turret_aim(a, t.team));
         if point.is_none() {
             t.target = None;
             t.fighting = false;
@@ -210,7 +210,7 @@ impl Sim {
         let eye = t.centre();
         let seen = |p: Vec3| crate::perception::los(self, eye, p);
         if t.fighting {
-            let held = t.target.and_then(|a| self.turret_aim(a));
+            let held = t.target.and_then(|a| self.turret_aim(a, t.team));
             if held.is_some_and(|p| p.distance(eye) <= max + FIGHT_MARGIN && seen(p)) {
                 return;
             }
@@ -243,13 +243,19 @@ impl Sim {
         t.fighting = found.is_some_and(|(d, _, _)| (min..=max).contains(&d));
     }
 
-    fn turret_aim(&self, a: Aim) -> Option<Vec3> {
+    /// Where a held target is, while it is still one for a turret of
+    /// `team`. A vehicle is hostile only by its live team, so an emptied
+    /// building turret (neutral again) is dropped (playtest 2026-10-29).
+    fn turret_aim(&self, a: Aim, team: u8) -> Option<Vec3> {
         match a {
             Aim::Unit(h) => self
                 .unit(h)
-                .filter(|u| u.mount.is_none() && u.cloak.visible())
+                .filter(|u| u.team != team && u.mount.is_none() && u.cloak.visible())
                 .map(|u| u.capsule().center()),
-            Aim::Vehicle(h) => self.vehicle(h).map(|v| self.vehicle_blast_sphere(v).0),
+            Aim::Vehicle(h) => self
+                .vehicle(h)
+                .filter(|v| v.team.is_some_and(|vt| vt != team))
+                .map(|v| self.vehicle_blast_sphere(v).0),
         }
     }
 

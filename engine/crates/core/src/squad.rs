@@ -324,12 +324,10 @@ impl crate::sim::Sim {
     }
 
     /// WPOKE's narrow mounted receiver; ordinary in_reach remains on foot.
+    /// Both games (BF1's rule on BF2 too, a named deviation, issue #7).
     fn pickup_receiver(&self, i: usize) -> Option<(crate::vehicle::VehicleHandle, u64)> {
         let u = &self.units[i];
-        if self.ground_rules != crate::soldier::GroundRules::Bf1
-            || !u.alive
-            || u.controller != crate::unit::Controller::Ai
-        {
+        if !u.alive || u.controller != crate::unit::Controller::Ai {
             return None;
         }
         let m = u.mount?;
@@ -578,6 +576,7 @@ impl crate::sim::Sim {
     }
 
     fn put_command(&mut self, i: usize, kind: CommandKind, issuer: u8) {
+        self.units[i].order = None;
         self.units[i].ai.pending_board = None;
         self.units[i].command = Some(Command {
             kind,
@@ -747,13 +746,11 @@ pub fn steer(
                     r.maintenance = None;
                     r.use_req = false;
                 }
-                if sim.enter_seat(me, vh).is_none() {
-                    nt.released = 1;
-                    st.cmd = Some(c);
-                    return;
+                if sim.enter_seat(me, vh).is_some() {
+                    c.roll = FOLLOW;
+                    c.goal = lp;
                 }
-                c.roll = FOLLOW;
-                c.goal = lp;
+                // [ours] A full vehicle keeps Follow; continue on foot below.
             }
             if c.roll == u64::MAX {
                 c.roll = APPROACH;

@@ -831,6 +831,7 @@ mod tests {
                 turn: None,
                 framed: false,
                 aimer_bind: glam::Quat::IDENTITY,
+                gunner: None,
             })],
         })];
         let vehicle = walk.sim.spawn_vehicle(&VehicleSpec {

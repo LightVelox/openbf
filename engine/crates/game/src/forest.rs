@@ -1,3 +1,4 @@
+//! Forest presentation setup and read-only actor footprints.
 use core::sim::Sim;
 use glam::Vec3;
 use render::{LeafActor, Renderer};

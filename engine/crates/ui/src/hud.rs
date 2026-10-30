@@ -21,6 +21,11 @@ pub struct HudWeapon {
     /// it when `key` (its own `GeometryName`) has no entry there: BF2's
     /// classes of the same name carry no geometry and send their name.
     pub class: String,
+    /// The class is a BF2 disc's: the table is read with `key`, else the
+    /// model named `key` is shown, as the PS2 does (`re-hud.md` §2.5); only
+    /// a key naming no model the bake has falls back to `class` (`[ours]`:
+    /// `hud_rep_defense_buff` lives in the side LVL, not in the bake).
+    pub bf2: bool,
     /// `[ours]` a weapon with no BF2 mesh: its `IconTexture` sheet, drawn in
     /// the mesh's place.
     pub icon: Option<String>,
@@ -144,6 +149,12 @@ pub struct HudModel {
     /// The layout's `player1reticule_criticalhit` holds it 0.6 s and 0.5 s
     /// more after the last send.
     pub hit_critical: Option<[u8; 3]>,
+    /// The plain hit flash ([ours], the maintainer 2026-10-29): `Some(colour)`
+    /// while the 0.5 s hit timer of the player's last body hit on an enemy
+    /// runs, any weapon, sent as `target.hitColor` with `target.hit`; the
+    /// layout's `player1reticule_hit` holds it 0.33 s more. A critical hit
+    /// wins: the two are never sent together.
+    pub hit_body: Option<[u8; 3]>,
     /// The reticle's pick as the target readout shows it (card HTGT);
     /// `None` = nothing picked.
     pub target: Option<HudTarget>,
@@ -371,21 +382,21 @@ pub fn feed(hud: &mut Hud, m: &HudModel, has_mesh: &dyn Fn(&str) -> bool) {
         };
         put("player1.weapon1.target.teamColor", EventValue::Color(c));
         // The hit flash (`FUN_003b3398` B2:410434-410467): every update the
-        // hit timer runs, `hitCritical` (the factor over 1) and its colour.
-        // Body hits send nothing here: the port keeps the plain `hit`
-        // flash off (hitmark, the maintainer 2026-10-28) - the readout's bar shows
-        // them.
-        if let Some(c) = m.hit_critical {
+        // hit timer runs, `hitCritical` (the factor over 1) or `hit`, and
+        // its colour. [ours] (the maintainer, 2026-10-29): `hit` for every
+        // enemy body hit, any weapon; the critical mark wins.
+        let flash = match (m.hit_critical, m.hit_body) {
+            (Some(c), _) => Some((c, "player1.weapon1.target.hitCritical")),
+            (None, Some(c)) => Some((c, "player1.weapon1.target.hit")),
+            (None, None) => None,
+        };
+        if let Some((c, event)) = flash {
             hud.send(
                 "player1.weapon1.target.hitColor",
                 EventValue::Color(c),
                 has_mesh,
             );
-            hud.send(
-                "player1.weapon1.target.hitCritical",
-                EventValue::None,
-                has_mesh,
-            );
+            hud.send(event, EventValue::None, has_mesh);
         }
     }
 
@@ -759,6 +770,7 @@ mod tests {
             weapon2: None,
             reticle: Some(0),
             hit_critical: None,
+            hit_body: None,
             target: None,
             reticle_y: 0.5,
             dead: false,
@@ -983,6 +995,46 @@ mod tests {
             step(&mut hud, &m);
         }
         assert_eq!(hud.elems[crit].fader.state, 0, "gone after 1.1 s");
+    }
+
+    /// [ours] (the maintainer, 2026-10-29): an enemy body hit lights the
+    /// plain `hit` flash while its 0.5 s timer is sent, enemy red; a
+    /// critical hit wins - the two are never up for one hit.
+    #[test]
+    fn a_body_hit_lights_the_plain_hit_flash() {
+        let mut hud = crate::hud_tree::fixture::reticle_hud();
+        let crit = hud.find("player1reticule_criticalhit").unwrap();
+        let hit = hud.find("player1reticule_hit").unwrap();
+        let step = |hud: &mut Hud, m: &HudModel| {
+            feed(hud, m, &|_| false);
+            hud.advance(1.0 / 30.0);
+        };
+        let mut m = model();
+        for _ in 0..10 {
+            step(&mut hud, &m);
+        }
+        assert_eq!(hud.elems[hit].fader.state, 0, "no hit: no flash");
+        m.hit_body = Some(target_color::ENEMY);
+        for _ in 0..15 {
+            step(&mut hud, &m);
+            assert_eq!(hud.elems[hit].fader.state, 2, "up while sent");
+        }
+        assert_eq!(hud.elems[hit].color, [200.0, 100.0, 100.0], "enemy red");
+        assert!(hud.alpha(hit) > 0.0);
+        assert_eq!(hud.elems[crit].fader.state, 0, "no critical mark");
+        m.hit_body = None;
+        for _ in 0..30 {
+            step(&mut hud, &m);
+        }
+        assert_eq!(hud.elems[hit].fader.state, 0, "gone after 1 s");
+        // A headshot: the body hit's timer runs too, the claws alone show.
+        m.hit_body = Some(target_color::ENEMY);
+        m.hit_critical = Some(target_color::ENEMY);
+        for _ in 0..15 {
+            step(&mut hud, &m);
+        }
+        assert_eq!(hud.elems[crit].fader.state, 2, "the claws");
+        assert_eq!(hud.elems[hit].fader.state, 0, "crit wins");
     }
 
     /// BF2's reticle colours (`re-target-hud.md` §3): friend blue, not BF1's

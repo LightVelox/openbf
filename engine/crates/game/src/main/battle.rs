@@ -516,6 +516,8 @@ pub(super) fn hud_model(
         ambush: feed.take_ambush(),
         // The sniper headshot's reticle mark (hitmark).
         hit_critical: feed.hit_critical(walk.sim.tick),
+        // Every enemy body hit's plain flash (2026-10-29).
+        hit_body: feed.hit_body(walk.sim.tick),
         stats: Some(feed.stats(&walk.sim, walk.player)),
         player_team: me.team,
         map: walk.minimap.as_ref().map(|m| match &spawn {

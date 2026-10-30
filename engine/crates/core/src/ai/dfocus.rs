@@ -91,7 +91,7 @@ pub fn upkeep(sim: &mut Sim) {
     let mut born = std::mem::take(&mut sim.focus_born);
     born.retain(|b| sim.unit(b.human).is_some_and(|u| on_against(sim, u.team)));
     for (h, u) in sim.alive_units() {
-        if u.is_player && on_against(sim, u.team) && !born.iter().any(|b| b.human == h) {
+        if u.is_human() && on_against(sim, u.team) && !born.iter().any(|b| b.human == h) {
             born.push(Born { human: h, tick });
         }
     }

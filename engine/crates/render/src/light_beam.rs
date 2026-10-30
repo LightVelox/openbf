@@ -14,7 +14,8 @@
 //! `f` is the view's own factor: 1 − g² (g = the axial fraction of the
 //! eye's offset: looked at from the side the beam is full, along its axis it
 //! is gone), times a fade as the eye comes inside the cone's radius, times
-//! the far fade over the last 19 % of the visible distance squared.
+//! one far fade band: the earlier of the scene's fade start and 0.81 times
+//! the effect's visible distance squared, to the shorter far distance squared.
 //!
 //! **Near the eye** ([`crosses_near`], PROVISIONAL [D]): the PS2 hands the fan
 //! to its packed-strip draw with a box — the fan's own extent and ±1 m along
@@ -34,7 +35,7 @@
 //! of (100, 200, 100).
 
 use crate::grass::GrassVertex;
-use crate::Camera;
+use crate::{Camera, FarFade};
 use glam::Vec3;
 
 /// The top row's alpha against the bottom row's (beam +0x18c).
@@ -54,6 +55,9 @@ pub struct Beam {
     pub soft: f32,
     /// The visible distance, metres (0 = no limit of its own).
     pub visible: f32,
+    /// The scene's distance band, or None for the extended world reach.
+    /// The camera's finite far distance always caps it.
+    pub view: Option<FarFade>,
     /// The displayed value of a colour byte of 128 (module doc).
     pub gs_rgb: f32,
     pub top: f32,
@@ -133,15 +137,51 @@ const STRIP: [(u8, bool); 34] = [
     (9, false),
 ];
 
-/// The view's factor `f` and the axial fraction `g` for an eye at `eye`
-/// (`near` = the view's near plane), or `None` where the beam is not drawn.
-pub fn view_factor(b: &Beam, eye: Vec3, near: f32) -> Option<(f32, f32)> {
-    let v = b.base - eye;
-    let d2 = v.length_squared();
-    let vis2 = b.visible * b.visible;
-    if b.visible > 0.0 && d2 >= vis2 {
+// BF2 FUN_00469628: the earlier fade start and the shorter far limit,
+// in squared metres, form ONE band (528909-528916, 529211-529218 [V]).
+fn distance_factor(b: &Beam, camera: &Camera, d2: f32) -> Option<f32> {
+    if !d2.is_finite() || !camera.far.is_finite() || camera.far <= 0.0 {
         return None;
     }
+    // [ours] With world culling relaxed, keep the same extended reach,
+    // bounded radially by the projection's far distance; fade its last 10%.
+    let mut end = camera.far * camera.far;
+    if !end.is_finite() {
+        return None;
+    }
+    let mut begin = 0.81 * end;
+    if let Some(view) = b.view {
+        if !view.begin.is_finite()
+            || !view.end.is_finite()
+            || view.begin < 0.0
+            || view.end <= 0.0
+            || view.begin > view.end
+        {
+            return None;
+        }
+        begin = begin.min(view.begin * view.begin);
+        end = end.min(view.end * view.end);
+    }
+    if b.visible > 0.0 {
+        let own = b.visible * b.visible;
+        begin = begin.min(0.81 * own);
+        end = end.min(own);
+    }
+    if d2 >= end {
+        return None;
+    }
+    Some(if d2 > begin {
+        (end - d2) / (end - begin)
+    } else {
+        1.0
+    })
+}
+
+/// The view's factor `f` and axial fraction `g`, or `None` when culled.
+pub fn view_factor(b: &Beam, camera: &Camera) -> Option<(f32, f32)> {
+    let v = b.base - camera.position;
+    let d2 = v.length_squared();
+    let distance = distance_factor(b, camera, d2)?;
     let ax = v.dot(b.axis);
     // The cone's radius at the eye's height (an eye over the base).
     let r_eye = if ax < 0.0 {
@@ -149,16 +189,13 @@ pub fn view_factor(b: &Beam, eye: Vec3, near: f32) -> Option<(f32, f32)> {
     } else {
         b.r0
     };
-    let off_axis = (v - b.axis * ax).length() - near;
+    let off_axis = (v - b.axis * ax).length() - camera.near;
     let g = ax / if b.r0 * b.r0 < d2 { d2.sqrt() } else { b.r0 };
-    let mut f = 1.0 - g * g;
+    let mut f = (1.0 - g * g) * distance;
     if off_axis < 0.0 {
         f = 0.0;
     } else if off_axis < r_eye {
         f *= off_axis / r_eye;
-    }
-    if b.visible > 0.0 && d2 > 0.81 * vis2 {
-        f *= (vis2 - d2) / (vis2 - 0.81 * vis2);
     }
     Some((f.max(0.0), g))
 }
@@ -175,11 +212,7 @@ pub fn fan(b: &Beam, g: f32) -> [(f32, f32, f32); 22] {
     }
     for i in 0..7 {
         let x = i as f32 / 3.0 - 1.0;
-        out[9 + i] = (
-            x * b.r1,
-            b.length,
-            b.top * (1.0 - x * x).max(0.0).sqrt(),
-        );
+        out[9 + i] = (x * b.r1, b.length, b.top * (1.0 - x * x).max(0.0).sqrt());
     }
     // The cap: `soft` high from the side, the top's own radius along the axis.
     let cap = b.soft + g.abs() * (b.r1 - b.soft);
@@ -220,7 +253,7 @@ pub fn vertices(b: &Beam, rgba: [u8; 4], camera: &Camera) -> Vec<GrassVertex> {
     }
     let side = side.normalize();
     let b = &b.seen_from(side);
-    let Some((f, g)) = view_factor(b, eye, camera.near) else {
+    let Some((f, g)) = view_factor(b, camera) else {
         return Vec::new();
     };
     if f <= 0.0 {
@@ -258,24 +291,19 @@ pub fn glow_vertices(b: &Beam, rgba: [u8; 4], camera: &Camera) -> Vec<GrassVerte
     let outer = inner + b.soft;
     let v = b.base - eye;
     let d2 = v.length_squared();
-    let vis2 = b.visible * b.visible;
-    if b.visible > 0.0 && vis2 <= d2 {
+    let Some(mut f) = distance_factor(b, camera, d2) else {
         return Vec::new();
-    }
+    };
     let depth = v.dot(fwd);
     if depth + outer <= camera.near {
         return Vec::new();
     }
     let gap = depth - camera.near;
-    let mut f = 1.0;
     if gap < outer {
         if gap < inner {
             return Vec::new();
         }
-        f = (gap - inner) / (outer - inner);
-    }
-    if b.visible > 0.0 && d2 > 0.81 * vis2 {
-        f *= (vis2 - d2) / (vis2 - 0.81 * vis2);
+        f *= (gap - inner) / (outer - inner);
     }
     let half = |v: u8| f32::from((u16::from(v) + 1) >> 1);
     let rgb = [rgba[0], rgba[1], rgba[2]].map(|c| half(c) / 128.0 * b.gs_rgb);
@@ -324,6 +352,7 @@ mod tests {
             r1: 1.0,
             soft: 0.7,
             visible: 200.0,
+            view: None,
             gs_rgb: 1.0,
             top: TOP_ALPHA,
             cross: None,
@@ -379,22 +408,28 @@ mod tests {
     #[test]
     fn the_beam_fades_with_the_view() {
         let b = post();
-        let side = view_factor(&b, Vec3::ZERO, 0.1).unwrap();
+        let factor = |eye| {
+            view_factor(
+                &b,
+                &Camera {
+                    position: eye,
+                    ..Camera::default()
+                },
+            )
+        };
+        let side = factor(Vec3::ZERO).unwrap();
         assert!((side.0 - 1.0).abs() < 1e-6 && side.1 == 0.0);
         // 45° over the base: g² = 0.5.
-        let over = view_factor(&b, Vec3::new(0.0, 10.0, 0.0), 0.1).unwrap();
+        let over = factor(Vec3::new(0.0, 10.0, 0.0)).unwrap();
         assert!((over.0 - 0.5).abs() < 1e-5 && over.1 < 0.0, "{over:?}");
         // Inside the cone at its base height: 0.35 m off the axis, near 0.1.
-        let inside = view_factor(&b, Vec3::new(0.35, 0.0, -10.0), 0.1).unwrap();
+        let inside = factor(Vec3::new(0.35, 0.0, -10.0)).unwrap();
         assert!((inside.0 - 0.25 / 0.5).abs() < 1e-5, "{inside:?}");
-        assert_eq!(
-            view_factor(&b, Vec3::new(0.05, 0.0, -10.0), 0.1).unwrap().0,
-            0.0
-        );
+        assert_eq!(factor(Vec3::new(0.05, 0.0, -10.0)).unwrap().0, 0.0);
         // 190 m off: (200² − 190²) / (0.19 · 200²).
-        let far = view_factor(&b, Vec3::new(0.0, 0.0, 180.0), 0.1).unwrap();
+        let far = factor(Vec3::new(0.0, 0.0, 180.0)).unwrap();
         assert!((far.0 - 3900.0 / 7600.0).abs() < 1e-4, "{far:?}");
-        assert!(view_factor(&b, Vec3::new(0.0, 0.0, 190.0), 0.1).is_none());
+        assert!(factor(Vec3::new(0.0, 0.0, 190.0)).is_none());
     }
 
     /// The PS2 draws no beam where the fan's box reaches the near plane:
@@ -432,6 +467,7 @@ mod tests {
             r1: 0.65,
             soft: 0.8,
             visible: 300.0,
+            view: None,
             gs_rgb: 1.0,
             top: 0.3,
             cross: Some(Cross {
@@ -453,12 +489,19 @@ mod tests {
             let side = (halo().base - eye).cross(Vec3::Y).normalize();
             let b = halo().seen_from(side);
             assert_eq!(b.cross, None);
-            (b.r0, b.r1, vertices(&halo(), [50, 177, 219, 255], &cam).len())
+            (
+                b.r0,
+                b.r1,
+                vertices(&halo(), [50, 177, 219, 255], &cam).len(),
+            )
         };
         let (r0, r1, n) = width(Vec3::new(0.0, 0.5, 0.0));
         assert!((r0 - 0.4).abs() < 1e-6 && (r1 - 0.65).abs() < 1e-6 && n == 29 * 3);
         let (r0, r1, _) = width(Vec3::new(10.0, 0.5, -10.0));
-        assert!((r0 - 0.1).abs() < 1e-6 && (r1 - 0.4).abs() < 1e-6, "{r0} {r1}");
+        assert!(
+            (r0 - 0.1).abs() < 1e-6 && (r1 - 0.4).abs() < 1e-6,
+            "{r0} {r1}"
+        );
         let round = Beam {
             cross: Some(Cross {
                 x: Vec3::X,
@@ -537,5 +580,169 @@ mod tests {
         };
         assert_eq!(from(85.0)[2].color[3], 66.0 / 128.0);
         assert!(from(95.0).is_empty());
+    }
+
+    #[test]
+    fn halo_distance_zero_limit_still_obeys_the_view() {
+        let camera = Camera {
+            far: 100.0,
+            ..Camera::default()
+        };
+        for visible in [0.0, 300.0] {
+            for length in [0.0, 1.0] {
+                let b = Beam {
+                    base: Vec3::new(75.0, 0.0, -75.0),
+                    visible,
+                    length,
+                    ..glow()
+                };
+                assert!(vertices(&b, [255; 4], &camera).is_empty(),
+                    "halo beyond radial view distance emitted triangles: limit={visible}, length={length}");
+            }
+        }
+    }
+
+    #[test]
+    fn halo_distance_zero_and_larger_limits_fade_with_the_view() {
+        let camera = Camera {
+            far: 100.0,
+            ..Camera::default()
+        };
+        for visible in [0.0, 300.0] {
+            let b = Beam {
+                base: Vec3::new(0.0, 0.0, -95.0),
+                visible,
+                ..glow()
+            };
+            let v = vertices(&b, [255; 4], &camera);
+            assert_eq!(
+                v[2].color[3],
+                66.0 / 128.0,
+                "expected the same fade as an explicit 100 m distance: limit={visible}"
+            );
+        }
+    }
+
+    #[test]
+    fn halo_distance_larger_effect_limit_still_obeys_the_view() {
+        let camera = Camera {
+            far: 100.0,
+            ..Camera::default()
+        };
+        let b = Beam {
+            base: Vec3::new(75.0, 0.0, -75.0),
+            visible: 300.0,
+            ..glow()
+        };
+        assert!(vertices(&b, [255; 4], &camera).is_empty());
+    }
+
+    #[test]
+    fn halo_distance_larger_effect_limit_still_fades_with_the_view() {
+        let camera = Camera {
+            far: 100.0,
+            ..Camera::default()
+        };
+        let b = Beam {
+            base: Vec3::new(0.0, 0.0, -95.0),
+            visible: 300.0,
+            ..glow()
+        };
+        assert_eq!(vertices(&b, [255; 4], &camera)[2].color[3], 66.0 / 128.0);
+    }
+
+    #[test]
+    fn halo_distance_intersects_both_ends_of_the_authored_view_band() {
+        // The scene fades at 80..100 m, independently of the 1000 m projection.
+        let camera = Camera {
+            far: 1000.0,
+            ..Camera::default()
+        };
+        for visible in [0.0, 300.0] {
+            for length in [0.0, 1.0] {
+                let b = Beam {
+                    base: Vec3::new(0.0, 0.0, -95.0),
+                    visible,
+                    length,
+                    view: Some(FarFade {
+                        begin: 80.0,
+                        end: 100.0,
+                    }),
+                    ..glow()
+                };
+                let v = vertices(&b, [255; 4], &camera);
+                // ONE band: (100^2 - 95^2) / (100^2 - 80^2) = 13/48.
+                let peak = v.iter().map(|v| v.color[3]).fold(0.0, f32::max);
+                let expected = if length == 0.0 { 35.0 } else { 34.0 } / 128.0;
+                assert_eq!(peak, expected, "limit={visible}, length={length}");
+                let outside = Beam {
+                    base: Vec3::new(75.0, 0.0, -75.0),
+                    ..b
+                };
+                assert!(vertices(&outside, [255; 4], &camera).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn halo_distance_uses_the_earlier_start_even_when_the_effect_limit_is_larger() {
+        let camera = Camera::default();
+        let b = Beam {
+            base: Vec3::new(0.0, 0.0, -95.0),
+            visible: 105.0,
+            view: Some(FarFade {
+                begin: 99.0,
+                end: 100.0,
+            }),
+            ..glow()
+        };
+        // Effect start 94.5 m beats the view's 99 m; view end 100 beats 105.
+        // round(255 * (10000 - 9025) / (10000 - 8930.25)) = 232 -> 116.
+        assert_eq!(vertices(&b, [255; 4], &camera)[2].color[3], 116.0 / 128.0);
+    }
+
+    #[test]
+    fn halo_distance_a_shorter_effect_caps_the_view_without_multiplying_fades() {
+        let camera = Camera::default();
+        let b = Beam {
+            base: Vec3::new(0.0, 0.0, -95.0),
+            visible: 100.0,
+            view: Some(FarFade {
+                begin: 80.0,
+                end: 200.0,
+            }),
+            ..glow()
+        };
+        assert_eq!(vertices(&b, [255; 4], &camera)[2].color[3], 35.0 / 128.0);
+        let outside = Beam {
+            base: Vec3::new(0.0, 0.0, -101.0),
+            ..b
+        };
+        assert!(vertices(&outside, [255; 4], &camera).is_empty());
+        let near = Beam {
+            base: Vec3::new(0.0, 0.0, -10.0),
+            ..b
+        };
+        assert_eq!(vertices(&near, [255; 4], &camera)[2].color[3], 1.0);
+    }
+
+    #[test]
+    fn halo_distance_also_caps_authored_bands_at_the_camera_far_plane() {
+        let camera = Camera {
+            far: 100.0,
+            ..Camera::default()
+        };
+        let b = Beam {
+            base: Vec3::new(0.0, 0.0, -95.0),
+            view: Some(FarFade {
+                begin: 300.0,
+                end: 400.0,
+            }),
+            ..glow()
+        };
+        assert_eq!(vertices(&b, [255; 4], &camera)[2].color[3], 66.0 / 128.0);
+        for far in [f32::INFINITY, f32::NAN, 0.0] {
+            assert!(vertices(&b, [255; 4], &Camera { far, ..camera }).is_empty());
+        }
     }
 }

@@ -526,6 +526,12 @@ pub fn install(
         setups.push(Some(blast_setup(&db, c, sphr)));
     }
     sim.blast_setup = setups;
+    // Issue #35: each class's slice time.
+    sim.slice_time = b
+        .classes
+        .iter()
+        .map(|c| vehicle_class::slice_time(&db, c))
+        .collect();
     // Each class's hull (card VHULL), before anything spawns from a pad; a
     // building turret has none — its building is the world's own body.
     sim.hull_parts = hull_parts_from(
@@ -581,6 +587,9 @@ pub fn install(
                     let mut g = seat_gun(sim, &db, s, hp)?;
                     if (building || walker) && !g.pilot {
                         turret_law(&mut g, s, game == "bf2");
+                        if building {
+                            g.gunner = gunner_seat(m, c, s, game == "bf2");
+                        }
                         if walker && !g.framed {
                             if let Some(axes) = s
                                 .aimer_node
@@ -642,6 +651,39 @@ pub fn install(
         }
     }
     Ok(b)
+}
+
+/// Where a building turret's drawn gunner stands (`core::vehicle::gun::GunnerSeat`):
+/// his `PilotPosition` on its parent node of the class's rig; `None` for a
+/// hidden gunner (he stays at the origin) or a class with no rig.
+fn gunner_seat(
+    m: &Manifest,
+    class: &str,
+    s: &vehicle_class::SeatSpec,
+    bf2: bool,
+) -> Option<core::vehicle::gun::GunnerSeat> {
+    use crate::viewer::turret_pose as tp;
+    if s.gunner_draw(bf2) != vehicle_class::GunnerDraw::Drawn {
+        return None;
+    }
+    // The class as the scene resolves it (a BF2 build zone's built class).
+    let find = |n: &str| m.classes.iter().find(|k| k.name.eq_ignore_ascii_case(n));
+    let k = find(class)?;
+    let k = match &k.build_zone {
+        Some(zone) if bf2 => find(zone)?,
+        _ => k,
+    };
+    let rig = k.turret_rig.as_ref()?;
+    let hang = tp::GunnerHang::of(rig, s)?;
+    let node_bind = hang
+        .parent
+        .map_or(glam::Mat4::IDENTITY, |p| tp::bind_of(rig, p));
+    Some(core::vehicle::gun::GunnerSeat {
+        node_bind,
+        local: hang.local,
+        turns: hang.parent.is_some() && hang.parent == tp::PoseSpec::of(rig, s).turret,
+        pitch_factor: s.pitch_turn_factor.unwrap_or(1.0),
+    })
 }
 
 /// Every vehicle class's baked `skel` nodes (card VTUR), by lowercase class
@@ -959,6 +1001,7 @@ pub fn seat_gun(
         turn: None,
         framed: false,
         aimer_bind: glam::Quat::IDENTITY,
+        gunner: None,
     })
 }
 

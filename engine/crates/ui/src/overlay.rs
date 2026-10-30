@@ -12,6 +12,10 @@ pub struct EguiOverlay {
     /// None for the windowless (headless capture / golden) path.
     state: Option<egui_winit::State>,
     renderer: egui_wgpu::Renderer,
+    window_cursor: Option<winit::window::Cursor>,
+    cursor_visible: bool,
+    cursor_dirty: bool,
+    cursor_pointer_present: bool,
 }
 
 /// One frame's tessellated UI, ready to paint.
@@ -52,6 +56,10 @@ impl EguiOverlay {
             ctx,
             state: Some(state),
             renderer,
+            window_cursor: None,
+            cursor_visible: true,
+            cursor_dirty: false,
+            cursor_pointer_present: false,
         }
     }
 
@@ -66,6 +74,10 @@ impl EguiOverlay {
         Self {
             ctx,
             state: None,
+            window_cursor: None,
+            cursor_visible: true,
+            cursor_dirty: false,
+            cursor_pointer_present: false,
             renderer: egui_wgpu::Renderer::new(
                 device,
                 format,
@@ -79,8 +91,27 @@ impl EguiOverlay {
         &self.ctx
     }
 
+    /// Let the game own the native cursor instead of egui's widget icons.
+    pub fn set_window_cursor(&mut self, cursor: winit::window::Cursor) {
+        self.window_cursor = Some(cursor);
+        self.cursor_dirty = true;
+    }
+
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        self.cursor_dirty |= self.cursor_visible != visible;
+        self.cursor_visible = visible;
+    }
+
     /// Feed a window event; true when egui consumed it (pointer over a panel).
     pub fn on_window_event(&mut self, window: &Window, event: &winit::event::WindowEvent) -> bool {
+        use winit::event::WindowEvent;
+        self.cursor_dirty |= matches!(
+            event,
+            WindowEvent::CursorEntered { .. }
+                | WindowEvent::CursorLeft { .. }
+                | WindowEvent::Focused(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+        );
         match &mut self.state {
             Some(st) => st.on_window_event(window, event).consumed,
             None => false,
@@ -98,8 +129,26 @@ impl EguiOverlay {
             );
         };
         let raw = state.take_egui_input(window);
-        let out = self.ctx.run(raw, ui);
+        let mut out = self.ctx.run(raw, ui);
+        // Entry can precede the first motion by a frame. egui restores its
+        // arrow when that motion finally gives it a pointer position.
+        let pointer_present = self.ctx.input(|i| i.pointer.has_pointer());
+        self.cursor_dirty |= pointer_present != self.cursor_pointer_present;
+        self.cursor_pointer_present = pointer_present;
+        if self.window_cursor.is_some() {
+            // Keep egui's fallback an arrow; widget icons do not own this cursor.
+            out.platform_output.cursor_icon = egui::CursorIcon::Default;
+        }
         state.handle_platform_output(window, out.platform_output);
+        // egui can restore its arrow on entry or focus changes. Apply the
+        // game's cursor last, before the event loop flushes to the compositor.
+        if self.cursor_dirty {
+            if let Some(cursor) = &self.window_cursor {
+                window.set_cursor(cursor.clone());
+                window.set_cursor_visible(self.cursor_visible);
+                self.cursor_dirty = false;
+            }
+        }
         let prims = self.ctx.tessellate(out.shapes, out.pixels_per_point);
         FramePaint {
             prims,

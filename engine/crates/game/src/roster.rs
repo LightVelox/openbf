@@ -655,6 +655,7 @@ pub fn weapon_hud(db: &ClassDb, weapon: &str) -> crate::walk::WeaponHud {
     crate::walk::WeaponHud {
         key,
         class: clean(weapon),
+        bf2: db.is_bf2(),
         icon: db
             .prop(weapon, "IconTexture")
             .map(clean)

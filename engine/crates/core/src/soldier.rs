@@ -869,6 +869,47 @@ impl Soldier {
         }
     }
 
+    /// The aim after one update of the look stick `(turn, pitch)`: the
+    /// per-stance turn factor (a human's jet factor while jetting) and the
+    /// pitch limits (BF1). `c` carries the zoom's divided rates.
+    fn turned(
+        &self,
+        dt: f32,
+        (turn_in, pitch_in): (f32, f32),
+        c: &SoldierConstants,
+        human: bool,
+    ) -> (f32, f32) {
+        let turn_k = if self.stance.jetting() && human {
+            c.jet_control[2]
+        } else {
+            self.stance.control()[2]
+        };
+        let (lo, hi) = self.pitch_limits(c);
+        (
+            self.yaw - turn_in * c.max_turn_speed * turn_k * dt,
+            (self.pitch + pitch_in * c.max_pitch_speed * turn_k * dt).clamp(lo, hi),
+        )
+    }
+
+    /// The aim [`Soldier::step_looking`] turns to on its next update of
+    /// `pad`'s look stick (the window's controller preview,
+    /// `Sim::look_preview`): no turn under a hard lock that outlasts it.
+    pub fn stick_turned(
+        &self,
+        dt: f32,
+        pad: &PadState,
+        c: &SoldierConstants,
+        human: bool,
+    ) -> (f32, f32) {
+        let frozen = self.lock_hard && self.lock_timer - dt > 0.0;
+        let look = if frozen {
+            (0.0, 0.0)
+        } else {
+            (PadState::axis(pad.rx), PadState::axis(pad.ry))
+        };
+        self.turned(dt, look, c, human)
+    }
+
     pub fn mouse_turned(&self, look: (f32, f32), scale: f32, c: &SoldierConstants) -> (f32, f32) {
         let k = scale * self.mouse_scale();
         let (lo, hi) = self.pitch_limits(c);
@@ -920,15 +961,7 @@ impl Soldier {
         // The hover flies along the aim the PS2 wrote LAST update (its aim
         // update runs after the movement, re-jetpack.md §4.2 step 3).
         let aim0 = (self.yaw, self.pitch);
-        let ctl = self.stance.control();
-        let turn_k = if self.stance.jetting() && env.human {
-            c.jet_control[2]
-        } else {
-            ctl[2]
-        };
-        self.yaw -= turn_in * c.max_turn_speed * turn_k * dt;
-        let (lo, hi) = self.pitch_limits(c);
-        self.pitch = (self.pitch + pitch_in * c.max_pitch_speed * turn_k * dt).clamp(lo, hi);
+        (self.yaw, self.pitch) = self.turned(dt, (turn_in, pitch_in), c, env.human);
         if pad.has_look() && !frozen {
             (self.yaw, self.pitch) = self.mouse_turned(pad.look(), look_scale, c);
         }

@@ -223,6 +223,7 @@ fn seat_gun_contact_uses_seat_weapon() {
             turn: None,
             framed: false,
             aimer_bind: glam::Quat::IDENTITY,
+            gunner: None,
         })],
     })];
     let vh = w.sim.spawn_vehicle(&VehicleSpec {

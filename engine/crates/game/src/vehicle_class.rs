@@ -1032,6 +1032,24 @@ pub fn neutral_when_empty(db: &ClassDb, class: &str) -> bool {
         .is_none_or(|b| !KEEPS_TEAM_BASES.iter().any(|k| k.eq_ignore_ascii_case(b)))
 }
 
+/// Issue #35: the cutter's slice time, s: `TimeRequiredToEject` over the
+/// class chain, else the PS2 class table's default for its base (hover 3,
+/// walker 12, flyer 4; B2:136736, 182455, 124430). 0 for every other base
+/// (command walkers and hovers, turrets): never sliced. BF1 classes have no
+/// key and take their base's default (BF2's rule on both games).
+pub fn slice_time(db: &ClassDb, class: &str) -> f32 {
+    let base = db.engine_base(class).map(str::to_ascii_lowercase);
+    let default = match base.as_deref() {
+        Some("hover") => 3.0,
+        Some("walker") => 12.0,
+        Some("flyer") => 4.0,
+        _ => return 0.0,
+    };
+    db.prop(class, "TimeRequiredToEject")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .map_or(default, |t| t.max(0.0))
+}
+
 /// The hull pool's `HealthType`: the ODF's over the BASE chain, else the
 /// vehicle default (B1 FUN_00221e48 B1:136172-136195) — BF1's tauntaun is
 /// "animal". A building turret defaults to `building`: its class ctor B1

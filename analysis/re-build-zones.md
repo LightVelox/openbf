@@ -209,7 +209,7 @@ The times are the mission clock of a battle already running (the kept side-selec
   give-ups (card BLDR). **Named deviations**: BF1's position rule on both games (no dead zone under 1 m), and no
   building from afar - the port's tool needs its target in reach. Both make the port's bots build faster than
   BF2's; the PS2's own curve is section 5.
-- Not ported here: slicing, mines, the ammo table, a bot serving vehicles and humans (card ENGR).
+- Not ported here: mines, the ammo table, a bot serving humans (card ENGR). Slicing: section 11.
 
 ## 7. Still [H] / not read
 
@@ -285,3 +285,48 @@ existing ignored), and the station integration tests; the preceding full game su
 existing ignored. Logs live under `engine/artifacts/lead_tmp/pickups-rebuild-*.log`. The local package
 includes eight cutter models and passed archive/prefix and 100/600-tick smoke checks. No interactive playtest
 or full-round sweep is claimed.
+
+## 11. Slicing an enemy vehicle (OPUS RE 2026-10-29, issue #35) - [O] UNAUDITED: one reader, no verifier
+
+**Answer.** BF2's cutter on an enemy vehicle with soldiers aboard fills a slice meter by the cutter's `ShotDelay`
+per shot; when the meter passes the class's `TimeRequiredToEject` every soldier aboard is put out, the meter goes to
+0 and the vehicle takes a `TimeTilReboard` lock (5 s) during which CanEnter refuses everyone. Nothing in the branch
+changes the vehicle's team. BF1's cutter has no such branch.
+
+- [V] **The branch** (B2 `FUN_00346fa0`, B2:339816-340204; the earlier citation 339845-339910 covers only its
+  start). After the target's IsA tests route a vehicle to *(decompiler detail omitted)* (B2:339995), `FUN_002693f0(owner, target)`
+  (B2:186036: `FUN_002692b0(...) < 0`, the relation is enemy) must hold, the target's slot +0xe0 must not answer 5,
+  and the target must not be IsA `DAT_0069a420` / `DAT_0069a570`; otherwise the shot is an ordinary repair
+  (*(decompiler detail omitted)*, `FUN_00369770`) - so an EMPTY enemy vehicle is healed.
+- [V] **The count** (B2:340002-340040): every seat whose occupant is IsA `DAT_00689828` (the soldier) counts. With
+  none, or with the class's slot +0x48 (the threshold) <= 0, the shot is an ordinary repair.
+- [V] **The meter** (B2:340045-340050): meter (slot +0xec) := meter + wc+0x240 (`ShotDelay`, 0.5 s on every BF2
+  cutter) through slot +0xf0. When threshold < meter: a script event fires (`DAT_00720f1c` list), then for every
+  soldier aboard (B2:340100-340180) its controller's slot +0x78 and slot +0x70(.., 0, 1) run (the exit), then the
+  meter := 0 (B2:340185) and E+0x188 := the class's slot +0x4c (B2:340188), and the cutter's sound (wc+0x1e0)
+  plays. With 0.5 s steps the eject lands on the shot that takes the meter past the threshold: a 10 s class takes 21
+  shots, 10.0 s from the first to the last [D].
+- [V] **The class fields.** Slot +0x48 / +0x4c of the class tables, read in the ELF (`eedis.py bf2`): hover class
+  (vtable 0x61c9d8, ctor `FUN_00221a20`) `lwc1 f0, 0xf7c(a0)` / `0xf84(a0)`; walker (0x61f5b8, `FUN_00263160`)
+  +0xfc0; flyer (0x61bff0, `FUN_0020f098`) +0x11fc; every other entity class table holds `0x0026bcd8` (`mtc1 zero`,
+  never sliced) in the slot. Ctor defaults: hover 3.0 / 5.0 (B2:136736-136738), walker 12.0 (*(decompiler detail omitted)*,
+  B2:182455), flyer 4.0 (B2:124430). Setter keys (B2:137205, 137922): hash 0xbb9297d5 = **`TimeRequiredToEject`**,
+  0x165e67e0 = **`TimeTilReboard`** (cracked here from the ELF's own strings, FNV over bytes | 0x20).
+- [V] **Disc values** (`engine/assets_baked/classes/bf2_*.ron`): AAT 10.0, snail tank 10.0, hailfire 5.0, STAP
+  1.0, BARC / speeder bike 1.0, fighter tanks and combat speeder 7.5, AT-ST 10.0, one-man AT-ST 5.0, spider
+  walkers 12.5, starfighters 2.5; `all_hover_bos_combatspeeder` -1 (never sliced); `TimeTilReboard` 5.0 on all.
+  `commandwalker` / `commandhover` bases (AT-AT, AT-TE, MTT) are other entity classes [H: their tables hold the
+  zero getter; not read word by word].
+- [V] **The lock.** E+0x188 > 0 makes the two CanEnter tests return 0 at once, with no test of who asks (B2
+  `FUN_0024a9d0` B2:164843, `FUN_0024ac98` B2:164976).
+- [V] **The occupants' alert.** The vehicle HUD (`FUN_003b4bb8` -> `FUN_003b4a08`, B2:410618-410670) shows
+  Locl 0x67fdfe71 "! Slicer Alert %d%% !" (meter / threshold x 100) while the meter is over 0.1.
+- [V] **BF1**: `FUN_00292ce0` (B1:218640-218674) is the plain repair; no occupant count, no meter.
+- [V] **Bots**: the builder's search takes friendly or neutral things only (section 3), so the PS2's bots never go
+  to slice; only a player's acquisition hands the cutter an enemy vehicle.
+- [H] Whether the meter decays between shots (slots +0xec / +0xf4 not opened).
+
+**Port (2026-10-29, the maintainer's rules).** Players slice on both games (BF2's rule on BF1 too, named deviation;
+BF1 classes take the PS2 class-table default for their kind: hover 3 s, walker 12 s, flyer 4 s). Command walkers and
+command hovers are never sliced. After a slice only the slicer may board for 3 s (ours, `SLICE_RESERVE`) instead of
+the PS2's 5 s lock on everyone. Bots do not slice. Ejected riders leave through the ordinary exit.

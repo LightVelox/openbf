@@ -149,10 +149,9 @@ pub const STICK_FULL: f32 = 0.95;
 /// so any threshold is a modern-pad choice; a digital trigger reads 1.0.
 pub const TRIGGER_PRESS: f32 = 0.5;
 
-/// The right stick's scale before quantization: the player's aim turns at
-/// this share of the class's turn rate at full stick. Ours (the maintainer, 2026-10-04,
-/// FEEL_NOTES: the camera was too sensitive); bots do not come through here.
-pub const LOOK_SCALE: f32 = 0.80;
+/// The right stick's scale before quantization (defined in core, where the
+/// aim assist reads it).
+pub use core::sim::LOOK_SCALE;
 
 /// Calls of [`SprintLatch::apply`] a click waits for the sim to start the
 /// sprint (it needs 0.9 x MaxSpeed first) before it is dropped: 1.5 s at 60.

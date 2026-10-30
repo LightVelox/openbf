@@ -28,7 +28,7 @@ target win rates. Then calibrate its "good" profile on the maintainer's own matc
   cap), reaction ticks, REACT chances, grenade escape, view, and `circles` (fights on the move).
 - Strengths, PROVISIONAL until DBASE: **good** skill 20, reaction 6 ticks, react 35/25/30 (stay 10 %), grenade 0.95,
   view x1.5, circles; **average** skill 17, reaction 9, react 30/15/20, grenade 0.60, view x1.25, own style.
-- `proxy::TARGETS` (the maintainer's, good proxy, both sides averaged): Easy >= 90 %, Normal 65-80 %, Hard 45-60 %,
+- `proxy::TARGETS` (the maintainer's, good proxy, both sides averaged): Easy >= 90 %, Normal 77-90 %, Hard 45-60 %,
   Elite 25-40 %; `proxy::passes`.
 - `round_to_outcome`: `SWEEP_PROXY=<team>:<average|good>[,skill=..,reaction=..,view=..,circles=..,strafe=..,roll=..,
   move=..,grenade=..]`, `SWEEP_TEAMS`, `SWEEP_NOFILL`, `SWEEP_ERA=cw`, `SWEEP_MISSION_DIR`; a stderr `round` line per

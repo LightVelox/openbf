@@ -188,6 +188,38 @@ fn a_sniper_picks_the_long_lane_hint_over_a_nearer_short_lane_one() {
     assert!(held, "it reached its spot");
 }
 
+/// 2026-10-29 (long-range bot sniping): a lane reaches as far as the scope
+/// sees at the tier (Normal 96 m, Hard 128 m), not the plain 49 m sight. A
+/// third hint at x = 20 looks 80 m down the line onto the enemy post and
+/// outscores the FAR hint's 45 m lane; at Easy (no scope sight), or with the
+/// suitability distance at 30 m (a lane to 60 m), it has none and FAR is the
+/// pick again.
+#[test]
+fn a_sniper_picks_a_lane_out_to_its_scopes_reach() {
+    const LONG: Vec3 = Vec3::new(20.0, 0.0, 0.0);
+    let (mut sim, w) = line_scene();
+    sim.nav
+        .as_mut()
+        .expect("graph")
+        .hints
+        .push(snipe_hint("long", LONG.x));
+    let h = sniper(&mut sim, w, Vec3::new(35.0, 0.0, 0.0));
+    let u = sim.unit(h).expect("alive").clone();
+    let (long, long_len) = lane(&sim, &u, LONG);
+    assert!((long_len - 80.0).abs() < 0.01, "lane {long_len}");
+    assert!(long > lane(&sim, &u, FAR).0);
+    assert_eq!(pick(&sim, h, &u, None).expect("a spot").spot, LONG);
+    sim.difficulty = crate::skill::Difficulty::Hard;
+    assert_eq!(pick(&sim, h, &u, None).expect("a spot").spot, LONG, "Hard");
+    sim.difficulty = crate::skill::Difficulty::Easy;
+    assert_eq!(lane(&sim, &u, LONG), (0.0, 0.0), "Easy: 80 m > 49 m");
+    assert_eq!(pick(&sim, h, &u, None).expect("a spot").spot, FAR, "Easy");
+    sim.difficulty = crate::skill::Difficulty::Hard;
+    sim.mission_ai.set_snipe_suitability(30.0);
+    assert_eq!(lane(&sim, &u, LONG), (0.0, 0.0), "80 m > 60 m");
+    assert_eq!(pick(&sim, h, &u, None).expect("a spot").spot, FAR);
+}
+
 /// Card MAIS: the mission's `AISnipeSuitabilityDist` bounds a lane at twice
 /// itself. The indoor maps' 30 m (a lane to 60 m) leaves the Normal sight
 /// (49 m) and the pick as they were; 20 m (to 40 m) drops the FAR hint's
@@ -304,8 +336,18 @@ fn a_sniper_under_a_spot_it_cannot_climb_to_gives_it_up() {
 /// there: `steps` of (distance m, seconds), the class of the last shot of
 /// each, and the rifle's and the pistol's classes.
 fn shots_at(steps: &[(f32, u32)], rifle_min: f32) -> (Vec<Option<u32>>, [u32; 2]) {
+    shots_at_tier(steps, rifle_min, crate::skill::Difficulty::Normal)
+}
+
+/// [`shots_at`] at tier `d`.
+fn shots_at_tier(
+    steps: &[(f32, u32)],
+    rifle_min: f32,
+    d: crate::skill::Difficulty,
+) -> (Vec<Option<u32>>, [u32; 2]) {
     let _stand = crate::ai::tests::all_stand();
     let mut sim = Sim::empty(17);
+    sim.difficulty = d;
     sim.heightfield = Some(Heightfield {
         size: 2,
         unit: 400.0,
@@ -356,4 +398,19 @@ fn a_sniper_takes_its_pistol_close_in_and_the_rifle_past_its_reach() {
     let steps = [(45.0, 6), (15.0, 6), (22.0, 6), (30.0, 6), (45.0, 6)];
     let (got, [r, p]) = shots_at(&steps, 20.0);
     assert_eq!(got, vec![Some(r), Some(p), Some(p), Some(r), Some(r)]);
+}
+
+/// 2026-10-29 (long-range bot sniping, by tier): a sniper standing still
+/// fires its rifle as far as its tier's scope sees - Hard at 80 m and 110 m
+/// (inside its 128 m `MaxRange`), not at 140 m; Normal (96 m) at 80 m, not
+/// at 110 m; Easy (the plain 49 m) not at 80 m.
+#[test]
+fn a_still_sniper_fires_as_far_as_its_tiers_scope_sees() {
+    use crate::skill::Difficulty;
+    let (got, [r, _]) = shots_at_tier(&[(80.0, 8), (110.0, 8), (140.0, 8)], 20.0, Difficulty::Hard);
+    assert_eq!(got, vec![Some(r), Some(r), None], "Hard");
+    let (got, [r, _]) = shots_at_tier(&[(80.0, 8), (110.0, 8)], 20.0, Difficulty::Normal);
+    assert_eq!(got, vec![Some(r), None], "Normal");
+    let (got, _) = shots_at_tier(&[(80.0, 8)], 20.0, Difficulty::Easy);
+    assert_eq!(got, vec![None], "Easy");
 }

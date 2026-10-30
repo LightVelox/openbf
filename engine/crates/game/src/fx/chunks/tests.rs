@@ -1,3 +1,4 @@
+//! Destruction chunk launch, contacts, lifetimes and real-data checks.
 use super::*;
 use crate::classdb::{fnv1a_lowercase as hash, ClassDef};
 

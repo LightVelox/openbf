@@ -249,3 +249,183 @@ fn repair_pulses_spend_energy_against_an_idle_control() {
         assert!(idle.unit(control).unwrap().soldier.energy > initial);
     }
 }
+
+/// A two-seat hover 2.5 m ahead of the cutter's owner (moved clear of the
+/// fixture's droid), with `riders` of `team` aboard.
+fn vehicle_scene(
+    bf2: bool,
+    secondary: bool,
+    team: u8,
+    riders: usize,
+) -> (Sim, UnitHandle, VehicleHandle, Vec<UnitHandle>) {
+    use crate::vehicle::{SeatKind, SeatSetup, VehicleKind, VehicleSpec};
+    let (mut sim, owner) = fixture(bf2, secondary);
+    sim.unit_mut(owner).unwrap().soldier.pos = Vec3::new(20.0, 0.0, 2.5);
+    sim.seat_setup = vec![Some(SeatSetup {
+        radius: 1.5,
+        boardable: vec![true; 2],
+        exit_drop: 10.0,
+        ai_size: 1,
+        guns: Vec::new(),
+    })];
+    sim.slice_time = vec![2.0];
+    let vh = sim.spawn_vehicle(&VehicleSpec {
+        kind: VehicleKind::Hover,
+        class: 0,
+        home_team: Some(team),
+        neutral_when_empty: true,
+        spawn_pad: None,
+        pos: Vec3::new(20.0, 0.0, 0.0),
+        yaw: 0.0,
+        max_health: 1000.0,
+        health_type: crate::weapon::HealthType::Vehicle,
+        seats: vec![SeatKind::Pilot, SeatKind::Gunner(0)],
+    });
+    {
+        let v = sim.vehicle_mut(vh).unwrap();
+        v.aim_sphere = Some((Vec3::Y, 1.0));
+        v.health.cur = 400.0;
+    }
+    // Idle players as riders: a bot with no class data would get out.
+    let riders = (0..riders)
+        .map(|k| {
+            let h = sim
+                .spawn(&UnitSpec::player_in_slot(
+                    k as u8 + 1,
+                    team,
+                    Vec3::new(30.0, 0.0, 0.0),
+                ))
+                .unwrap();
+            assert!(sim.seat_unit(h, vh, k as u8));
+            h
+        })
+        .collect();
+    (sim, owner, vh, riders)
+}
+
+/// Issue #35: a player's cutter on an enemy vehicle with riders fills its
+/// meter by ShotDelay a shot (not its health); past the class's slice time
+/// every rider is put out beside it and only the slicer may board.
+#[test]
+fn a_slice_ejects_every_enemy_and_lets_the_slicer_in() {
+    for (bf2, secondary) in [(false, true), (true, false)] {
+        let (mut sim, owner, vh, riders) = vehicle_scene(bf2, secondary, 1, 2);
+        let mut ejected = None;
+        for tick in 0..90u64 {
+            sim.step(&[fire(secondary)]);
+            let v = sim.vehicle(vh).unwrap();
+            assert_eq!(v.health.cur, 400.0, "slicing does not repair");
+            if riders.iter().all(|&r| sim.unit(r).unwrap().mount.is_none()) {
+                ejected = Some(tick);
+                break;
+            }
+            // 0.5 s a shot: 0.5, 1.0, ... past 2.0 s on the fifth shot.
+            let shots = tick / 15 + 1;
+            assert_eq!(v.slice, 0.5 * shots as f32, "tick {tick}");
+        }
+        assert_eq!(ejected, Some(60), "bf2={bf2}");
+        let v = sim.vehicle(vh).unwrap();
+        assert_eq!(v.slice, 0.0);
+        assert_eq!(v.team, None, "an empty vehicle goes neutral");
+        assert_eq!(v.slice_hold.map(|(h, _)| h), Some(owner));
+        let at = v.pos;
+        for &r in &riders {
+            let u = sim.unit(r).unwrap();
+            assert!(u.alive);
+            assert!(u.soldier.pos.distance(at) < 6.0, "beside the vehicle");
+            // An ejected rider cannot take it back while the slicer's hold runs.
+            assert!(!sim.enter_vehicle(r, vh, 0));
+        }
+        assert!(sim.enter_vehicle(owner, vh, 0), "the slicer boards");
+    }
+}
+
+/// Issue #35 [ours]: for SLICE_RESERVE after a slice no bot may take a seat
+/// (claim or entry); after it the vehicle is anyone's.
+#[test]
+fn a_bot_cannot_board_inside_the_slice_hold() {
+    let (mut sim, _, vh, riders) = vehicle_scene(true, false, 1, 1);
+    for _ in 0..61 {
+        sim.step(&[fire(false)]);
+    }
+    assert!(sim.unit(riders[0]).unwrap().mount.is_none());
+    let until = sim.vehicle(vh).unwrap().slice_hold.unwrap().1;
+    assert_eq!(until, sim.tick - 1 + 90);
+    let bot = sim
+        .spawn(&UnitSpec {
+            controller: crate::unit::Controller::Ai,
+            ..UnitSpec::trooper(0, Vec3::new(22.0, 0.0, 0.0))
+        })
+        .unwrap();
+    while sim.tick < until {
+        assert_eq!(sim.enter_seat(bot, vh), None);
+        assert!(!sim.enter_vehicle(bot, vh, 0));
+        sim.step(&[PadState::default()]);
+    }
+    assert_eq!(sim.enter_seat(bot, vh), Some(0));
+    assert!(sim.enter_vehicle(bot, vh, 0));
+}
+
+/// Issue #35: a class with no slice time (command walkers and hovers) is
+/// never sliced, and a bot's cutter never takes an enemy vehicle.
+#[test]
+fn command_vehicles_and_bots_never_slice() {
+    let (mut sim, owner, vh, riders) = vehicle_scene(true, false, 1, 2);
+    let i = owner.index as usize;
+    assert_eq!(sim.repair_target(i, 1), Some(Target::Vehicle(vh)));
+    sim.units[i].controller = crate::unit::Controller::Ai;
+    assert_eq!(sim.repair_target(i, 1), None, "a bot never slices");
+    sim.units[i].controller = crate::unit::Controller::Player { slot: 0 };
+    sim.slice_time = vec![0.0];
+    assert_eq!(sim.repair_target(i, 1), None);
+    for _ in 0..200 {
+        sim.step(&[fire(false)]);
+    }
+    let v = sim.vehicle(vh).unwrap();
+    assert_eq!((v.slice, v.health.cur), (0.0, 400.0));
+    assert!(riders.iter().all(|&r| sim.unit(r).unwrap().mount.is_some()));
+}
+
+/// Issue #35 (a): a live friendly or empty vehicle gains the disc
+/// VehicleHealth once per ShotDelay (BF2 +200, BF1 +60 per 0.5 s); an
+/// enemy vehicle and one just out of range gain nothing.
+#[test]
+fn the_cutter_repairs_friendly_vehicles_at_the_disc_rate() {
+    for (bf2, secondary) in [(false, true), (true, false)] {
+        let step = if bf2 { 200.0 } else { 60.0 };
+        for case in ["friendly", "empty", "enemy", "far"] {
+            let (team, riders) = match case {
+                "enemy" => (1, 1),
+                "empty" => (0, 0),
+                _ => (0, 1),
+            };
+            let (mut sim, _, vh, _) = vehicle_scene(bf2, secondary, team, riders);
+            if case == "enemy" {
+                // A class that cannot be sliced: the shot does nothing at all.
+                sim.slice_time = vec![0.0];
+            }
+            if case == "far" {
+                // Just past LockOnRange + the sphere's radius.
+                let reach = if bf2 { 4.0 } else { 3.0 } + 1.0;
+                sim.vehicle_mut(vh).unwrap().pos.z = 2.5 - reach - 0.3;
+            }
+            let mut rises = Vec::new();
+            let mut before = 400.0;
+            for tick in 0..31 {
+                sim.step(&[fire(secondary)]);
+                let now = sim.vehicle(vh).unwrap().health.cur;
+                if now != before {
+                    assert_eq!(now - before, step, "bf2={bf2} {case}");
+                    rises.push(tick);
+                    before = now;
+                }
+            }
+            let expected: &[u64] = match case {
+                "friendly" | "empty" => &[0, 15, 30],
+                _ => &[],
+            };
+            assert_eq!(rises, expected, "bf2={bf2} {case}");
+            assert_eq!(sim.vehicle(vh).unwrap().slice, 0.0);
+        }
+    }
+}

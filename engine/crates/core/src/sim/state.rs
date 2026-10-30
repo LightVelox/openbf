@@ -710,6 +710,10 @@ pub struct Sim {
     /// Per vehicle CLASS, its death explosion and its blast sphere (card
     /// VDTH, `crate::vehicle::BlastSetup`); SETUP data, NOT hashed.
     pub blast_setup: Vec<Option<crate::vehicle::BlastSetup>>,
+    /// Per vehicle CLASS, issue #35: the cutter's slice time, s (BF2
+    /// `TimeRequiredToEject`, `analysis/re-build-zones.md` §11); 0 or
+    /// missing = never sliced. SETUP data, NOT hashed.
+    pub slice_time: Vec<f32>,
     /// Per vehicle CLASS, its hull's bodies in model space (card VHULL,
     /// `crate::collision::HullPart`) — `None` for a class with no collision
     /// the port builds, or a building turret, whose building is the world's
@@ -771,6 +775,9 @@ pub struct Sim {
     /// Aim magnet per player slot (parallel to `players`): a unit, or a
     /// vehicle / building turret (card HTGT).
     pub magnet: Vec<Option<super::input::AimTarget>>,
+    /// Per player slot: ticks the held magnet has been out of sight
+    /// (`MAGNET_LOS_GRACE`). Hashed only when one is not 0.
+    pub magnet_hidden: Vec<u8>,
     /// What each player slot's crosshair picks, with its relation (−1
     /// enemy, 0 team 0, 1 friend): the PS2's K+0x30 / K+0x40, which the HUD
     /// reticle colours by (`analysis/re-aim-assist.md` §3.7, card RETC) and
@@ -1261,6 +1268,7 @@ impl Sim {
             walker_params: Vec::new(),
             seat_setup: Vec::new(),
             blast_setup: Vec::new(),
+            slice_time: Vec::new(),
             hull_parts: Vec::new(),
             bolts: Vec::new(),
             stickies: Vec::new(),
@@ -1290,6 +1298,7 @@ impl Sim {
             assist_lead_on: true,
             assist_lead: Vec::new(),
             magnet: Vec::new(),
+            magnet_hidden: Vec::new(),
             reticle_pick: Vec::new(),
             events: Vec::new(),
             players: Vec::new(),
@@ -1767,6 +1776,10 @@ impl Sim {
             };
             eat(&i.to_le_bytes());
             eat(&g.to_le_bytes());
+        }
+        if self.magnet_hidden.iter().any(|&h| h != 0) {
+            eat(&[0x4d]);
+            eat(&self.magnet_hidden);
         }
         eat(&(self.players.len() as u32).to_le_bytes());
         for p in &self.players {

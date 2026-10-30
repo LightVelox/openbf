@@ -153,7 +153,7 @@ impl Station {
         (feet - self.pos).length_squared() < self.radius * self.radius
     }
 
-    pub(super) fn repair_kind(&self) -> HealthType {
+    pub(crate) fn repair_kind(&self) -> HealthType {
         if self.destroyed && self.health.health_type == HealthType::Building {
             HealthType::Building2
         } else {

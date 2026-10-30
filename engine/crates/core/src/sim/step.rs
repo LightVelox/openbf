@@ -493,16 +493,31 @@ impl Sim {
             } else {
                 self.assist_lead[slot] = None;
             }
-            let steering = p.mouse_aim()
-                || PadState::axis(p.rx).abs() > super::input::MAGNET_STEER
-                || PadState::axis(p.ry).abs() > super::input::MAGNET_STEER;
-            self.acquire_magnet_steering(slot, ph, p.pressed(buttons::FIRE), steering);
+            let steer = super::input::Steer::of(&p);
+            self.acquire_magnet_steering(slot, ph, p.pressed(buttons::FIRE), steer);
         }
 
         // 2b. DOORS (DR2): open or close by who stands in their triggers
         //     now, before anyone moves against their boxes (`crate::door`;
         //     the placement in the tick is PROVISIONAL).
         self.tick_doors(dt);
+
+        // [ours] A FIRE press with a fire lag (`PadState::fire_lag`): the
+        // aim before the turn, so phase 4 fires part way into it.
+        let lagged: Vec<(usize, (f32, f32))> = unit_pads
+            .iter()
+            .enumerate()
+            .filter(|&(i, p)| {
+                let u = &self.units[i];
+                p.fire_lag != 0
+                    && u.alive
+                    && u.mount.is_none()
+                    && matches!(u.controller, Controller::Player { .. })
+                    && p.pressed(buttons::FIRE)
+                    && u.soldier.prev_buttons() & buttons::FIRE == 0
+            })
+            .map(|(i, _)| (i, (self.units[i].soldier.yaw, self.units[i].soldier.pitch)))
+            .collect();
 
         // 3. Movement.
         for (i, pad_i) in unit_pads.iter_mut().enumerate() {
@@ -769,7 +784,23 @@ impl Sim {
 
         // 4. Weapons → bolts.
         let mut shots = Vec::new();
+        // A lagged press: its unit and the turned aim, put back after it fires.
+        let mut turned: Option<(usize, (f32, f32))> = None;
         for (i, &p) in unit_pads.iter().enumerate() {
+            if let Some((j, aim)) = turned.take() {
+                self.put_aim(j, aim);
+            }
+            if let Some(&(_, from)) = lagged.iter().find(|(j, _)| *j == i) {
+                // Turn the share drawn, fire, then the rest of the turn.
+                let s = &self.units[i].soldier;
+                let to = (s.yaw, s.pitch);
+                let k = p.fire_share();
+                self.put_aim(
+                    i,
+                    (from.0 + (to.0 - from.0) * k, from.1 + (to.1 - from.1) * k),
+                );
+                turned = Some((i, to));
+            }
             if !self.units[i].alive || matches!(self.units[i].controller, Controller::Pacer { .. })
             {
                 continue;
@@ -931,6 +962,10 @@ impl Sim {
                 }
             }
             self.soldier_shots(i, None, &shots);
+        }
+
+        if let Some((j, aim)) = turned.take() {
+            self.put_aim(j, aim);
         }
 
         // 5. Bolt flight + impacts (in spawn order): first what each bolt
@@ -1120,25 +1155,28 @@ impl Sim {
     /// `analysis/re-zoom.md` §4), run before unit `i` moves, so it sees the
     /// stance and the weapon as the last tick left them. Only a human's
     /// soldier zooms. The zoom ends in a roll or a sprint (BF2's rule; BF1
-    /// has no sprint and the port's takes it, FEEL_NOTES), on a weapon that
+    /// has no sprint and the port's takes it, FEEL_NOTES), when a blast
+    /// throws him (the PS2's thrown state; the port also holds it off
+    /// through the tumble, the get-up and its lock, FEEL_NOTES), on a weapon that
     /// cannot zoom - the secondary's grenade once it is the weapon in hand -
     /// and while the primary reloads; otherwise a press of ZOOM steps it
     /// (`WeaponClass::zoom_press`). Death, a seat and the primary's switch
     /// end it where they happen. Not ported: the continuous zoom of a class
     /// with `ZoomRate` (no hand weapon), BF2's melee test (no disc lightsaber
-    /// has a `ZoomMax` over 1), and zoom cancellation in `Stance::Thrown`.
+    /// has a `ZoomMax` over 1).
     fn tick_zoom(&mut self, i: usize, pad: &PadState) {
         let u = &self.units[i];
         let human = matches!(u.controller, Controller::Player { .. });
         let press = pad.pressed(buttons::ZOOM) && u.soldier.prev_buttons() & buttons::ZOOM == 0;
-        let moving = matches!(u.soldier.stance, Stance::Roll | Stance::Sprint);
+        let cancel =
+            matches!(u.soldier.stance, Stance::Roll | Stance::Sprint) || u.soldier.no_fire();
         let (class, reloading) = match u.cur1.filter(|_| u.active_channel == 1) {
             Some(k) => (u.held[usize::from(k)].class, false),
             None => (u.weapon_class, u.weapon.reloading()),
         };
         let wc = &self.weapon_classes[class];
         let step = u.zoom.map(|z| z.step);
-        let step = if !human || moving || !wc.zooms() || reloading {
+        let step = if !human || cancel || !wc.zooms() || reloading {
             None
         } else if press {
             wc.zoom_press(step)
@@ -1155,6 +1193,11 @@ impl Sim {
             }
         });
         self.units[i].zoom = zoom;
+    }
+
+    fn put_aim(&mut self, i: usize, (yaw, pitch): (f32, f32)) {
+        let s = &mut self.units[i].soldier;
+        (s.yaw, s.pitch) = (yaw, pitch);
     }
 
     /// A human's shot (§10.2 step 6): from the fire point F along

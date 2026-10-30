@@ -1,3 +1,4 @@
+//! GPU referees for particle display-byte blending and cutouts.
 use glam::Vec3;
 use render::{Camera, ParticleDraw, ParticleShape};
 

@@ -88,7 +88,7 @@ pub fn leaf_class(name: &str, props: &[(u32, String)]) -> ManifestLeafClass {
         let fl = |k: usize| f.get(k).copied().flatten();
         let one = |d: f32| fl(0).unwrap_or(d);
         match *h {
-            0x3b19_48f3 => g.bird_count = int(v).map_or(0, |n| n.min(5) as u8),
+            0x3b19_48f3 => g.bird_count = int(v).map_or(0, |n| n.clamp(0, 5) as u8),
             0xfd7f_ae90 => {
                 g.falling_count = int(v).map_or(g.falling_count, |n| n.clamp(0, 50) as u8)
             }
@@ -211,6 +211,14 @@ mod tests {
                 leaf_class("leaf", &props(&[(0xfd7f_ae90, value)])).falling_count,
                 count
             );
+        }
+    }
+
+    #[test]
+    fn bird_counts_stay_within_the_authored_budget() {
+        for (input, expected) in [("-1", 0), ("0", 0), ("3", 3), ("99", 5)] {
+            let leaf = leaf_class("fixture", &[(0x3b19_48f3, input.into())]);
+            assert_eq!(leaf.bird_count, expected, "{input}");
         }
     }
 
