@@ -69,6 +69,29 @@ impl SoundLib {
             .retain(|k, _| !matches!(k, LoopSource::Repair(..)) || live.contains(k));
     }
 
+    pub fn play_shield_loops(
+        &mut self,
+        audio: &mut audio::Audio,
+        sim: &core::sim::Sim,
+        listener: &Listener,
+    ) {
+        let mut live = std::collections::HashSet::new();
+        for (unit, name, gain, pos) in crate::droideka::shield_loops(sim) {
+            let request = LoopRequest {
+                source: LoopSource::Shield(unit),
+                sound: fnv1a_lowercase(name),
+                pos,
+                gain,
+                pitch: 1.0,
+            };
+            if self.play_loop_voice(audio, &request, listener) {
+                live.insert(request.source);
+            }
+        }
+        self.loops
+            .retain(|k, _| !matches!(k, LoopSource::Shield(..)) || live.contains(k));
+    }
+
     pub(super) fn sound(&mut self, audio: &mut audio::Audio, path: &Path) -> Result<()> {
         if self.cache.contains_key(path) {
             return Ok(());

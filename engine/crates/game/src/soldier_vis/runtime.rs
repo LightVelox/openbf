@@ -531,6 +531,9 @@ impl SoldierVisuals {
             if fired.contains(&(i as u32)) {
                 v.shot_tick = Some(walk.sim.tick);
             }
+            if u.droideka.is_some() {
+                continue;
+            }
             // Seated in a turret that shows him (card VTURG) or on a
             // vehicle that does (card VRIDE): hung at the seat's hardpoint,
             // posed by the seat's clip.
@@ -703,6 +706,9 @@ impl SoldierVisuals {
     pub(super) fn posed(&self, walk: &WalkSim) -> Vec<(usize, &SoldierAsset, Mat4, Vec<Mat4>)> {
         let mut out = Vec::new();
         for (i, u) in walk.sim.units.iter().enumerate() {
+            if u.droideka.is_some() {
+                continue;
+            }
             let Some(sa) = self.asset_for(u.team, u.spec.class) else {
                 continue;
             };
@@ -878,7 +884,21 @@ impl SoldierVisuals {
     /// unit drawn without a model or a hand node. Where the muzzle flash
     /// sits and the drawn bolt starts (`crate::bolt_vis`).
     pub fn fire_points(&self, walk: &WalkSim) -> Vec<Option<Vec3>> {
-        let mut out = vec![None; walk.sim.units.len()];
+        let mut out: Vec<Option<Vec3>> = walk
+            .sim
+            .units
+            .iter()
+            .map(|u| {
+                let (d, c) = (u.droideka.as_deref()?, u.droideka_class()?);
+                (u.alive && !u.burst).then(|| {
+                    core::droideka::local_to_world(
+                        u.soldier.pos,
+                        u.soldier.yaw,
+                        c.gun(d.barrel.wrapping_add(1)),
+                    )
+                })
+            })
+            .collect();
         for (i, sa, model, palette) in self.posed(walk) {
             if let (Some(hp), None) = (sa.hp_weapons, walk.sim.units[i].mount) {
                 let u = &walk.sim.units[i];

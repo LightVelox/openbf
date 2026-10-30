@@ -209,6 +209,7 @@ fn reach_test(sim: &Sim, u: &Unit, vh: VehicleHandle) -> Option<(f32, f32)> {
 pub(super) fn claim(sim: &Sim, me: UnitHandle, u: &Unit, st: &mut AiState) {
     let r = st.ride.unwrap_or_default();
     if r.board.is_some()
+        || u.droideka.is_some()
         || sim.tick < r.block_until
         || sim.tick < r.own_search_until
         || sim.vehicles.is_empty()
@@ -277,6 +278,7 @@ pub(super) fn deliver_call(sim: &Sim, me: UnitHandle, u: &Unit, st: &mut AiState
         || st
             .ride
             .is_some_and(|r| r.board.is_some() || (r.call_blocked && sim.tick < r.block_until))
+        || u.droideka.is_some()
     {
         return;
     }

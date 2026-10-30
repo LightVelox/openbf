@@ -238,7 +238,7 @@ fn every_fielded_class_has_its_own_cries_in_the_map_bank() {
             )
             .expect("rosters");
             for r in &rosters {
-                for c in &r.classes {
+                for c in r.classes.iter().filter(|c| c.droideka.is_none()) {
                     checked += 1;
                     let (Some(hurt), Some(death)) = (&c.cries.hurt, &c.cries.death) else {
                         wrong.push(format!(

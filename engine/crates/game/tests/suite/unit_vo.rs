@@ -40,6 +40,7 @@ const CENSUS: &[(&str, usize, u8)] = &[
     ("all_inf_rocketeer_snow", 162, 1),
     ("all_inf_sniper_snow", 161, 4),
     ("all_inf_wookiee_snow", 20, 2),
+    ("cis_inf_droideka", 0, 81),
     ("cis_inf_engineer", 171, 82),
     // The CIS rifleman and officer author none (their chains start empty).
     ("cis_inf_officer", 0, 93),

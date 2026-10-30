@@ -275,7 +275,7 @@ impl Sim {
         let mut pilots = Vec::new();
         for i in 0..self.units.len() {
             let u = &self.units[i];
-            if !u.alive || u.controller != Controller::Ai {
+            if !u.alive || u.controller != Controller::Ai || u.droideka.is_some() {
                 continue;
             }
             // SQVEH: a follower boards the vehicle its leader occupies,
@@ -466,6 +466,7 @@ impl Sim {
                     && o.team == team
                     && o.controller == Controller::Ai
                     && o.mount.is_none()
+                    && o.droideka.is_none()
                     && o.soldier.pos.distance_squared(at) <= reach * reach
             })
             .map(|j| self.handle(j))
@@ -529,7 +530,7 @@ impl Sim {
 
     /// CanEnter (B1 FUN_0020b1b0): the seat `u` would take in `vh`.
     pub fn enter_seat(&self, u: UnitHandle, vh: VehicleHandle) -> Option<u8> {
-        let unit = self.unit(u)?;
+        let unit = self.unit(u).filter(|unit| unit.droideka.is_none())?;
         let v = self.vehicle(vh)?;
         if v.team.is_some_and(|t| t != unit.team) {
             return None;
@@ -552,7 +553,10 @@ impl Sim {
     /// holds it. `false` when the seat stays taken or either side is gone.
     pub fn enter_vehicle(&mut self, u: UnitHandle, vh: VehicleHandle, seat: u8) -> bool {
         // Validate every refusal before moving the current rider outside.
-        let Some(unit) = self.unit(u).filter(|unit| unit.mount.is_none()) else {
+        let Some(unit) = self
+            .unit(u)
+            .filter(|unit| unit.mount.is_none() && unit.droideka.is_none())
+        else {
             return false;
         };
         let Some(v) = self.vehicle(vh) else {

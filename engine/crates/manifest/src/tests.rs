@@ -597,6 +597,7 @@ fn full_vehicles() -> VehicleManifest {
         models: vec!["imp_hover_speederbike".into()],
         textures: vec!["imp_speederbike".into()],
         collision: vec![full_collision()],
+        droidekas: Vec::new(),
     }
 }
 

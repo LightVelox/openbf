@@ -36,6 +36,7 @@ fn class(chunk: Option<ChunkDeath>) -> UnitClass {
         min: 0,
         max: None,
         unlock_points: 0,
+        droideka: None,
     }
 }
 

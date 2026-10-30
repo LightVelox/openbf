@@ -77,6 +77,20 @@ pub fn each(walk: &WalkSim, ears: Vec3, mut play: impl FnMut(&str, Vec3)) {
                     play(n, *pos);
                 }
             }
+            Event::Droideka {
+                unit,
+                pos,
+                cue: core::droideka::Cue::ShieldOff,
+            } => {
+                if let Some(n) = walk
+                    .sim
+                    .unit(*unit)
+                    .and_then(|u| u.droideka_class())
+                    .and_then(|c| c.shield.off_sound.as_deref())
+                {
+                    play(n, *pos);
+                }
+            }
             Event::MineTick { pos, weapon_class } => {
                 if let Some(sound) = walk.sim.weapon_classes[*weapon_class as usize]
                     .mine

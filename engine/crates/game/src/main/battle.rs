@@ -129,10 +129,11 @@ fn team_templates(
         factions,
         b.mission.as_ref(),
     ) {
-        Ok((rosters, warnings)) => {
+        Ok((mut rosters, warnings)) => {
             for w in &warnings {
                 eprintln!("{w}");
             }
+            game::droideka::install(&mut rosters, &scene.dir, &scene.manifest.source_game);
             // One `Sim::weapon_classes` index per weapon NAME (a Vec scan —
             // the sim never iterates a hash map), and the per-team class
             // TABLE the AI mix and the spawn-select both read.

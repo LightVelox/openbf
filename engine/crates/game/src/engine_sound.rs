@@ -23,8 +23,8 @@
 //!   fuel, a landing, a death.
 //!
 //! Not here (card VSN2): the vehicles' `TurnOnSound` / `TurnOffSound`, walker
-//! steps, the turret whir, collision. Flyers and the droideka feed the same
-//! component on the PS2 (§4) and are not fed here.
+//! steps, the turret whir, collision. Flyers feed the same component on the
+//! PS2 (§4) and are not fed here.
 
 use crate::classdb::{fnv1a_lowercase, ClassDb};
 use crate::walk::WalkSim;
@@ -387,7 +387,11 @@ impl EngineSounds {
         let soldiers = walk.sim.units.iter().enumerate().map(|(k, u)| JetMotion {
             unit: k as u32,
             gen: u.gen,
-            jetting: u.alive && u.soldier.stance.jetting(),
+            jetting: u.alive
+                && (u.soldier.stance.jetting()
+                    || u.droideka
+                        .as_deref()
+                        .is_some_and(crate::droideka::engine_on)),
             pos: u.soldier.pos,
             vel: u.soldier.vel,
             health: if u.health.max > 0.0 {

@@ -522,6 +522,7 @@ impl TeamTemplate {
             // "PHASE A.2 DESIGN" decision 4): the flag exists so the planning
             // graph can keep `jet_jump` arcs off a jetless soldier.
             jet: false,
+            droideka: None,
         }
     }
 }

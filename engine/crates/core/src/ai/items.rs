@@ -65,6 +65,7 @@ pub(super) fn goal(sim: &Sim, u: &Unit, st: &mut AiState) -> Option<Vec3> {
         return None;
     }
     if u.mount.is_some()
+        || u.droideka.is_some()
         || st.lost.is_some_and(|l| l.confirmed)
         || st.ride.is_some()
         || u.command.is_some()

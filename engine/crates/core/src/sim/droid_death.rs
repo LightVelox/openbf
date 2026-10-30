@@ -13,13 +13,14 @@ impl Sim {
     /// The explosion a [`Event::DroidBurst`] of `team`'s class `class`
     /// detonated (the game's effect and sound read its look).
     pub fn burst_explosion(&self, team: u8, class: u8) -> Option<&crate::weapon::ExplosionClass> {
-        self.classes
+        let c = self
+            .classes
             .get(usize::from(team.min(1)))?
-            .get(usize::from(class))?
-            .chunk
-            .as_ref()?
-            .explosion
+            .get(usize::from(class))?;
+        c.chunk
             .as_ref()
+            .and_then(|k| k.explosion.as_ref())
+            .or_else(|| c.droideka.as_ref()?.explosion.as_ref())
     }
 
     /// The chunk death of the unit at `i`'s class, `None` for a class

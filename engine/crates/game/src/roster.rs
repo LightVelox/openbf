@@ -104,6 +104,7 @@ pub struct ClassRoster {
     pub max: Option<u32>,
     /// The ODF's `PointsToUnlock` (0 = none; `UnitClass::unlock_points`).
     pub unlock_points: u32,
+    pub droideka: Option<std::sync::Arc<core::droideka::DroidekaClass>>,
 }
 
 /// One slot of a class's drop table: the item (`None` when the slot names a
@@ -239,11 +240,13 @@ pub fn load_classdb(classes_dir: &Path, game: &str, factions: &[&str]) -> Result
         ));
     }
     // A BF1 side whose class takes a BF2 class's weapons loads BF2's side too.
-    let donors: Vec<&str> = WEAPON_DONORS
+    let mut donors: Vec<&str> = WEAPON_DONORS
         .iter()
         .filter_map(|d| d.class.split('_').next())
         .filter(|side| factions.contains(side))
         .collect();
+    donors.sort_unstable();
+    donors.dedup();
     if game == "bf1" && !donors.is_empty() {
         db.donor_weapons = Some(Box::new(load_classdb(classes_dir, "bf2", &donors)?));
     }
@@ -260,9 +263,8 @@ pub fn load_classdb(classes_dir: &Path, game: &str, factions: &[&str]) -> Result
 /// shipped mission RONs (`engine/missions/*.ron`, `TeamDef::classes`): the
 /// plain trooper FIRST (it is the fill class `ai_class` hands every spawn
 /// past the minimums), then the heavy, the pilot/engineer, the sniper and the
-/// specialist. `cis_inf_droideka` is in the modal mix of both CIS pairs and
-/// is left OUT of both: its BASE chain ends at `walkerdroid`, so
-/// `ClassRoster::build` rejects it as not-infantry (its own RE is backlog).
+/// specialist. `cis_inf_droideka` is in the modal mix of both CIS pairs; its
+/// BASE chain ends at `walkerdroid`, so it builds as a droideka.
 pub const DEFAULT_CLASSES: &[(&str, &str, &[&str])] = &[
     (
         "bf1",
@@ -305,6 +307,7 @@ pub const DEFAULT_CLASSES: &[(&str, &str, &[&str])] = &[
             "cis_inf_assault",
             "cis_inf_pilotdroid",
             "cis_inf_assassindroid",
+            "cis_inf_droideka",
         ],
     ),
     (
@@ -352,6 +355,7 @@ pub const DEFAULT_CLASSES: &[(&str, &str, &[&str])] = &[
             "cis_inf_engineer",
             "cis_inf_sniper",
             "cis_inf_officer",
+            "cis_inf_droideka",
         ],
     ),
 ];
@@ -365,11 +369,16 @@ pub fn default_classes(game: &str, faction: &str) -> Option<&'static [&'static s
 }
 
 /// Does `class`'s BASE chain end at the engine's `soldier` base? The mission
-/// lists name things that are not soldiers — BF2's `cis_inf_droideka` is a
-/// `walkerdroid` (its own RE is the maintainer's backlog item), BF1's heroes are
-/// soldiers but never appear in a conquest `AddUnitClass` list.
+/// lists name things that are not soldiers — `cis_inf_droideka` is a
+/// `walkerdroid` ([`is_droideka_chain`]), BF1's heroes are soldiers but never
+/// appear in a conquest `AddUnitClass` list.
 pub fn is_soldier_chain(db: &ClassDb, class: &str) -> bool {
     db.engine_base(class) == Some("soldier")
+}
+
+pub fn is_droideka_chain(db: &ClassDb, class: &str) -> bool {
+    db.engine_base(class)
+        .is_some_and(|b| b.eq_ignore_ascii_case("walkerdroid"))
 }
 
 /// Primary weapon: the class's first channel-0 slot — the PS2's cur[0]
@@ -486,6 +495,10 @@ pub fn jet_look(db: &ClassDb, class: &str) -> JetLook {
     if !c.has_jet() && !c.jet_hover {
         return JetLook::default();
     }
+    engine_block(db, class)
+}
+
+pub fn engine_block(db: &ClassDb, class: &str) -> JetLook {
     JetLook {
         effect: sound_key(db, class, "JetEffect"),
         engine: sound_key(db, class, "EngineSound"),
@@ -960,11 +973,18 @@ pub struct WeaponDonor {
     pub twins: &'static [(&'static str, &'static str)],
 }
 
-pub const WEAPON_DONORS: &[WeaponDonor] = &[WeaponDonor {
-    class: "cis_inf_battledroid",
-    donor: "cis_inf_rifleman",
-    twins: &[("cis_weap_inf_wrist_trishot", "cis_weap_inf_wrist_shrapnel")],
-}];
+pub const WEAPON_DONORS: &[WeaponDonor] = &[
+    WeaponDonor {
+        class: "cis_inf_battledroid",
+        donor: "cis_inf_rifleman",
+        twins: &[("cis_weap_inf_wrist_trishot", "cis_weap_inf_wrist_shrapnel")],
+    },
+    WeaponDonor {
+        class: "cis_inf_droideka",
+        donor: "cis_inf_droideka",
+        twins: &[],
+    },
+];
 
 /// How a weapon slot's item works in the port, read from its class data
 /// (issue #42): the weapon's engine base and its ordnance's.
@@ -1205,7 +1225,7 @@ pub fn chunk_death(db: &ClassDb, class: &str) -> Option<core::unit::ChunkDeath> 
     })
 }
 
-fn explosion_class(db: &ClassDb, name: &str) -> Option<ExplosionClass> {
+pub(crate) fn explosion_class(db: &ClassDb, name: &str) -> Option<ExplosionClass> {
     let e = db.resolve(name.trim())?;
     let mut x = ExplosionClass::from_props(&ClassSrc { db, class: e });
     x.spares_living = db.chain(e).iter().any(|d| {
@@ -1576,7 +1596,8 @@ impl ClassRoster {
     pub fn build(db: &ClassDb, class: &str, min: u32, max: Option<u32>) -> Result<ClassRoster> {
         db.get(class)
             .with_context(|| format!("class {class} not in the baked class db"))?;
-        if !is_soldier_chain(db, class) {
+        let walker_droid = is_droideka_chain(db, class);
+        if !is_soldier_chain(db, class) && !walker_droid {
             return Err(anyhow!(
                 "{class}: base chain ends at {:?}, not \"soldier\" — not an \
                  infantry class",
@@ -1586,9 +1607,9 @@ impl ClassRoster {
         let donor = WEAPON_DONORS
             .iter()
             .find(|d| d.class.eq_ignore_ascii_case(class));
-        let (weapon_db, weapon_owner) = match (donor, db.donor_weapons.as_deref()) {
-            (Some(d), Some(bf2)) => (bf2, d.donor),
-            _ => (db, class),
+        let (weapon_db, weapon_owner, donated) = match (donor, db.donor_weapons.as_deref()) {
+            (Some(d), Some(bf2)) if bf2.get(d.donor).is_some() => (bf2, d.donor, true),
+            _ => (db, class, false),
         };
         let twins = donor.map_or(&[][..], |d| d.twins);
         let slots = weapon_db.weapon_slots(weapon_owner);
@@ -1600,7 +1621,7 @@ impl ClassRoster {
         );
         let mut weapon = weapon_from_db(weapon_db, &weapon_name)?;
         let mut held = held_slots(weapon_db, weapon_owner, weapon_slot);
-        if weapon_owner != class {
+        if donated {
             for selected in
                 std::iter::once(&mut weapon).chain(held.iter_mut().map(|s| &mut s.weapon))
             {
@@ -1633,7 +1654,7 @@ impl ClassRoster {
             }
         }
         let mut anim = class_anim(db, class, &db.weapon_slots(class));
-        if weapon_owner != class {
+        if donated {
             for (weapon, _) in &mut anim.banks {
                 if let Some((bf2, _)) = twins.iter().find(|(_, bf1)| weapon == bf1) {
                     *weapon = (*bf2).into();
@@ -1667,7 +1688,9 @@ impl ClassRoster {
             label,
             unit_type,
             consts,
-            max_health: db.prop_f32(class, "MaxHealth").unwrap_or(300.0),
+            max_health: if walker_droid { weapon_db } else { db }
+                .prop_f32(class, "MaxHealth")
+                .unwrap_or(300.0),
             health_type: db
                 .prop(class, "HealthType")
                 .and_then(HealthType::parse)
@@ -1679,7 +1702,10 @@ impl ClassRoster {
             skins: class_skins(db, class),
             slots,
             weapon_slot,
-            geometry: db.prop(class, "GeometryName").map(|g| g.trim().to_owned()),
+            geometry: db
+                .prop(class, "GeometryName")
+                .map(|g| g.trim().to_owned())
+                .filter(|_| !walker_droid),
             weapon_geometry: weapon_geometry(db, class),
             weapon_hud: weapon_hud(weapon_db, &weapon_name),
             foley_class: db
@@ -1687,9 +1713,17 @@ impl ClassRoster {
                 .map_or(0, |v| crate::classdb::fnv1a_lowercase(v.trim())),
             cries: cries(db, class),
             jet: db.prop_f32(class, "JetJump").is_some_and(|j| j > 0.0),
-            jet_look: jet_look(db, class),
+            jet_look: if walker_droid {
+                engine_block(db, class)
+            } else {
+                jet_look(db, class)
+            },
             drops: drop_entries(db, class),
-            chunk: chunk_death(db, class),
+            chunk: if walker_droid {
+                None
+            } else {
+                chunk_death(db, class)
+            },
             min,
             max,
             // `[ours]` (card UNLK1): BF1's specials take their BF2
@@ -1703,6 +1737,9 @@ impl ClassRoster {
                         .flatten()
                 })
                 .unwrap_or(0),
+            droideka: walker_droid.then(|| {
+                std::sync::Arc::new(crate::droideka::droideka_class(db, weapon_db, class))
+            }),
         })
     }
 
@@ -1732,6 +1769,7 @@ impl ClassRoster {
             min: self.min,
             max: self.max,
             unlock_points: self.unlock_points,
+            droideka: self.droideka.clone(),
         }
     }
 

@@ -33,16 +33,22 @@ impl Sim {
                     continue;
                 }
                 let (pi, pj) = (self.units[i].soldier.pos, self.units[j].soldier.pos);
-                let min_d = self.units[i].capsule().radius + self.units[j].capsule().radius;
+                let min_d = self.units[i].separation_radius() + self.units[j].separation_radius();
                 let d = Vec3::new(pj.x - pi.x, 0.0, pj.z - pi.z);
                 let len = d.length();
                 if len >= min_d {
                     continue;
                 }
                 let axis = if len > 1e-4 { d / len } else { Vec3::X };
-                let push = axis * ((min_d - len) * 0.5);
-                let ni = pi - push;
-                let nj = pj + push;
+                let (bi, bj) = (self.units[i].unpushed(), self.units[j].unpushed());
+                let (si, sj) = match (bi, bj) {
+                    (true, false) => (0.0, 1.0),
+                    (false, true) => (1.0, 0.0),
+                    _ => (0.5, 0.5),
+                };
+                let gap = min_d - len;
+                let ni = pi - axis * (gap * si);
+                let nj = pj + axis * (gap * sj);
                 // A grounded unit follows the ground under its new footprint
                 // only within a STEP of where it stands; a push over a
                 // platform edge leaves its y alone so it FALLS next tick
@@ -526,6 +532,12 @@ impl Sim {
                 self.ride(i, pad_i);
                 continue;
             }
+            if self.units[i].droideka.is_some() {
+                if self.units[i].alive {
+                    self.step_droideka(i, pad_i, dt);
+                }
+                continue;
+            }
             // Where the tick's move starts: the wall pass tests the move, not
             // only its end (card WPSH).
             let from = self.units[i].capsule();
@@ -785,7 +797,8 @@ impl Sim {
             // bytes; B2 FUN_00240bf8 cases 4 / 8 / 9 likewise. (The fall
             // state is not blocked here yet.)
             let blocked = matches!(self.units[i].soldier.stance, Stance::Roll | Stance::Jump)
-                || self.units[i].soldier.no_fire();
+                || self.units[i].soldier.no_fire()
+                || self.units[i].droideka.as_ref().is_some_and(|d| d.no_fire());
             // A soldier with more slots than the one in its hands (GREN):
             // the channels decide whether FIRE reaches the primary.
             let mut fire_held = if self.units[i].held.is_empty() {
@@ -1152,7 +1165,7 @@ impl Sim {
         if u.scoped() {
             return (u.scope_point(self.ground_rules), u.aim_frame());
         }
-        let f = u.fire_point();
+        let f = u.droideka_muzzle().unwrap_or_else(|| u.fire_point());
         let (aim, aim_right, _) = u.aim_frame();
         let fwd = (self.aim_hit(i) - f).normalize_or(aim);
         let right = fwd.cross(Vec3::Y).normalize_or(aim_right);

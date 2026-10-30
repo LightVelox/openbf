@@ -466,6 +466,7 @@ enum LoopSource {
     Jet(u32, u8),
     Guided(u64, u8),
     Repair(core::unit::UnitHandle, usize),
+    Shield(core::unit::UnitHandle),
 }
 
 struct LoopRequest {

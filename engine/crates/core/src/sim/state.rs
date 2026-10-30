@@ -241,6 +241,11 @@ pub enum Event {
         class: u8,
         scale: f32,
     },
+    Droideka {
+        unit: UnitHandle,
+        pos: Vec3,
+        cue: crate::droideka::Cue,
+    },
     BoltExpired {
         pos: Vec3,
         /// The bolt STRUCK something at `pos` — the terrain sheet, a world
@@ -538,6 +543,7 @@ pub enum DeathCause {
     Stalled,
     /// Confirmed pause-menu Respawn (analysis/re-spawn-flow §7).
     Suicide,
+    Water,
 }
 
 impl DeathCause {
@@ -547,7 +553,10 @@ impl DeathCause {
     /// destroyed vehicle's (re-vehicle-death 10.1 item 4); its landing damage
     /// and blasts are ordinary damage, which the cheat stops.
     pub fn cheat_spares(self) -> bool {
-        matches!(self, DeathCause::Fall | DeathCause::Blast)
+        matches!(
+            self,
+            DeathCause::Fall | DeathCause::Blast | DeathCause::Water
+        )
     }
 }
 

@@ -292,6 +292,9 @@ impl Sim {
         else {
             return;
         };
+        if u.droideka.is_some() {
+            return;
+        }
         let mounted = u.mount.is_some();
         let i = h.index as usize;
         if !u.alive {
@@ -382,7 +385,21 @@ impl Sim {
         let mult = self.buff_scale(attacker, h);
         let ff = self.friendly_fire_scale;
         let u = self.unit_mut(h).unwrap();
+        let shielded = u
+            .droideka
+            .as_ref()
+            .filter(|d| d.shield.on)
+            .map(|d| d.shield.points);
+        if let Some(points) = shielded {
+            u.health.shield = points;
+        }
         let damage = u.health.take_damage(desc, f * mult, friendly, ff);
+        if shielded.is_some() {
+            let left = std::mem::take(&mut u.health.shield);
+            if let Some(d) = u.droideka.as_mut() {
+                d.shield.points = left;
+            }
+        }
         self.finish_unit_damage(h, attacker, damage, super::state::BLAST_AGE, dir);
     }
 }

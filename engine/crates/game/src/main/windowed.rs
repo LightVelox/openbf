@@ -71,6 +71,7 @@ fn play_event_sounds(
         sl.play(audio, &s.name, s.pos, &listener);
     }
     sl.play_repair_loops(audio, &walk.sim, &listener);
+    sl.play_shield_loops(audio, &walk.sim, &listener);
     sl.guided_loops(audio, &walk.sim, &listener);
     // The soldiers' steps and stance sounds (card FOLY).
     if let Some(foley) = foley {
@@ -429,6 +430,7 @@ struct App {
     spawn_preview: game::spawn_preview::Preview,
     /// The battle's vehicle models (card VDRAW) — empty before a battle.
     vehicle_vis: game::viewer::VehicleVisuals,
+    deka_vis: game::viewer::DroidekaVisuals,
     gilrs: Option<gilrs::Gilrs>,
     /// A connected pad's dead camera stick / FIRE (`input::log_pads`), shown
     /// on every screen until a pad that resolves replaces it (card PADM).
@@ -630,6 +632,7 @@ impl App {
             soldier_vis: None,
             spawn_preview: Default::default(),
             vehicle_vis: Default::default(),
+            deka_vis: Default::default(),
             gilrs,
             pad_warning,
             last: std::time::Instant::now(),
@@ -886,6 +889,8 @@ impl App {
             &self.assets_dir,
             &walk.vehicle_geometry,
         );
+        self.deka_vis =
+            game::viewer::DroidekaVisuals::load(renderer, scene, &self.assets_dir, &walk);
         // What the battle can show later, behind the loading (card HITCH).
         self.vehicle_vis.preload(renderer, &walk.sim);
         self.bolts.preload(renderer, &walk);
@@ -1748,6 +1753,7 @@ impl winit::application::ApplicationHandler for App {
                     see = walk.camera_see_through();
                     if let Some(r) = self.renderer.as_mut() {
                         extra.extend(self.vehicle_vis.draws(r, &walk.sim, &see.vehicles));
+                        extra.extend(self.deka_vis.draws(r, &walk.sim));
                     }
                     if let Some(vis) = self.soldier_vis.as_ref() {
                         skinned = vis.draws(walk);
@@ -1863,6 +1869,7 @@ impl winit::application::ApplicationHandler for App {
                                 .map(|v| v.flash_draws(walk))
                                 .unwrap_or_default();
                             let mut particles = flashes;
+                            particles.extend(self.deka_vis.bubbles(&walk.sim, camera.position));
                             particles.extend(self.holos.draws(&gpu.holo, walk, &camera));
                             if let Some(w) = self.weather.as_mut() {
                                 particles.extend(w.frame_draws(r, &camera, tracked_velocity(walk)));

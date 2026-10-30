@@ -49,6 +49,7 @@ pub enum Target {
     /// A fallen building turret (`Sim::building_turrets` index): only the
     /// fusion cutter's target (card TBLD); no round meets one.
     Building(u16),
+    Shield(UnitHandle),
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +157,11 @@ impl Bolt {
             Hit::Target(Target::Building(i)) => {
                 eat(&[11]);
                 eat(&i.to_le_bytes());
+            }
+            Hit::Target(Target::Shield(h)) => {
+                eat(&[12]);
+                eat(&h.index.to_le_bytes());
+                eat(&h.gen.to_le_bytes());
             }
         }
         let skip = match self.hulls {

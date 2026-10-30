@@ -1,0 +1,86 @@
+# Droideka, issue #65 - what the port does and where it rests (cards DEKU, DEKS, DEKD, DEKF)
+
+Implementation notes for `codex/65-droideka`. The RE is `re-droideka-unit.md` [O] (which corrects
+`re-droideka.md`); this file only records what the code takes from it, the disc values read on top of it this pass,
+the rules that are ours, and what stays open. Tags as in the RE: [V] read in the decomp or on the disc, [M] measured,
+[D] derived, [H] hypothesis, OURS = a port decision with no original behind it.
+
+## 1. Rules: decided vs proposed
+
+Decided and followed:
+
+- One gameplay, both games (PLAN, the maintainer 2026-10-27). The droideka's class, shield and weapon numbers are
+  read from the BF2 play db on both discs (`WEAPON_DONORS` gains `cis_inf_droideka -> cis_inf_droideka`): health
+  550, shield 3000 / -100 /s up / +300 /s down, the repeater's BF2 bolt (80 damage, 160 m/s, 0.8 s). BF2's full
+  shield does not drain (`ShieldClass::drains_full` false); BF1's draining behaviour is kept in the type and the
+  tests, not used.
+- The model, clips, camera sections, sounds and death explosion stay the native disc's (`droideka_class(native,
+  play, class)`), so BF1 still sounds and looks like BF1 (BF1's `droid_fx7_hum` shield loop; BF2 authors none).
+- A droideka is its own entity: `Unit::droideka` holds the 14-state form machine, the ball integrator and the
+  shield; soldier stance, movement, equipment and drawing skip it. `UnitSpec::droideka` rebuilds it whole on respawn.
+- Fielding: BASE chain `walkerdroid` builds as a droideka (`is_droideka_chain`); the mix lists keep it in both CIS
+  pairs; its geometry is not a soldier geometry.
+- The AI (DEKF, RE section 5): the form order defaults to roll; a fight writes deploy; leaving the fight writes
+  roll. A fight starts from sight only within 10 m, or when hit in the last second, never against a flyer.
+  Deployed, in the fight, shield down and over half -> raise it. It never lowers it.
+- The player: the crouch / roll-stance press folds and unfolds; the secondary press toggles the shield; fire is
+  blocked in fold, ball and unfold (RE section 6).
+- Unlocks: the existing `unlock_points` path, read from the class's `PointsToUnlock` like any other class
+  (UNLK / UNLK1); nothing droideka-specific.
+
+Proposals in the cards that this branch does not claim as decided: the DEKF census and bot-share thresholds are
+acceptance measures, not rules; the bot design (`bot-design.md`) still has no droideka section.
+
+## 2. Disc values read this pass
+
+| what | where | BF1 | BF2 |
+|---|---|---|---|
+| Shield bubble, `fx__` `DroidekaShield`, type Shield, shape "droideka" (flag 0) | CIS.LVL | Color 96 160 192 192 | Color 96 160 192 255 |
+| same, both | | Radius 1.25, Height 1.25, ScrollRate 1.0, SpecularColor 216 240 255, Grow 0.15 s, Shrink 0.15 s, key 0xb28af6f4 = 1.5 (unread) | |
+| Bubble timing | B1 FUN_0037c390 / FUN_0037c268 | grow f = s < 0.94 ? s x 1.1276596 : (1 - s) x 0.999999 + 1; shrink f = 1 - t / 0.15 | |
+| Bubble draw | B1 FUN_00388ee8 | shape 0: the "specular" table, camera rotation x scale at the centre; record 0x48 (Cs.As + Cd) outside Radius, 0x68 (Cs.0.5 + Cd) inside; colours halved | |
+| Engine block (class +0x16f0) | ODF | EngineSound `cis_walk_droideka_engine_parameterized`, TurnOnSound `cis_droideka_fold`, TurnOffSound `cis_droideka_unfold`, TurnOffTime 3.0 default | same |
+| Engine on | B1 FUN_001d1540 B1:79627-79690 | states 0xb, 0xc (IdleToRoll, Rolling) | same |
+| Shield sounds | shield class 0xd85503ff / 0x5df6c1a4 | `droid_fx7_hum` / - | - / - |
+| Camera sections (hashes 1967731491 / 2497170924 / 1313842571) | ODF CAMERASECTION | STAND eye 1.8, TrackOffset 0 0.5 4.5, tilt 5; STANDZOOM tilt 1; CROUCH eye 1.0, 0 0.3 4.5 | same |
+| Footsteps | class +0x180c / +0x1814 / +0x181c | `cis_inf_droideka_step` x3 | same |
+
+Every name above exists in the baked `names.ron` of bf2_kam1, bf1_nab1 and bf2_geo1; `droid_fx7_hum` only on BF1.
+
+## 3. Deviations and open facts
+
+PROVISIONAL [H] or OURS, each named so it can be replaced when read:
+
+- Bubble: the shape-0 mesh and the specular table are not decoded. The port draws an additive camera-facing
+  hemisphere (16 x 8) with a white texel in the disc colour, alpha 128 when the eye is inside Radius (the 0x68
+  record's 0.5). SpecularColor's role is unread.
+- Camera: the ball uses CROUCH [H]; the SPLIT* sections are unused (no split screen).
+- Sounds not played: the footsteps (no play site found, as the walkers' VSN2 gap); the shield weapon's FireSound
+  `cis_droideka_shield_on` (the infinite-ammo fire path does not run [H]).
+- HUD: no droideka shield meter.
+- Death: BF1's five CHUNKSECTIONs are not spawned (chunk models not baked).
+- From the sim and draw stages: recover order deploys (RE: walk out of a stuck spot); the AI clears SPRINT and
+  ACTION; the legs offset is not drawn; ball spin drives the roll clip time; the ball lean is a model rotation;
+  ordnance prims are bind-pose spheres; BF1's untagged prims follow one rule; droideka voices are exempt; the walk
+  uses the human yaw and mouse turn; the player spawns deployed; energy idles; the barrels alternate [H];
+  explosions spend the shield first [H] (RE section 8); the ball snaps to the floor; no crash damage.
+- RE section 8 items stay open: explosion damage flags, aimer alternation, BF1's fold button, the evade dodge-roll,
+  first-person `droidekafp`.
+
+## 4. Evidence
+
+Before: `ClassRoster::build` rejected `cis_inf_droideka` (BASE `walkerdroid`), so no mission fielded one.
+
+After:
+
+- `game/tests/suite/roster.rs` `droideka_chains_build_as_droidekas`: both discs build the class as a droideka with
+  no soldier geometry, the engine / fold / unfold names, the STAND and CROUCH sections above, and the shield loop
+  (BF1 `droid_fx7_hum`, BF2 none).
+- `core/src/sim/droidekas/tests.rs`: bot fold-at-spawn and roll, player walk / fire / fold / roll / unfold, the
+  raised shield taking bolts with no body damage, the lowered shield passing them, a blast spending the shield
+  first with no knockdown, burst death with no corpse and a whole respawn, water damage, replay hash determinism,
+  and the three AI cases (stays rolled with a far enemy, deploys / shields / fires at a near one, rolls again after).
+- `game/examples/droideka_look.rs` on bf2_kam1_con_cw and bf1_nab1_con_cw: frames of a bot droideka deployed,
+  shielded, folding, folded, rolling, unfolding and bursting, and a player droideka walking and firing, shielding,
+  folding, rolling about 11 m and unfolding, with the camera switching section (walk eye about 3.0 m over the feet,
+  ball about 2.0 m).

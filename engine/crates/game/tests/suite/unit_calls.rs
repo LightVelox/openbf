@@ -66,7 +66,7 @@ fn every_fielded_bf1_class_calls_in_its_own_voice() {
             )
             .expect("rosters");
             for r in &rosters {
-                for c in &r.classes {
+                for c in r.classes.iter().filter(|c| c.droideka.is_none()) {
                     checked += 1;
                     let got = [&c.cries.acquired, &c.cries.flee, &c.cries.heard]
                         .map(|k| k.as_deref().unwrap_or("-").to_owned());
@@ -175,7 +175,7 @@ fn every_fielded_bf1_class_talks_as_its_sides_ai() {
             )
             .expect("rosters");
             for r in &rosters {
-                for c in &r.classes {
+                for c in r.classes.iter().filter(|c| c.droideka.is_none()) {
                     checked += 1;
                     let k = &c.cries;
                     let got = [&k.follow, &k.move_out, &k.need_gunner, &k.yes]

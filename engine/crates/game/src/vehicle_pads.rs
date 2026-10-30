@@ -779,7 +779,7 @@ fn hull_parts_from(
 
 /// Each `side_<game>/vehicles/*/vehicles.ron` beside the map's bake, in path
 /// order: its directory and its manifest.
-fn side_vehicle_files(
+pub fn side_vehicle_files(
     map_dir: &std::path::Path,
     game: &str,
 ) -> Vec<(std::path::PathBuf, manifest::VehicleManifest)> {

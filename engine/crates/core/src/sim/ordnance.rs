@@ -179,7 +179,12 @@ impl Sim {
             if matches!(self.units[i].controller, Controller::Player { .. }) {
                 self.human_shot(i)
             } else {
-                (self.units[i].muzzle(), self.units[i].aim_frame())
+                (
+                    self.units[i]
+                        .droideka_muzzle()
+                        .unwrap_or_else(|| self.units[i].muzzle()),
+                    self.units[i].aim_frame(),
+                )
             };
         let who = Shooter {
             owner: unit,
@@ -187,6 +192,9 @@ impl Sim {
             weapon_class: class,
             is_player: self.units[i].is_player,
         };
+        if let Some(d) = self.units[i].droideka.as_mut() {
+            d.barrel = ((usize::from(d.barrel) + shots.len()) % 2) as u8;
+        }
         for spec in shots {
             // A charge stage's round is its own class's (issue #29): its
             // ordnance flies and strikes; a sticky one (a mortar's held

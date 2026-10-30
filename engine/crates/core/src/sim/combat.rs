@@ -7,6 +7,7 @@
 
 use super::state::{DeathCause, Event, Sim};
 use crate::collision::{HullFilter, Layers};
+use crate::droideka::{self, Sphere};
 use crate::impact::Surface;
 use crate::projectile::{Bolt, Hit, Target};
 use crate::soldier::Stance;
@@ -48,8 +49,18 @@ impl Sim {
             Vec3,
             Vec3,
         );
+        type Deka = (UnitHandle, Vec<Sphere>, Option<Sphere>, Vec3);
+        let dekas: Vec<Deka> = self
+            .alive_units()
+            .filter(|(_, u)| u.droideka.is_some())
+            .map(|(h, u)| {
+                let back = -u.soldier.vel * crate::unit::HUMAN_SHOT_LAG;
+                (h, u.droideka_spheres(), u.droideka_shield(), back)
+            })
+            .collect();
         let units: Vec<Body> = self
             .alive_units()
+            .filter(|(_, u)| u.droideka.is_none())
             .map(|(h, u)| {
                 let p = u.bolt_prims();
                 let (min, max) = p.bounds();
@@ -95,6 +106,35 @@ impl Sim {
                     } else {
                         1.0
                     };
+                }
+            }
+            for (h, spheres, shield, back) in &dekas {
+                if *h == b.owner {
+                    continue;
+                }
+                let by = if b.shooter_is_player {
+                    *back
+                } else {
+                    Vec3::ZERO
+                };
+                let moved = |s: &Sphere| Sphere {
+                    center: s.center + by,
+                    radius: s.radius,
+                };
+                if let Some(t) = shield
+                    .as_ref()
+                    .and_then(|s| droideka::ray_sphere(from, dir, reach, moved(s)))
+                {
+                    reach = t;
+                    hit = Some(Target::Shield(*h));
+                    mult = 1.0;
+                }
+                for s in spheres {
+                    if let Some(t) = droideka::ray_sphere(from, dir, reach, moved(s)) {
+                        reach = t;
+                        hit = Some(Target::Unit(*h));
+                        mult = 1.0;
+                    }
                 }
             }
             let mines = self.mines.iter().filter(|m| m.health > 0.0);
@@ -256,6 +296,35 @@ impl Sim {
                         u.soldier.kick(b.vel);
                     }
                 }
+                self.bolt_explodes(b);
+            }
+            Hit::Target(Target::Shield(h)) => {
+                let Some(victim) = self.unit(h) else {
+                    return;
+                };
+                let friendly = victim.team == b.team;
+                let invincible = (victim.is_player && self.cheats.invincible)
+                    || (victim.is_human() && friendly && !b.shooter_is_player);
+                let desc = self.weapon_classes[b.weapon_class]
+                    .ordnance
+                    .damage_desc_charged(b.age, false, b.charge);
+                let mut dmg = desc.damage * self.buff_scale(Some(b.owner), h);
+                if friendly {
+                    dmg *= self.friendly_fire_scale;
+                }
+                if !invincible {
+                    self.droideka_bolt_on_shield(h, dmg, desc.shield_scale);
+                }
+                let tick = self.tick;
+                if let Some(u) = self.unit_mut(h) {
+                    u.last_hit = Some((b.owner, tick));
+                }
+                self.nav_stats.bolt_hits += 1;
+                self.events.push(Event::BoltExpired {
+                    pos: b.end,
+                    struck: true,
+                });
+                self.push_impact(b, Surface::Shield, None);
                 self.bolt_explodes(b);
             }
             // The hull pool (re-vehicles §6): the ordnance's damage at this
@@ -534,7 +603,13 @@ impl Sim {
             return;
         }
         let drop = u.drop_due;
-        if !self.chunk_death(i) {
+        let burst = if u.droideka.is_some() {
+            self.droideka_burst(i);
+            true
+        } else {
+            self.chunk_death(i)
+        };
+        if !burst {
             let u = &mut self.units[i];
             u.soldier.stance = Stance::Dead;
             u.soldier.time_in_stance = 0.0;

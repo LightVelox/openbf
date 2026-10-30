@@ -49,7 +49,11 @@ pub fn is_walker_base(base: &str) -> bool {
 /// The anim table of `bank`: each entry's clip by its bare name, else the
 /// bank-prefixed one.
 pub fn clips(bank: &AnimBank<'_>) -> Vec<Option<ManifestWalkerClip>> {
-    ENTRIES
+    clips_of(bank, &ENTRIES)
+}
+
+pub fn clips_of(bank: &AnimBank<'_>, entries: &[(&str, bool)]) -> Vec<Option<ManifestWalkerClip>> {
+    entries
         .iter()
         .map(|&(name, looping)| {
             if name.is_empty() {

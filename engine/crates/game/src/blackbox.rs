@@ -315,6 +315,7 @@ pub enum Ev {
     Lost,
     /// A bot that made no net progress, given up (card RCYC).
     Recycle,
+    Water,
     /// Unit a spawned.
     Spawn,
     /// Unit a shed by the no-overspawn rule.
@@ -914,6 +915,7 @@ impl Ring {
                         DeathCause::UnderMap => Ev::UnderMap,
                         DeathCause::Lost => Ev::Lost,
                         DeathCause::Stalled => Ev::Recycle,
+                        DeathCause::Water => Ev::Water,
                     },
                     unit.index as i32,
                     -1,

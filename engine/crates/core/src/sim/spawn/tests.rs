@@ -100,6 +100,7 @@ fn class_w(min: u32, max: Option<u32>, weapon_class: usize) -> crate::unit::Unit
         min,
         max,
         unlock_points: 0,
+        droideka: None,
     }
 }
 

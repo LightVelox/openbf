@@ -188,7 +188,8 @@ impl Sim {
             | Target::Mine(_)
             | Target::Droid(_)
             | Target::Turret(_)
-            | Target::Guided(_) => return,
+            | Target::Guided(_)
+            | Target::Shield(_) => return,
         };
         if amount > 0.0 {
             self.events.push(Event::Repair {
