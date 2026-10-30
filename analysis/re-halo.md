@@ -36,7 +36,7 @@ Additive, depth-tested, BF2 `white.tga` modulated (the GS RGB scale 1.0).
 - **Length ≤ 0 (a glow)**: a camera-facing disc. The centre and an inner ring of 16 points at R = +0x180 sit R toward
   the camera; an outer ring at R + +0x188 sits at the base, at half-step angles; the points are (−sin θ, cos θ),
   θ = kπ/8. Alphas: centre round(A·f), inner trunc(centre·+0x18c), outer 0. Near fade: gap = depth − near; none
-  when gap < R, (gap − R)/+0x188 up to R + +0x188. Far fade from 0.81·vis² to vis². Triangles: a fan
+  when gap < R, (gap − R)/+0x188 up to R + +0x188. The distance fade uses the combined band below. Triangles: a fan
   (I_k, I_k+1, C) and the annulus.
 - +0x120/+0x124 (from +0x194 and the colour) feed a separate lens-flare object. **Not ported**: the port has no lens
   flares anywhere.
@@ -53,3 +53,19 @@ Additive, depth-tested, BF2 `white.tga` modulated (the GS RGB scale 1.0).
 `mungefs::lightbeam` parses the node; `bake::effects` writes `FxSet.beams` (z flipped on position and direction);
 `game::fx::props::Glow` places each on its prop's hardpoint frame and submits it every frame as an additive
 `ParticleDraw::Beam`; `render::light_beam::glow_vertices` builds the disc.
+
+## 5. Distance-band follow-up (#77)
+
+[V] `FUN_00469628` reads the view fade/far distances through `FUN_00565120` / `FUN_00565130`, squares both,
+and tests the effect's positive distance and the view far distance separately (528793–528830).
+Both glow and beam paths select the earlier fade start and shorter far end (528909–528916, 529211–529218).
+[D] Thus `begin² = min(view_begin², 0.81 * effect_distance²)` and
+`end² = min(view_end², effect_distance²)`, omitting the effect terms when its distance is zero.
+Past begin, the single factor is `(end² - distance²) / (end² - begin²)`; the two fades are not multiplied.
+
+Rechecked with `python3 scripts/re_check.py fn b2 528793 528795 528829 528909 528910 528913 528914 528916 529211 529212 529215 529216 529218`:
+all thirteen lines resolve to `FUN_00469628` at `0x00469628` (header 528656), including
+*(decompiler detail omitted)*, *(decompiler detail omitted)*, and the ratio above (the beam uses *(decompiler detail omitted)*).
+
+[ours] The port supplies its existing world fade/cull policy through `game::fx::props::view_fade` to `Beam::view`.
+Its relaxed prop reach and finite camera-distance fallback are recorded in `FEEL_NOTES.md` (#77 follow-up).

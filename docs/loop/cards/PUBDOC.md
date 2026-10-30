@@ -1,13 +1,13 @@
 ---
 id: PUBDOC
-title: Preserve the imported mine report through the public source export allowlist
+title: Preserve tracked public-only files through source exports
 milestone: M0
 value: 4
 phase: cleanup
-status: blocked
+status: done
 deps:
-files: scripts/export_public.py,docs/loop/reports/20261028_MINE.md
-needs: reviewed export-preservation fix and isolated test; publication remains forbidden in the active session
+files: scripts/export_public.py,scripts/tests/test_export_public.py,scripts/tests/test_parity_bake.py
+needs:
 branch:
 created: 2026-10-29
 ---

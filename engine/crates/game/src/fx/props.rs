@@ -9,7 +9,7 @@ pub(super) struct Glow {
 }
 
 impl Glow {
-    fn new(def: &manifest::FxBeam, frame: Frame, era: Era) -> Self {
+    fn new(def: &manifest::FxBeam, frame: Frame, era: Era, view: Option<render::FarFade>) -> Self {
         let axis = frame.rot * Vec3::from(def.direction);
         Self {
             beam: render::Beam {
@@ -20,6 +20,7 @@ impl Glow {
                 r1: def.final_radius[0],
                 soft: def.fade_length,
                 visible: def.draw_distance,
+                view,
                 gs_rgb: match era {
                     Era::Bf1 => 0.5,
                     Era::Bf2 => 1.0,
@@ -115,9 +116,33 @@ pub(super) fn frame(matrix: Mat4, local: &manifest::ManifestAttachedEffect) -> F
     }
 }
 
+// [ours] Follow the world's current distance policy, including its relaxed
+// prop reach. None uses the camera's finite reach in render::light_beam.
+fn view_fade(
+    source_game: &str,
+    lighting: &manifest::ManifestLighting,
+    cull: bool,
+) -> Option<render::FarFade> {
+    crate::viewer::far_fade_from(source_game, lighting).or_else(|| {
+        let reach = cull
+            .then(|| crate::viewer::far_cull_from(lighting))
+            .flatten()?;
+        let begin = lighting.near_scene_range?[1];
+        (begin.is_finite() && begin >= 0.0).then_some(render::FarFade {
+            begin: begin.min(reach.world),
+            end: reach.world,
+        })
+    })
+}
+
 pub(super) fn load(scene: &crate::assets::Scene, library: &Library) -> (Vec<Attached>, Vec<Glow>) {
     let mut out = Vec::new();
     let mut glows = Vec::new();
+    let view = view_fade(
+        &scene.manifest.source_game,
+        &scene.manifest.lighting,
+        crate::viewer::far_cull_enabled(),
+    );
     let mut missing = std::collections::HashSet::new();
     let mut rng = Lcg(crate::classdb::fnv1a_lowercase(&scene.manifest.map));
     let paths = scene
@@ -144,7 +169,7 @@ pub(super) fn load(scene: &crate::assets::Scene, library: &Library) -> (Vec<Atta
                     rng.step(),
                 ));
             } else if let Some(def) = library.beam(&effect.effect) {
-                glows.push(Glow::new(def, frame(matrix, effect), library.era));
+                glows.push(Glow::new(def, frame(matrix, effect), library.era, view));
             } else if missing.insert(effect.effect.to_ascii_lowercase()) {
                 eprintln!("prop effect {}: not in the map's library", effect.effect);
             }
@@ -203,5 +228,47 @@ mod tests {
         assert!(repeat.live.is_none());
         repeat.step(0.02);
         assert!(repeat.live.is_some());
+    }
+
+    #[test]
+    fn halo_distance_takes_the_same_authored_fade_as_the_world() {
+        let lighting = manifest::ManifestLighting {
+            near_scene_range: Some([0.1, 80.0, 100.0]),
+            far_scene_range: Some(0.0),
+            ..Default::default()
+        };
+        for cull in [false, true] {
+            assert_eq!(
+                view_fade("bf2", &lighting, cull),
+                Some(render::FarFade {
+                    begin: 80.0,
+                    end: 100.0
+                })
+            );
+        }
+        let extended = manifest::ManifestLighting {
+            far_scene_range: Some(800.0),
+            ..lighting
+        };
+        assert_eq!(view_fade("bf2", &extended, false), None);
+        assert_eq!(
+            view_fade("bf2", &extended, true),
+            Some(render::FarFade {
+                begin: 80.0,
+                end: 800.0
+            })
+        );
+        assert_eq!(
+            view_fade("bf1", &extended, true),
+            Some(render::FarFade {
+                begin: 80.0,
+                end: 800.0
+            })
+        );
+        assert_eq!(view_fade("bf1", &extended, false), None);
+        assert_eq!(
+            view_fade("bf2", &manifest::ManifestLighting::default(), true),
+            None
+        );
     }
 }

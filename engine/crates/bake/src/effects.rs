@@ -65,8 +65,8 @@ impl Collected {
             if &c.tag != b"fx__" {
                 continue;
             }
-            if let Some(b) = LightBeamConfig::parse(c)
-                .map_err(|err| anyhow!("fx__ 0x{:X}: {err}", c.offset))?
+            if let Some(b) =
+                LightBeamConfig::parse(c).map_err(|err| anyhow!("fx__ 0x{:X}: {err}", c.offset))?
             {
                 if !out
                     .beams

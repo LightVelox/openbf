@@ -1,3 +1,4 @@
+//! Decorative terrain gusts and actor contact impulses.
 use super::*;
 
 #[derive(Clone, Copy, Debug)]

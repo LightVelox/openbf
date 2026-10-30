@@ -490,6 +490,9 @@ impl LiveEffect {
                 children::draw(self, i, era, eye, forward, assets, out);
                 continue;
             }
+            if em.geometry.blend == manifest::FxBlend::Blur {
+                continue;
+            }
             let ps = inst.particles(em, era, self.t, self.frame, self.def.cache(i), |k| {
                 terms.keep(k)
             });
@@ -1396,10 +1399,18 @@ mod tests {
                 }))
             }
         }
-        for nested in [false, true] {
+        for (nested, blend) in [
+            (false, manifest::FxBlend::Normal),
+            (true, manifest::FxBlend::Normal),
+            (false, manifest::FxBlend::Blur),
+            (true, manifest::FxBlend::Blur),
+        ] {
+            let mut em = em.clone();
+            em.geometry.blend = blend;
             let mut root = em.clone();
             if nested {
                 root.geometry.kind = manifest::FxType::Emitter;
+                root.geometry.blend = manifest::FxBlend::Normal;
                 root.geometry.child = Some(Box::new(em.clone()));
             }
             let def = Arc::new(EffectDef::new(1, None, vec![root], Era::Bf2, &mut Lcg(1)));
@@ -1412,6 +1423,10 @@ mod tests {
                 &mut Assets,
                 &mut out,
             );
+            if blend == manifest::FxBlend::Blur {
+                assert!(out.is_empty(), "BLUR geometry drew colour, nested={nested}");
+                continue;
+            }
             assert_eq!(out.len(), 1, "nested={nested}");
             let render::ParticleShape::SolidMesh { tris } = &out[0].shape else {
                 panic!(

@@ -1,3 +1,4 @@
+//! Leafpatch bird anchors, bounded lifetimes and atlas wings.
 use super::*;
 
 #[derive(Clone, Copy)]

@@ -274,6 +274,15 @@ here. Do not leave a lesson only as JOURNAL prose.
 - STOP: every wait loop on a workflow, a verifier, a PCSX2 run or a census tests `[ -e <ROOT>/STOP ]` and prints STOP_SEEN (a session with one commit has no "between commits"; 26 minutes of work after a STOP), and a background launcher's first output line is read in the same call (`sleep 2; cat <log>`) - a wrapper that refuses on STOP says so only in its log (ROLLS, HVYW).
 - Leave the shell's cwd at the repo root before a command that redirects output: the oracle guard resolves a relative redirect against the tool's cwd (ROLLS).
 - `loopctl.py set <ID> status=parked` removes `lead_tmp/<branch>_target` as `blocked` does: copy the branch binary to the kit's `bin/` first and expect land.py to rebuild from cold (DOORS). `status=done` deletes it too: never name a scratch target `lead_tmp/<card>_target` for a card you will close (WINS2).
+- Test only what a change touches (maintainer 2026-10-29: "we spend most time idle waiting for tests"). While
+  working: `cargo test -p <crate> <filter>` for the code you changed, plus the one real-map test that proves it.
+  Full `engine/ci.sh` runs ONCE per branch, when it is finished, and again only for a landing on main. No full ci
+  after a docs-only or comment-only change, after a rebase/cherry-pick that applies cleanly onto code that already
+  passed, or for an export of a commit that already passed: build + clippy + the touched crates' tests are enough.
+  Round sweeps and win-rate matrices only when the change can move bot results, and once per branch.
+- Heavy jobs (cargo build/test, bakes, sweeps, captures) run through `scripts/heavy.sh [--gpu] <cmd>`: up to 3 at once,
+  one at a time while the maintainer is playing; it adds the memory cap, nice and timeout (maintainer 2026-10-29: the
+  single ci.lock left jobs idle). Plain `flock ci.lock` still works and waits for all of them.
 - A hand-typed ci launch goes in the `||` arm of the STOP test like land and gates: `[ -e <ROOT>/STOP ] && echo STOP_SEEN || (flock ... ./ci.sh)` (HJAM: the check printed and ci ran).
 - Before pointing a worktree's `assets_baked` at a scratch bake of some groups, link what the other groups own into it - top-level dirs, the EMPTY `classes/`, each map's `sounds` / `load` - or every battle builds 0 turrets and a data-gated test "passes" by skipping (VTURD).
 - Check the session's elapsed time with `date` against the journal's start line before deciding to wrap up, never from a feeling of length (CPHOL: a WIP wrap-up at minute 23).

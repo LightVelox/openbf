@@ -1,3 +1,4 @@
+//! Offscreen forest isolation captures and non-emitter controls.
 use anyhow::{Context, Result};
 use game::{assets, viewer};
 use glam::Vec3;

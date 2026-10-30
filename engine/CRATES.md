@@ -378,7 +378,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `game/src/blackbox.rs` 2412 — dev-mode playtest history and rotating snapshots on F9, quit, panic and stuck alarm; read-only on the sim and excluded from its hash · `BlackBox`, `Snapshot`, `Meta`, `on`, `write_rotating`, `read`, `SoundRow`, `sound_digest`. `blackbox::SCHEMA` owns schema age and supported older reads; module header owns history/build diagnostics; operation in `AGENTS.md`’s playtest guidance.
 - `game/src/blackbox/rotating.rs` 173 — serialized snapshot file rotation shared by the hotkey writer and panic hook, with same-thread recursion protection and filesystem regression tests · `write`, `PREVIOUS`.
 - `game/src/blackbox/session.rs` 323 — Card DPRX: the black box's MATCH-LONG tally of one subject - the human, or in a headless round the sweep's human proxy (`core::ai::proxy`). The rings
-- `game/src/fx.rs` 1857 — particle-effect lookup with disc-specific rules for imported SBD trails, lifecycle and draw submission, event-driven impact/explosion hooks, gain effects that follow their unit (one live per unit and kind) and PROVISIONAL fallback quads · `Fx`, `Library`, `LiveEffect`; module header and `analysis/re-fx.md` §5–§7; muzzle flashes come from `soldier_vis`.
+- `game/src/fx.rs` 1962 — particle-effect lookup with disc-specific rules for imported SBD trails, lifecycle and draw submission, event-driven impact/explosion hooks, gain effects that follow their unit (one live per unit and kind) and PROVISIONAL fallback quads · `Fx`, `Library`, `LiveEffect`; module header and `analysis/re-fx.md` §5–§7; muzzle flashes come from `soldier_vis`.
 - `game/src/fx/abilities.rs` 66 — officer activation effects and timed recipient auras · `follow_buffs`.
 - `game/src/fx/repair.rs` 71 — repair-pulse muzzle effects, owner following and initial-burst placement at the drawn weapon tip.
 - `game/src/fx/children.rs` 126 — EMITTER particles replay their child templates along native path nodes (0.3 s samples, 0.1 s merge, secant velocities), with the parent's colour replacing the child's and native child offsets · `path`, `frame_at`, `draw`; `analysis/re-fx.md` §13; referees `game/src/fx/tests/resupply.rs` (live PCSX2 node captures) and `game/tests/suite/resupply_feedback.rs`.
@@ -422,7 +422,7 @@ Flow: disc → `mungefs` → `bake` → `engine/assets_baked/` (schema `manifest
 - `render/src/hud.rs` 477 — window-pixel HUD rendering (clamped and repeating sheets) from `ui::hud_draw` · `HudPass`, `HudVertex`, `HudBatch`, `HudTexture`; display-value blending and mesh depth rules in the module header (`Renderer::display_view_format`).
 - `render/src/grass.rs` 494 — grasspatch sprite buffers and draws (also shared by leaves) · `Renderer::set_grass`, `GrassClass`, `GrassPatch`, `GrassSprite`, `sprite_quad`; view geometry/fade in the module header; GS blend remains PROVISIONAL ([O]).
 - `render/src/leaf.rs` 375 — leafpatch per-view sprite buffers and object draws over the grass pass · `Renderer::set_leaves`, `LeafClass`, `LeafObject`, `LeafSprite`; twist, wind and fades in the module header (`analysis/re-leafpatch.md` §6–§7); BF2 lighting remains PROVISIONAL.
-- `render/src/light_beam.rs` 320 — command-post hologram lightbeam geometry and visibility · `Beam`, `vertices`, `view_factor`, `fan`, `crosses_near`; fan/alpha rules and near-plane caveat in the module header (CPHOL).
+- `render/src/light_beam.rs` 544 — command-post hologram lightbeam geometry and visibility · `Beam`, `vertices`, `view_factor`, `fan`, `crosses_near`; fan/alpha rules and near-plane caveat in the module header (CPHOL).
 - `render/src/grass.wgsl` 78 — `vs_grass` / `fs_grass` (grass and leaves; BF2 leaves' static `Lit` on the vertex
   normal), appended to `shader.wgsl` as one module
 - `render/src/bolt.rs` 314 — laser-bolt ribbon geometry and draws · `Renderer::set_bolts`, `BoltDraw`, `ribbon`; geometry, blend/depth rules and shared particle ordering in the module header (`analysis/re-bolt.md` §3, [O]).
@@ -479,7 +479,7 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `ui/src/overlay.rs` 188 — egui ↔ winit ↔ wgpu glue · `EguiOverlay`
 - `ui/src/cursor.rs` 152 — the shell's drawn pointer and its hover gate: hover moves menu focus only on fresh motion or a click · `draw`, `Pointer`
 - `ui/src/hud_scope.rs` 129 — The sniper scope's overlay — the PS2's `ScopeDisplay` HUD element (`analysis/re-zoom.md` §8 [V][O]; BF1 vtable 0x540880, update
-- `input/src/lib.rs` 791 — gilrs → deterministic PS2-layout `PadState` (keyboard + mouse merge in `game/src/kbm.rs`) · `Mapping`, `pad_from_gamepad`, `stick_arms`, `TRIGGER_PRESS`; always initialize via `open_gilrs` (project SDL mappings/DB/env); diagnostics: `log_pads`, `pad_warning`, `input/examples/pads.rs`; mapping rules in the module/API docs.
+- `input/src/lib.rs` 1037 — gilrs → deterministic PS2-layout `PadState` (keyboard + mouse merge in `game/src/kbm.rs`) · `Mapping`, `pad_from_gamepad`, `stick_arms`, `TRIGGER_PRESS`; always initialize via `open_gilrs` (project SDL mappings/DB/env); diagnostics: `log_pads`, `pad_warning`, `input/examples/pads.rs`; mapping rules in the module/API docs.
 - `audio/src/lib.rs` 329 — kira playback through the master limiter; a looping voice with settable gain, rate and pan; a one-shot that can be cut (card UCRY) · `Audio`, `Voice`, `Shot`
 - `audio/src/limiter.rs` 170 — master lookahead limiter · `Limiter`; stereo linking, full-scale behavior and PROVISIONAL timing constants in the module header/API docs (MIXH).
 - `audio/src/stream.rs` 357 — streamed SPU2 ADPCM music over `pak::open` and kira · `StreamTake`, `TakeReader`, `MusicVoice`, `Audio::play_stream`; stereo block layout in the module header; baked body paths: `manifest::music_body`.
@@ -671,9 +671,21 @@ copy); unfinished packed builds keep dev mode on by default (`OPENBF_DEV=0` disa
 - `core/src/sim/guided/tests.rs` 373 — guided launch, control, collision, detonation and hand-back tests.
 - `game/tests/suite/guided_rockets.rs` 357 — all 14 inherited guided launchers, award gating, camera/interpolation restoration, smooth mouse/controller turning at 60/75/144 Hz and all-side/map-local equipment census.
 
-- `game/src/fx/chunks.rs` 467 — cosmetic droid and vehicle chunk launch, bounded pool and floor contacts.
+- `game/src/fx/chunks.rs` 923 — cosmetic droid and vehicle chunk launch, bounded pool and floor contacts.
 - `bake/src/attached_effects.rs` 149 — ordered AttachEffect replay and baked hardpoint frames/repeat bounds.
 - `game/src/fx/props.rs` 160 — static prop effect frames and optional repeat timers, presentation only.
 - `render/src/bloom.rs` 299 — selective BF2 pre-clamp emissive gather and authored blur · `Bloom`
 - `render/src/bloom.wgsl` 50 — threshold, five-tap blur and display-space composite · bloom fragment entry points
-- `render/src/falling.rs` 365 — airborne leaf pool, flutter/tumble, visibility retirement and world quads · `LeafEmitter`
+- `render/src/falling.rs` 487 — airborne leaf pool, flutter/tumble, visibility retirement and world quads · `LeafEmitter`
+
+
+## PR #77 effect modules and referees
+
+- `mungefs/src/lightbeam.rs` 267 — LightBeam config parsing and defensive numeric defaults · `LightBeamConfig`.
+- `game/src/forest.rs` 105 — scene bird configuration and read-only simulation actor snapshots · `configure`, `submit_actors`.
+- `game/src/fx/chunks/tests.rs` 433 — chunk launch, inertia, contacts, lifetime, pool and real-data regressions.
+- `render/src/falling/birds.rs` 313 — bounded anchor bird pool, motion, atlas wings and lifecycle · `ForestBirdType`.
+- `render/src/falling/ground.rs` 294 — terrain gusts and actor contact impulses · `LeafActor`.
+- `game/examples/forest_capture.rs` 100 — offscreen forest isolation captures and non-emitter control.
+- `game/examples/vehicle_chunks.rs` 169 — offscreen vehicle destruction and chunk effect captures.
+- `render/tests/suite/particle_blend.rs` 167 — GPU referees for display-byte blending and leaf/bird cutouts.
