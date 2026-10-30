@@ -236,6 +236,9 @@ fn bot_and_foe(dist: f32) -> (Sim, UnitHandle) {
     let mut s = sim();
     s.spawn(&UnitSpec::player(0, Vec3::new(0.0, 0.0, -dist)))
         .unwrap();
+    for _ in 0..crate::ai::dfocus::UNTARGETED {
+        s.step(&[PadState::default()]);
+    }
     let h = s
         .spawn(&deka(UnitSpec {
             controller: Controller::Ai,

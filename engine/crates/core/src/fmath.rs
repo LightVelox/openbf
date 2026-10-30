@@ -375,6 +375,18 @@ mod tests {
         ),
         ("spawn_preview.rs", ") * Mat4::from_rotation_y(yaw)"),
         ("render_blend.rs", "o.rot = p.rot.slerp(o.rot, t);"),
+        (
+            "render_blend.rs",
+            "out.rot = p.rot.slerp(filtered_walker_heading(rot, c.rot), t);",
+        ),
+        (
+            "render_blend.rs",
+            "if previous.angle_between(current) >= WALKER_HEADING_SNAP_RAD {",
+        ),
+        (
+            "render_blend.rs",
+            "previous.slerp(current, WALKER_HEADING_BLEND).normalize()",
+        ),
     ];
 
     /// Every `.rs` file under `dir` as `(path under dir, non-test code)`,
