@@ -1597,7 +1597,6 @@ impl winit::application::ApplicationHandler for App {
                             if let Some(vis) = self.soldier_vis.as_mut() {
                                 vis.note_shots(walk);
                                 self.bolts.set_fire_points(vis.fire_points(walk));
-                                self.fx.set_jet_frames(vis.jet_frames(walk));
                             }
                             self.bolts.track(walk);
                             if let (Some(audio), Some(sl)) =
@@ -1653,11 +1652,8 @@ impl winit::application::ApplicationHandler for App {
                         if let Some(p) = self.frame_profile.as_mut() {
                             p.lap("sim_ms");
                         }
-                        if let Some(vis) = self.soldier_vis.as_mut() {
-                            vis.update(walk, dt);
-                            self.fx.set_repair_origins(&vis.fire_points(walk));
-                        }
-                        self.fx.update(dt);
+                        self.fx
+                            .advance_frame(self.soldier_vis.as_mut(), walk, &look, dt);
                         if let Some(w) = self.weather.as_mut() {
                             w.update(dt);
                             rain_splashes(w, &mut self.fx, walk, aspect, dt);

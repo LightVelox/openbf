@@ -2270,12 +2270,12 @@ fn only_the_bf2_officers_and_specials_cost_points() {
     );
 }
 
-/// The maintainer 2026-10-27 (`roster::PUSH_SPARES_THE_LIVING`): out of BF2's disc
-/// data, the Magnaguard's Bulldog explodes with a push that moves only
-/// bodies; the rocket launcher's, the thermal detonator's and the mortar's
-/// still throw soldiers.
+/// The maintainer 2026-10-27 and 2026-10-29 (`roster::PUSH_SPARES_THE_LIVING`): out
+/// of BF2's disc data, the Magnaguard's Bulldog and the Bothan spy's
+/// incinerator explode with a push that moves only bodies; the rocket
+/// launcher's, the thermal detonator's and the mortar's still throw soldiers.
 #[test]
-fn only_the_bulldogs_push_spares_the_living() {
+fn only_the_bulldog_and_incinerator_pushes_spare_the_living() {
     let Some(dir) = classes_dir() else { return };
     let db = load_classdb_all(&dir, "bf2");
     let blast = |w: &str| {
@@ -2291,11 +2291,10 @@ fn only_the_bulldogs_push_spares_the_living() {
             .unwrap_or_else(|| panic!("{w}: no explosion"));
         (w.push, w.spares_living)
     };
-    let (push, spares) = blast("cis_weap_inf_bulldog");
-    assert!(
-        push > 0.0 && spares,
-        "the Bulldog: push {push}, spares {spares}"
-    );
+    for w in ["cis_weap_inf_bulldog", "all_weap_inf_incinerator"] {
+        let (push, spares) = blast(w);
+        assert!(push > 0.0 && spares, "{w}: push {push}, spares {spares}");
+    }
     for w in [
         "cis_weap_inf_rocket_launcher",
         "rep_weap_inf_thermaldetonator",

@@ -163,24 +163,25 @@ impl Piece {
         }
     }
 
-    fn life(&self, bf1: bool) -> f32 {
+    /// `[ours]` BF1's rest life on both games (the maintainer 2026-10-29:
+    /// BF2's 8 s left pieces lying too long).
+    fn life(&self) -> f32 {
         if self.budget == 0xff {
             return 30.0;
         }
         if self.spec.lifetime >= 0.0 {
             return self.spec.lifetime;
         }
-        match (self.spec.mode, bf1) {
-            (2 | 4, _) => 53.0,
-            (_, true) => 3.0,
-            (_, false) => 8.0,
+        match self.spec.mode {
+            2 | 4 => 53.0,
+            _ => 3.0,
         }
     }
 
     fn step(&mut self, sim: &Sim, dt: f32, bf1: bool, bursts: &mut Vec<Vec3>) -> bool {
         self.touched = false;
         if !self.moving || sim.heightfield.is_none() || self.budget == 0xff {
-            let life = self.life(bf1);
+            let life = self.life();
             if self.timer < life {
                 self.timer += dt;
                 if self.timer >= life {

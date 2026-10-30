@@ -1187,27 +1187,16 @@ impl Sim {
     /// Card SSELB: whether the class screen refuses player slot `s` class
     /// `class` of `team`, as the PS2's `FUN_00364290` does
     /// (`analysis/re-spawn-flow.md` §4.3): under the class's
-    /// `PointsToUnlock` with the slot's [`Sim::spawn_points`]; and a class
-    /// with a cost whose team already fields its max. A class without a cost
-    /// has no max test. Bots never ask (the PS2 checks a human only). Not
-    /// built: the droideka pool test (no BF2 line-up has a droideka class),
-    /// and the PS2 shows Max only when it is under the member records, which
-    /// every authored max is. `[ours]` (card UNLK3): the points test reads
-    /// the slot's career cost ([`Sim::spawn_cost`]); the max test stays on
-    /// the class's own cost, so a class unlocked for good keeps its max.
+    /// `PointsToUnlock` with the slot's [`Sim::spawn_points`]. Bots never ask
+    /// (the PS2 checks a human only). `[ours]` (card UNLK3): the points test
+    /// reads the slot's career cost ([`Sim::spawn_cost`]). `[ours]`
+    /// (2026-10-29): no "too many" test - the PS2 refuses an unlock class
+    /// whose team fields its max; here a class is never full, for players or
+    /// bots.
     pub fn class_refusal(&self, s: usize, team: u8, class: usize) -> Option<ClassRefusal> {
-        let c = self.classes[usize::from(team.min(1))].get(class)?;
         let cost = i64::from(self.spawn_cost(s, team, class));
         let points = i64::from(self.spawn_points.get(s).copied().unwrap_or(0));
-        if cost != 0 && points < cost {
-            return Some(ClassRefusal::Points((cost - points) as u32));
-        }
-        match c.max {
-            Some(max) if c.unlock_points >= 1 && self.class_count(team, class) >= max => {
-                Some(ClassRefusal::TooMany)
-            }
-            _ => None,
-        }
+        (cost != 0 && points < cost).then(|| ClassRefusal::Points((cost - points) as u32))
     }
 
     /// One spawn-map push for slot `s` of `team` from the arms held in

@@ -170,8 +170,8 @@ fn a_class_step_during_the_slide_is_dropped() {
 
 /// Card SSELB (re-spawn-flow §4.3, the PS2's `FUN_00364290`): a class
 /// that costs points refuses the accept until the slot has them (the
-/// panel's count of points still needed), and once it is at its max
-/// refuses as "too many"; a class without a cost has no max test.
+/// panel's count of points still needed); `[ours]` a class at its authored
+/// max is never refused.
 #[test]
 fn a_locked_class_refuses_the_accept_until_the_points_are_there() {
     let mut s = screens_sim(5, false);
@@ -180,7 +180,7 @@ fn a_locked_class_refuses_the_accept_until_the_points_are_there() {
     s.classes[0][1].max = Some(1);
     tap(&mut s, buttons::SPAWN_ACCEPT);
     assert_eq!(s.spawn_stage[0], SpawnStage::Class);
-    assert_eq!(s.class_refusal(0, 0, 0), None, "no cost: no max test");
+    assert_eq!(s.class_refusal(0, 0, 0), None, "no cost, max 0: open");
     tap(&mut s, buttons::SPAWN_POST_LEFT);
     assert_eq!(s.spawn_choice[0], 1);
     assert_eq!(s.class_refusal(0, 0, 1), Some(ClassRefusal::Points(8)));
@@ -193,13 +193,13 @@ fn a_locked_class_refuses_the_accept_until_the_points_are_there() {
     assert!(tap(&mut s, buttons::SPAWN_ACCEPT), "unlocked");
     assert_eq!(slot0(&s).spec.class, 1);
     assert_eq!(s.class_count(0, 1), 1);
-    assert_eq!(s.class_refusal(0, 0, 1), Some(ClassRefusal::TooMany));
+    assert_eq!(s.class_refusal(0, 0, 1), None, "at its max: still open");
 }
 
 /// Card UNLK3: the slot's career cost replaces the class's own in the
-/// points test (half, then none); the max test keeps the class's own cost.
+/// points test (half, then none).
 #[test]
-fn a_career_cost_replaces_the_points_but_keeps_the_max() {
+fn a_career_cost_replaces_the_points() {
     let mut s = screens_sim(5, false);
     s.classes[0][1].unlock_points = 12;
     s.classes[0][1].max = Some(1);
@@ -216,7 +216,7 @@ fn a_career_cost_replaces_the_points_but_keeps_the_max() {
     tap(&mut s, buttons::SPAWN_POST_LEFT);
     assert!(tap(&mut s, buttons::SPAWN_ACCEPT));
     assert_eq!(slot0(&s).spec.class, 1);
-    assert_eq!(s.class_refusal(0, 0, 1), Some(ClassRefusal::TooMany));
+    assert_eq!(s.class_refusal(0, 0, 1), None, "at its max: still open");
     assert_eq!(s.spawn_cost(1, 0, 1), 12, "another slot: the class's own");
 }
 

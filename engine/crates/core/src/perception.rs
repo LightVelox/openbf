@@ -691,8 +691,15 @@ pub fn choose_target_with(
             base - 10.0 * c.age_s(tick)
         }
     };
+    // `[ours]` A human in his first second alive is nobody's target.
+    let open = |c: &Contact| {
+        keep(c.last_pos)
+            && c.handle
+                .unit()
+                .is_none_or(|h| !crate::ai::dfocus::just_spawned(sim, h))
+    };
     let mut best: Option<(f32, Foe)> = None;
-    for c in st.contacts.iter().flatten().filter(|c| keep(c.last_pos)) {
+    for c in st.contacts.iter().flatten().filter(|c| open(c)) {
         let s = score(c);
         if best.is_none_or(|(bs, _)| s > bs) {
             best = Some((s, c.handle));
@@ -701,7 +708,7 @@ pub fn choose_target_with(
     let held = st
         .target
         .and_then(|h| contact_of(st, h))
-        .filter(|c| keep(c.last_pos));
+        .filter(|c| open(c));
     match (held, best) {
         // A target that left the memory is dropped at once — no interval, no
         // hysteresis: the unit has nothing to aim at any more.
@@ -1425,6 +1432,44 @@ mod tests {
         assert_eq!(t, Some(bot.into()), "Normal takes the nearer bot");
         let (t, _, human) = pick(Difficulty::Hard.tier());
         assert_eq!(t, Some(human.into()), "Hard leans on the human");
+    }
+
+    /// `[ours]` (the maintainer 2026-10-29): no bot takes a human as its
+    /// target in his first second alive; a bot still may.
+    #[test]
+    fn a_human_is_nobodys_target_in_his_first_second() {
+        let mut s = Sim::empty(31);
+        s.heightfield = Some(ground());
+        let a = s
+            .spawn(&UnitSpec {
+                controller: Controller::Ai,
+                ..UnitSpec::trooper(0, Vec3::ZERO)
+            })
+            .unwrap();
+        let human = s
+            .spawn(&UnitSpec::player_in_slot(0, 1, Vec3::new(0.0, 0.0, -10.0)))
+            .unwrap();
+        crate::ai::dfocus::upkeep(&mut s);
+        let born = s.tick;
+        let mut st = AiState::default();
+        scan(&s, a, &mut st, normal());
+        assert_eq!(st.contacts.iter().flatten().count(), 1, "seen");
+        choose_target(&s, a, &mut st, normal());
+        assert_eq!(st.target, None, "just spawned");
+        s.tick = born + crate::ai::dfocus::UNTARGETED - 1;
+        choose_target(&s, a, &mut st, normal());
+        assert_eq!(st.target, None, "still in his first second");
+        s.tick = born + crate::ai::dfocus::UNTARGETED;
+        choose_target(&s, a, &mut st, normal());
+        assert_eq!(st.target, Some(human.into()), "fair game after a second");
+        let bot = s
+            .spawn(&UnitSpec::trooper(1, Vec3::new(0.0, 0.0, -5.0)))
+            .unwrap();
+        crate::ai::dfocus::upkeep(&mut s);
+        let mut st = AiState::default();
+        scan(&s, a, &mut st, normal());
+        choose_target(&s, a, &mut st, normal());
+        assert_eq!(st.target, Some(bot.into()), "a new bot is a target at once");
     }
 
     /// A unit that LOSES sight aims at the last known position and does not

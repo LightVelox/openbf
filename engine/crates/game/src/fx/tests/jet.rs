@@ -129,3 +129,105 @@ fn the_drawn_bone_carries_the_effect() {
     let e = fx.live().iter().find(|e| e.jet == Some(h)).unwrap();
     assert!(e.frame.pos.abs_diff_eq(Vec3::X * 9.0, 1e-5));
 }
+
+/// A moving jet trooper drawn at 60 Hz between 30 Hz ticks (card RINT): each
+/// frame his jet effect sits on the `bone_ribcage` that frame draws (the
+/// blended pose), not where the last tick left him.
+#[test]
+fn a_moving_jets_effect_rides_the_drawn_body_every_frame() {
+    use crate::soldier_vis::SoldierVisuals;
+    use crate::walk::{ClassVisual, TeamTemplate, WalkSim};
+    use core::sim::PadState;
+    let root = crate::assets::baked_root();
+    let geometry = "rep_inf_jettrooper";
+    if !root
+        .join(format!("side_bf2/soldiers/{geometry}.glb"))
+        .exists()
+    {
+        eprintln!("SKIP: no bf2 {geometry} bake");
+        return;
+    }
+    let Some(lib) = library("bf2", "rep") else {
+        return;
+    };
+    let mut t = TeamTemplate::default_trooper();
+    t.classes = vec![ClassVisual {
+        name: "jet".into(),
+        label: "jet".into(),
+        geometry: Some(geometry.into()),
+        weapon_geometry: None,
+        weapon_hud: Default::default(),
+        held_hud: Vec::new(),
+        held_models: Vec::new(),
+        foley_class: 0,
+        cries: Default::default(),
+        anim: Default::default(),
+        skins: Default::default(),
+        jet_look: Default::default(),
+    }];
+    let mut vis = SoldierVisuals::load_cpu(&root, "bf2", &[t.clone(), t]);
+    let mut fx = Fx::with_library(lib);
+    let ground = core::heightfield::Heightfield {
+        size: 2,
+        unit: 4000.0,
+        offset_x: 2000.0,
+        offset_z: 2000.0,
+        heights: vec![0.0; 4],
+    };
+    let mut w = WalkSim::new(1, Vec3::new(5.0, 20.0, -3.0), Some(ground));
+    w.blend.on = true;
+    let p = w.player.index as usize;
+    {
+        let u = &mut w.sim.units[p];
+        u.consts.max_speed = 7.0;
+        u.consts.jet_push = 8.0;
+        u.consts.jet_acceleration = 30.0;
+        u.consts.jet_hover = true;
+        u.consts.jet_fuel_cost = 0.0;
+        u.consts.jet_control = [1.5, 1.25, 1.25];
+        // Off the ground (the spawn put him on it), hovering.
+        u.soldier.pos.y = 5.0;
+        u.soldier.grounded = false;
+        u.soldier.stance = Stance::Hover;
+        u.soldier.fuel = 1.0;
+    }
+    // Forward and turning: the body moves and turns between ticks.
+    let pad = PadState {
+        ly: i16::MAX,
+        rx: i16::MAX / 3,
+        ..Default::default()
+    };
+    let dt = 1.0 / 60.0;
+    let (mut worst, mut checked) = (0.0f32, 0);
+    let start = w.sim.units[p].soldier.pos;
+    for frame in 0..60 {
+        // The windowed game's tick hook (`main/windowed.rs`).
+        w.advance_with(dt, std::slice::from_ref(&pad), |walk| {
+            fx.follow_jets(&walk.sim, |_| Some("rep_sfx_jetpack"));
+            vis.note_shots(walk);
+        });
+        fx.advance_frame(Some(&mut vis), &mut w, &pad, dt);
+        // What the frame draws: its blended pose, as the draw lists read it.
+        crate::render_blend::blend_in_looking(&mut w, &pad);
+        let drawn = vis.jet_frames(&w)[p];
+        w.blend_out();
+        let (Some(m), Some(e)) = (drawn, fx.live().iter().find(|e| e.jet.is_some())) else {
+            continue;
+        };
+        assert!(w.sim.units[p].soldier.stance.jetting(), "frame {frame}");
+        if frame < 10 {
+            continue;
+        }
+        let off = (e.frame.pos - m.w_axis.truncate()).length();
+        worst = worst.max(off);
+        checked += 1;
+    }
+    let moved = (w.sim.units[p].soldier.pos - start).length();
+    println!("moved {moved:.2} m; worst emitter offset {worst:.4} m over {checked} frames");
+    assert!(moved > 2.0, "he must move: {moved}");
+    assert!(checked >= 40, "{checked}");
+    assert!(
+        worst < 1e-4,
+        "the jet effect is {worst:.3} m off the drawn body"
+    );
+}
