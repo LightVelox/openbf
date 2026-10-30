@@ -213,3 +213,53 @@ fn cutter_feedback_stops_for_lost_full_dead_and_exhausted_owners() {
         }
     }
 }
+
+/// A moving engineer drawn at 60 Hz between 30 Hz ticks (card RINT): each
+/// frame his repair effect sits on the fire point that frame draws (the
+/// blended pose), not where the last tick left him.
+#[test]
+fn a_moving_cutters_effect_rides_the_drawn_muzzle_every_frame() {
+    let Some((mut walk, mut vis, mut fx, pad)) = fixture("bf2") else {
+        return;
+    };
+    walk.blend.on = true;
+    let p = walk.player.index as usize;
+    // Strafing past the station with the cutter on it.
+    let pad = PadState {
+        lx: i16::MAX / 2,
+        ..pad
+    };
+    let dt = 1.0 / 60.0;
+    let start = walk.sim.units[p].soldier.pos;
+    let (mut worst, mut checked) = (0.0f32, 0);
+    for frame in 0..60 {
+        // The windowed game's tick hook (`main/windowed.rs`).
+        walk.advance_with(dt, std::slice::from_ref(&pad), |w| {
+            fx.ingest(w);
+            vis.note_shots(w);
+        });
+        fx.advance_frame(Some(&mut vis), &mut walk, &pad, dt);
+        // What the frame draws: its blended pose, as the draw lists read it.
+        crate::render_blend::blend_in_looking(&mut walk, &pad);
+        let drawn = vis.fire_points(&walk)[p];
+        walk.blend_out();
+        let Some(at) = drawn else { continue };
+        if frame < 6 {
+            continue;
+        }
+        // The fixture runs only the cutter's repair effects.
+        for e in fx.live() {
+            worst = worst.max((e.frame.pos - at).length());
+            checked += 1;
+        }
+    }
+    let moved = (walk.sim.units[p].soldier.pos - start).length();
+    println!("moved {moved:.2} m; worst origin offset {worst:.4} m over {checked} frames");
+    assert!(moved > 1.0, "he must move: {moved}");
+    // The pulses come and go: about a third of the frames run one.
+    assert!(checked >= 15, "{checked}");
+    assert!(
+        worst < 1e-4,
+        "the repair effect is {worst:.3} m off the drawn muzzle"
+    );
+}

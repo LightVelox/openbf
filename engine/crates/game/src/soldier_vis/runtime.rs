@@ -872,6 +872,26 @@ impl SoldierVisuals {
         out
     }
 
+    /// `read` (e.g. [`Self::jet_frames`], [`Self::fire_points`]) as this
+    /// frame draws: under the pose blended between the last two ticks with
+    /// the player's look preview (`render_blend::blend_in_looking`, card
+    /// RINT), the one the soldiers' draw lists read. The walk is left as it
+    /// came.
+    pub fn as_drawn<T>(
+        &self,
+        walk: &mut WalkSim,
+        look: &core::sim::PadState,
+        read: impl FnOnce(&Self, &WalkSim) -> T,
+    ) -> T {
+        if walk.blend.applied() {
+            return read(self, walk);
+        }
+        crate::render_blend::blend_in_looking(walk, look);
+        let out = read(self, walk);
+        walk.blend_out();
+        out
+    }
+
     /// Every drawn unit's weapon fire point in the world, by unit index:
     /// `hp_weapons` × the weapon in hand's `FirePointName` node (the `hp_weapons`
     /// origin when the weapon model has no such node, §4.1). `None` for a

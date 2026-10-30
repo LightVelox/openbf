@@ -215,7 +215,7 @@ fn vehicle_event_launches_then_expires_without_touching_the_sim() {
     assert_eq!(walk.sim.hash(), hash);
     assert!((piece(&c).vel - Vec3::new(5.0, 6.0, 0.0)).length() < 0.00001);
     walk.sim.events.clear();
-    let ticks = (8.0 / core::TICK_DT).ceil() as usize;
+    let ticks = (3.0 / core::TICK_DT).ceil() as usize;
     for _ in 0..ticks - 2 {
         c.tick(&walk, None);
     }
@@ -223,7 +223,7 @@ fn vehicle_event_launches_then_expires_without_touching_the_sim() {
     for _ in 0..3 {
         c.tick(&walk, None);
     }
-    assert_eq!(c.len(), 0, "BF2's default life is 8 s");
+    assert_eq!(c.len(), 0, "the default life is BF1's 3 s on BF2 too");
 }
 
 #[test]
@@ -279,8 +279,8 @@ fn the_budget_hit_gets_no_impulse_and_the_chunk_sinks_and_settles() {
 }
 
 #[test]
-fn a_resting_chunk_lives_eight_seconds_on_bf2_and_three_on_bf1() {
-    for (bf1, life) in [(false, 8.0), (true, 3.0)] {
+fn a_resting_chunk_lives_three_seconds_on_both_games() {
+    for (bf1, life) in [(false, 3.0), (true, 3.0)] {
         let mut c = chunks(spec(Prim::Sphere(0.2)));
         c.bf1 = bf1;
         let walk = flat();
@@ -342,7 +342,7 @@ fn static_chunks_never_move_and_rest_fifty_three_seconds() {
         c.tick(&walk, None);
     }
     assert_eq!(piece(&c).pos, Vec3::Y * 5.0);
-    assert_eq!(piece(&c).life(false), 53.0);
+    assert_eq!(piece(&c).life(), 53.0);
 }
 
 #[test]

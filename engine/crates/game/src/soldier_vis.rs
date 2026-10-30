@@ -610,10 +610,9 @@ struct HoverClock {
 }
 
 /// Seconds a corpse stays drawn, counted from the death (`dead_for`), unless
-/// the slot respawns first. PROVISIONAL and ours: BF1's stance table says
-/// "dead/dying … after 4 s → corpse cleanup" (`analysis/re-stance-roll.md`,
-/// stance 3); adopting it would move captures, not the sim.
-const CORPSE_SECS: f32 = 6.0;
+/// the slot respawns first: the sim's own [`core::soldier::CORPSE_SECS`], so
+/// the body is not drawn after it left the world.
+const CORPSE_SECS: f32 = core::soldier::CORPSE_SECS;
 
 impl WeaponAsset {
     /// The weapon's parts at `m` (the hand's `hp_weapons` in the world),

@@ -14,13 +14,16 @@
 //! +x; 1.48 m up in the bind pose): 0.24 m under it is the bottom of the
 //! dark trooper's pack (its part spans 1.22-1.72 m). PROVISIONAL [H]: the
 //! effect rides the drawn `bone_ribcage` ([`Fx::set_jet_frames`], from
-//! `SoldierVisuals::jet_frames`), else - a soldier drawn without a model,
-//! the tick before his first pose - that bone's bind pose turned to his yaw
-//! ([`jet_frame`]).
+//! `SoldierVisuals::jet_frames`; the windowed game sets it every drawn frame
+//! from the pose that frame draws, [`Fx::advance_frame`]), else - a soldier
+//! drawn without a model, the tick before his first pose - that bone's bind
+//! pose turned to his yaw ([`jet_frame`]).
 
 use super::emitter::Frame;
 use super::Fx;
-use core::sim::Sim;
+use crate::soldier_vis::SoldierVisuals;
+use crate::walk::WalkSim;
+use core::sim::{PadState, Sim};
 use core::unit::Unit;
 use glam::{Mat3, Mat4, Vec3};
 
@@ -70,6 +73,30 @@ impl Fx {
             }
         }
         self.jet_frames = frames;
+    }
+
+    /// The windowed game's effects step for one drawn frame, after its
+    /// ticks: the soldiers' poses advance by `dt`, the effects that ride
+    /// them move onto where this frame draws them, then the effects advance
+    /// (and emit) by `dt`.
+    pub fn advance_frame(
+        &mut self,
+        vis: Option<&mut SoldierVisuals>,
+        walk: &mut WalkSim,
+        look: &PadState,
+        dt: f32,
+    ) {
+        if let Some(vis) = vis {
+            vis.update(walk, dt);
+            // The body is drawn blended between ticks (card RINT) and posed
+            // at this frame's clock: the repair pulses and the jets ride that
+            // body, not the tick's.
+            let (muzzles, jets) =
+                vis.as_drawn(walk, look, |v, w| (v.fire_points(w), v.jet_frames(w)));
+            self.set_repair_origins(&muzzles);
+            self.set_jet_frames(jets);
+        }
+        self.update(dt);
     }
 
     /// Card JETP2: keep a jet effect on every soldier in a jet stance whose
