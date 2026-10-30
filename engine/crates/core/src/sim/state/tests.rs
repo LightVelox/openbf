@@ -247,13 +247,15 @@ fn a_squad_command_is_part_of_the_hash_and_no_command_costs_nothing() {
     // Card DTEAM (2026-10-28) moved it on purpose, 06da5e043dd4c755 ->
     // 26e385b8a5a49460: the format - the scene is one human against none, so
     // the hash eats the per-team bot rows (`Sim::team_rows`).
+    // 2026-10-29 moved it on purpose, 26e385b8a5a49460 -> 5573f2b603ed95f4:
+    // every human's spawn tick is kept (`focus_born`, the untargeted second).
     let mut sim = Sim::new(42);
     for _ in 0..100 {
         sim.step(&[PadState::default()]);
     }
     assert_eq!(
         format!("{:016x}", sim.hash()),
-        "26e385b8a5a49460",
+        "5573f2b603ed95f4",
         "the command-free hash format moved"
     );
 

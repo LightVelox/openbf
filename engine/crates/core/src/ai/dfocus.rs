@@ -84,14 +84,14 @@ fn on_against(sim: &Sim, team: u8) -> bool {
     focuses(sim.difficulty_of(1 - team.min(1)))
 }
 
-/// Once a tick, before the deal: the living humans focused on, and when
-/// each was first seen alive.
+/// Once a tick, before the deal: the living humans, and when each was first
+/// seen alive (the focus grace and [`just_spawned`] read it).
 pub fn upkeep(sim: &mut Sim) {
     let tick = sim.tick;
     let mut born = std::mem::take(&mut sim.focus_born);
-    born.retain(|b| sim.unit(b.human).is_some_and(|u| on_against(sim, u.team)));
+    born.retain(|b| sim.unit(b.human).is_some());
     for (h, u) in sim.alive_units() {
-        if u.is_human() && on_against(sim, u.team) && !born.iter().any(|b| b.human == h) {
+        if u.is_human() && !born.iter().any(|b| b.human == h) {
             born.push(Born { human: h, tick });
         }
     }
@@ -100,10 +100,30 @@ pub fn upkeep(sim: &mut Sim) {
 
 /// Is `human` inside his spawn grace?
 fn in_grace(sim: &Sim, human: UnitHandle) -> bool {
+    alive_under(sim, human, GRACE)
+}
+
+/// `[ours]` No bot takes a human as its target this long after he spawns
+/// (ticks; the maintainer 2026-10-29).
+pub const UNTARGETED: u64 = S;
+
+/// Is `human` a human the upkeep saw spawn under [`UNTARGETED`] ago? (The
+/// upkeep runs every tick before the thinks, so a spawn is recorded on his
+/// first tick alive.)
+pub fn just_spawned(sim: &Sim, human: UnitHandle) -> bool {
+    sim.unit(human).is_some_and(Unit::is_human)
+        && sim
+            .focus_born
+            .iter()
+            .any(|b| b.human == human && sim.tick < b.tick + UNTARGETED)
+}
+
+/// Has `human` been alive under `ticks` (no record yet: he spawned this tick)?
+fn alive_under(sim: &Sim, human: UnitHandle, ticks: u64) -> bool {
     sim.focus_born
         .iter()
         .find(|b| b.human == human)
-        .is_none_or(|b| sim.tick < b.tick + GRACE)
+        .is_none_or(|b| sim.tick < b.tick + ticks)
 }
 
 /// How far bot `b` may focus human `h` from (m), or `None`: none of its

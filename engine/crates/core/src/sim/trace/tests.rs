@@ -163,14 +163,15 @@ fn limits_header_injection_and_io_errors_are_not_silent() {
 #[test]
 fn original_hash_pins_without_tracing() {
     // Card DTEAM (2026-10-28) moved both: one human against none, so the
-    // hash eats the per-team bot rows (`Sim::team_rows`).
+    // hash eats the per-team bot rows (`Sim::team_rows`). 2026-10-29 moved
+    // both again: every human's spawn tick is kept (`focus_born`).
     let mut sim = Sim::new(42);
     for _ in 0..100 {
         sim.step(&[PadState::default()]);
     }
-    assert_eq!(sim.hash(), 0x26e3_85b8_a5a4_9460);
+    assert_eq!(sim.hash(), 0x5573_f2b6_03ed_95f4);
     for _ in 100..600 {
         sim.step(&[PadState::default()]);
     }
-    assert_eq!(sim.hash(), 0xc149_3672_b357_563b);
+    assert_eq!(sim.hash(), 0x5c54_58c8_927f_122b);
 }

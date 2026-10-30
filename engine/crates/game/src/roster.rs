@@ -1185,7 +1185,8 @@ fn impact_explosion<'a>(db: &'a ClassDb, ordnance: &str) -> Option<&'a str> {
 /// sent troops flying since every push knocks the living (issue #32); it hits
 /// harder than a rifle but does not throw like a grenade. Matched along the
 /// class chain.
-pub const PUSH_SPARES_THE_LIVING: &[&str] = &["com_weap_inf_bulldog_exp"];
+pub const PUSH_SPARES_THE_LIVING: &[&str] =
+    &["com_weap_inf_bulldog_exp", "com_weap_inf_incinerator_exp"];
 
 /// A soldier class's chunk death (card DROIDDEATH, `analysis/re-droid-death.md`
 /// §1-§2): only a class with chunk geometry (`ChunkGeometryName` in its
