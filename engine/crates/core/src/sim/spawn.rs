@@ -100,8 +100,6 @@ const CAROUSEL: u32 = buttons::SPAWN_CLASS_NEXT
 pub enum ClassRefusal {
     /// "Get %d more points to unlock!": this many more points.
     Points(u32),
-    /// "Too many units already!": an unlock class at its max.
-    TooMany,
 }
 
 impl SideChoice {

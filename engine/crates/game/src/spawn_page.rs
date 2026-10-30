@@ -69,36 +69,22 @@ pub fn page(
                 .get(pick)
                 .cloned()
                 .unwrap_or_else(|| class.label.clone());
-            // The refusal line first, then "Unit Count: %d" - with "Max: %d"
-            // for a class with a cost (`FUN_00396430`, B2:392035-392058,
-            // re-spawn-flow §4.3); the count is the team's members on the
-            // field in this class (`FUN_0036f538`).
+            // The refusal line first, then "Unit Count: %d" (`FUN_00396430`,
+            // B2:392035-392058, re-spawn-flow §4.3); the count is the team's
+            // members on the field in this class (`FUN_0036f538`). `[ours]`:
+            // no "Max: %d" - no class has a max (2026-10-29).
             let mut text = match walk.sim.class_refusal(slot, team, pick) {
                 Some(ClassRefusal::Points(n)) => feed
                     .text_by_hash(0x155a_b074, "Get %d more points to unlock!\r\n")
                     .replacen("%d", &n.to_string(), 1),
-                Some(ClassRefusal::TooMany) => {
-                    feed.text_by_hash(0xd3cd_201e, "Too many units already!\r\n")
-                }
                 None => String::new(),
             };
             let count = walk.sim.class_count(team, pick);
-            let max = walk.sim.classes[usize::from(team)]
-                .get(pick)
-                .and_then(|c| c.max.filter(|_| c.unlock_points >= 1));
-            match max {
-                Some(max) => text.push_str(
-                    &feed
-                        .text_by_hash(0xcb22_a09f, "Unit Count: %d  Max: %d\r\n\r\n")
-                        .replacen("%d", &count.to_string(), 1)
-                        .replacen("%d", &max.to_string(), 1),
-                ),
-                None => text.push_str(
-                    &feed
-                        .text_by_hash(0xecf8_496f, "Unit Count: %d\r\n\r\n")
-                        .replacen("%d", &count.to_string(), 1),
-                ),
-            }
+            text.push_str(
+                &feed
+                    .text_by_hash(0xecf8_496f, "Unit Count: %d\r\n\r\n")
+                    .replacen("%d", &count.to_string(), 1),
+            );
             text.push_str(&feed.text_by_hash(0xfe98_f5cf, "Equipment:"));
             text.push('\n');
             // The primary first, then the other slots in slot order.
@@ -274,7 +260,7 @@ mod tests {
                     lines[..2],
                     [
                         "Get 7 more points to unlock!".to_owned(),
-                        format!("Unit Count: {mates}  Max: 4"),
+                        format!("Unit Count: {mates}"),
                     ]
                 );
                 assert_eq!(refused & 1, 1);
@@ -284,19 +270,19 @@ mod tests {
         w.sim.set_spawn_points(0, 12);
         match page(&w, &feed, 0) {
             Some(SpawnPage::Class { lines, refused, .. }) => {
-                assert_eq!(lines[0], format!("Unit Count: {mates}  Max: 4"));
+                assert_eq!(lines[0], format!("Unit Count: {mates}"));
                 assert_eq!(refused & 1, 0);
             }
             p => panic!("{p:?}"),
         }
         // Card UNLK3: the career's cost (half at 50 kills) sets the line and
-        // the silhouette; the max line stays.
+        // the silhouette.
         w.sim.set_spawn_costs(0, team as u8, vec![6]);
         w.sim.set_spawn_points(0, 4);
         match page(&w, &feed, 0) {
             Some(SpawnPage::Class { lines, refused, .. }) => {
                 assert_eq!(lines[0], "Get 2 more points to unlock!");
-                assert_eq!(lines[1], format!("Unit Count: {mates}  Max: 4"));
+                assert_eq!(lines[1], format!("Unit Count: {mates}"));
                 assert_eq!(refused & 1, 1);
             }
             p => panic!("{p:?}"),
@@ -305,7 +291,7 @@ mod tests {
         w.sim.set_spawn_points(0, 0);
         match page(&w, &feed, 0) {
             Some(SpawnPage::Class { lines, refused, .. }) => {
-                assert_eq!(lines[0], format!("Unit Count: {mates}  Max: 4"));
+                assert_eq!(lines[0], format!("Unit Count: {mates}"));
                 assert_eq!(refused & 1, 0, "unlocked for good");
             }
             p => panic!("{p:?}"),
