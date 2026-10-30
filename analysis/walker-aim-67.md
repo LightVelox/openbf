@@ -231,11 +231,11 @@ The unit test `walk::walker_view::tests::camera_matches_paused_geonosis_main_gun
 
 ### Tracers and gun sounds
 
-`game/src/walker_shots.rs` reads each walker weapon's authored presentation: the tracer look from `SecondaryOrdnanceName` (class, glow and blur lengths), the fire sound from the class table's `0x2298cae8` property (the AT-TE chaingun resolves to `tur_weap_fly_chaingun_fire`), and `SecondaryOrdnancePeriod` as the tracer interval (3 on that chaingun, so every third shot draws a streak). `frame` resolves a shot's fire point through the same posed rig the muzzle flash uses, and `ordinal` maps the event to the weapon's shot counter so a multi-barrel seat alternates its authored points. The drawn streak starts at that point and ends at the sim's impact; the sim's projectile path is untouched.
+`game/src/walker_shots.rs` reads each walker weapon's authored presentation: the tracer look from `SecondaryOrdnanceName` (class, glow and blur lengths), the fire sound from the class table's `0x2298cae8` property (the AT-TE rear gun resolves to `rep_weap_walk_atte_chaingun_fire`), and `SecondaryOrdnancePeriod` as the tracer interval (3 on that gun, so every third shot draws a streak). `frame` resolves a shot's fire point through the same posed rig the muzzle flash uses, and `ordinal` maps the event to the weapon's shot counter so a multi-barrel seat alternates its authored points. The drawn streak starts at that point and ends at the sim's impact; the sim's projectile path is untouched.
 
 `SoundLib::walker_fire_loops` (`game/src/sounds/walker.rs`) keeps one positioned loop voice per firing seat/weapon, gated on the same `fire_cmd`, `shots_fired`, reload and overheat state as the sim, and drops it when the trigger is released. One-shot `Event::Shot` sounds keep their existing path, so a burst is a loop plus its shot reports, positioned at the walker.
 
-`WarmUpSound` (`tur_weap_fly_chaingun_spin`) is authored on the same guns but is deliberately not read: the sim has no spin-up phase, and firing starts on the first held tick. Playing it on an invented trigger would misreport the original, so the field is not carried; this remains a known gap.
+`WarmUpSound` (`rep_weap_walk_atte_chaingun_spin` on the AT-TE rear gun) is authored on the same guns but is deliberately not read: the sim has no spin-up phase, and firing starts on the first held tick. Playing it on an invented trigger would misreport the original, so the field is not carried; this remains a known gap.
 
 ### Armed-seat HUD
 
