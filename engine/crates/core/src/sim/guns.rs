@@ -430,6 +430,21 @@ impl Sim {
                 .shaped(&self.weapon_classes[w.class].ordnance);
                 let mut bolt = bolt;
                 bolt.charge = spec.charge;
+                // A seat's missile (card UORD §4): the cannon-class wrist
+                // rockets pass their held target at every shot
+                // (`re-ordnance-kinds.md` §5), so the vehicle gun's own
+                // `ai.target` / crewman's target is its lock, with no dwell.
+                if let Some(mc) = self.weapon_classes[w.class].ordnance.missile {
+                    let ord = self.weapon_classes[w.class].ordnance.clone();
+                    let target = self
+                        .units
+                        .get(h.index as usize)
+                        .filter(|u| u.gen == h.gen)
+                        .and_then(|u| u.ai.target)
+                        .and_then(|f| f.unit())
+                        .map(crate::missile::MissileTarget::Unit);
+                    bolt.as_missile(&ord, &mc, target, &mut self.lcg);
+                }
                 if ai {
                     self.nav_stats.ai_shots += 1;
                     self.nav_stats.seat_shots += 1;

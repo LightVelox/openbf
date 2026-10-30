@@ -126,39 +126,14 @@ impl Sim {
     /// bolt's spawn ray meets them; soldiers and hulls are the per-tick sweep
     /// that follows ([`Sim::sweep_bolts`]).
     pub(super) fn fly_shells(&mut self, dt: f32) {
+        for b in self.bolts.iter_mut() {
+            if b.gravity > 0.0 && b.hit == crate::projectile::Hit::None {
+                b.vel.y -= b.gravity * dt;
+            }
+        }
         for k in 0..self.bolts.len() {
-            let b = &mut self.bolts[k];
-            if b.gravity <= 0.0 || b.hit != crate::projectile::Hit::None {
-                continue;
-            }
-            b.vel.y -= b.gravity * dt;
-            let speed = b.vel.length();
-            if speed <= 1e-4 {
-                continue;
-            }
-            let (pos, dir, step) = (b.pos, b.vel / speed, dt.min(b.remaining.max(0.0)));
-            let who = Shooter {
-                owner: b.owner,
-                team: b.team,
-                weapon_class: b.weapon_class,
-                is_player: b.shooter_is_player,
-            };
-            let hulls = b.hulls;
-            // `Bolt::fire`'s rays: a rider's shell passes his own building.
-            let probe = Bolt::fire(
-                pos,
-                dir,
-                speed,
-                step,
-                who,
-                self.heightfield.as_ref(),
-                self.water_plane(),
-                &self.collision,
-                hulls,
-            );
-            if probe.hit != crate::projectile::Hit::None {
-                let b = &mut self.bolts[k];
-                (b.hit, b.end, b.remaining) = (probe.hit, probe.end, probe.remaining);
+            if self.bolts[k].gravity > 0.0 {
+                self.probe_flight(k, dt);
             }
         }
     }
@@ -248,6 +223,24 @@ impl Sim {
                 weapon_class: stage,
                 ..who
             };
+            // The launcher's dwell lock (card UORD §5): a missile leaves
+            // guided only when the clock reached LockTime; the shot consumes
+            // the lock (B1 class+0x258 && +0x254) either way.
+            let lock = {
+                let st = match held_slot {
+                    Some(k) => &self.units[i].held[k].state,
+                    None => &self.units[i].weapon,
+                };
+                st.locked(wc)
+            };
+            let lock_target = if lock {
+                match held_slot {
+                    Some(k) => self.units[i].held[k].state.lock_target,
+                    None => self.units[i].weapon.lock_target,
+                }
+            } else {
+                None
+            };
             // The round's speed and life at its charge (its ordnance's charge
             // points, re-weapon-charge §4).
             let blend = wc.ordnance.charged(spec.charge);
@@ -264,6 +257,16 @@ impl Sim {
             )
             .shaped(&self.weapon_classes[stage].ordnance);
             bolt.charge = spec.charge;
+            if let Some(mc) = self.weapon_classes[stage].ordnance.missile {
+                let ord = self.weapon_classes[stage].ordnance.clone();
+                bolt.as_missile(&ord, &mc, lock_target, &mut self.lcg);
+                let st = match held_slot {
+                    Some(k) => &mut self.units[i].held[k].state,
+                    None => &mut self.units[i].weapon,
+                };
+                st.lock_target = None;
+                st.lock_held = 0.0;
+            }
             self.events.push(Event::Shot {
                 unit,
                 weapon_class: stage as u32,

@@ -1097,6 +1097,7 @@ mod tests {
             hit_mult: 1.0,
             gravity: 0.0,
             charge: 1.0,
+            missile: None,
         }
     }
 

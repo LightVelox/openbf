@@ -60,6 +60,7 @@ fn bolt(pos: Vec3, vel: Vec3, team: u8, owner: UnitHandle) -> Bolt {
         hit_mult: 1.0,
         gravity: 0.0,
         charge: 1.0,
+        missile: None,
     }
 }
 

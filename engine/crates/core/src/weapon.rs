@@ -176,6 +176,13 @@ pub struct WeaponClass {
     pub ai_bubble_clamp: f32,
     /// > 0 = charge weapon (fires on release).
     pub max_pressed_time: f32,
+    /// `LockTime` (card UORD §5; B1 launcher `FUN_00290758` B1:217008 writes
+    /// W.class+0x250, B2 `FUN_0033acc8` B2:332061): seconds a launcher must
+    /// dwell on a target before a missile it fires homes. 0 = never. Read
+    /// only on a `launcher` class - the PS2 parses the key in the launcher
+    /// setter alone, so a cannon's `LockTime` (the wrist rockets') does
+    /// nothing.
+    pub lock_time: f32,
     pub lock_on_range: f32,
     /// The acquisition cone's slope, radians (C+0xd8: `LockOnAngle` × DEG, or
     /// `AutoAimSize` × 0.072; `analysis/re-aim-assist.md` §3.2). 0 = a cone
@@ -380,6 +387,7 @@ impl Default for WeaponClass {
             ai_bubble_dist: 20.0,
             ai_bubble_clamp: 10.0,
             max_pressed_time: 0.0,
+            lock_time: 0.0,
             lock_on_range: 0.0,
             lock_on_angle: 0.0,
             extreme_range: 0.0,
@@ -512,6 +520,7 @@ impl WeaponClass {
             ai_bubble_dist: 20.0,
             ai_bubble_clamp: 10.0,
             max_pressed_time: 0.0,
+            lock_time: 0.0,
             lock_on_range: 64.0,
             // LockOnAngle 1.0; the bolt's reach 80 × 1.5 (OrdnanceName after
             // LockOnRange); TargetEnemy 1, TargetPerson/Animal/Droid 1,
@@ -569,6 +578,7 @@ impl WeaponClass {
                 expire: None,
                 knots: Vec::new(),
                 min_damage: None,
+                missile: None,
                 impact: Some(crate::impact::ImpactLook {
                     soft: Some("ord_explosion".into()),
                     rigid: Some("ord_explosion".into()),
@@ -612,6 +622,7 @@ impl WeaponClass {
     pub fn bf2_rifle() -> Self {
         Self {
             name: "com_weap_inf_rifle".into(),
+            lock_time: 0.0,
             lock_on_range: 40.0,
             // The bolt's reach 160 × 0.8 (the BF1 rule, PROVISIONAL for BF2:
             // B2 FUN_00328fb0's OrdnanceName default is unread). The Target*
@@ -659,6 +670,7 @@ impl WeaponClass {
                 expire: None,
                 knots: Vec::new(),
                 min_damage: None,
+                missile: None,
                 impact: Some(crate::impact::ImpactLook {
                     soft: Some("com_sfx_ord_exp".into()),
                     rigid: Some("com_sfx_ord_exp".into()),
@@ -1167,6 +1179,11 @@ pub struct WeaponState {
     /// "plenty of ammunition" asks (`re-grenades.md` 7.5). NOT hashed: a
     /// constant of the unit's class and slot.
     pub issued: u32,
+    /// The dwell lock's candidate (card UORD §5, the PS2's W+0x128 / +0x170)
+    /// and the seconds it has been held. A launcher's missile homes only when
+    /// [`WeaponState::locked`] says so at the press.
+    pub lock_target: Option<crate::missile::MissileTarget>,
+    pub lock_held: f32,
 }
 
 impl WeaponState {
@@ -1200,7 +1217,16 @@ impl WeaponState {
             issued: class
                 .rounds_per_clip
                 .saturating_add(reserve_clips.saturating_mul(class.rounds_per_clip)),
+            lock_target: None,
+            lock_held: 0.0,
         }
+    }
+
+    /// Is the launcher's dwell lock up (card UORD §5)? The class must be a
+    /// launcher (`LockTime > 0`), the candidate alive, and the clock at the
+    /// limit.
+    pub fn locked(&self, c: &WeaponClass) -> bool {
+        c.lock_time > 0.0 && self.lock_target.is_some() && self.lock_held >= c.lock_time
     }
 
     /// The PS2's ammo rule for a class slot (`re-grenades.md` §2.5, B1
@@ -1605,6 +1631,22 @@ impl WeaponState {
         if self.tilt_index != 0 {
             eat(b"tilt");
             eat(&self.tilt_index.to_le_bytes());
+        }
+        if let Some(t) = self.lock_target {
+            eat(b"LOCK");
+            match t {
+                crate::missile::MissileTarget::Unit(h) => {
+                    eat(&[0]);
+                    eat(&h.index.to_le_bytes());
+                    eat(&h.gen.to_le_bytes());
+                }
+                crate::missile::MissileTarget::Vehicle(h) => {
+                    eat(&[1]);
+                    eat(&h.index.to_le_bytes());
+                    eat(&h.gen.to_le_bytes());
+                }
+            }
+            eat(&self.lock_held.to_bits().to_le_bytes());
         }
     }
 }

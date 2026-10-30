@@ -20,6 +20,7 @@ pub mod impact;
 pub mod laser;
 pub mod lcg;
 pub mod mine;
+pub mod missile;
 pub mod music;
 pub mod nav;
 pub mod perception;

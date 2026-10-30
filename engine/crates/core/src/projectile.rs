@@ -83,6 +83,9 @@ pub struct Bolt {
     /// The charge it was fired at: its damage's blend
     /// (`OrdnanceClass::damage_desc_charged`); 1.0 for an uncharged weapon.
     pub charge: f32,
+    /// A `missile` round's steering state (card UORD,
+    /// [`crate::missile::Missile`]): `None` on every other ordnance.
+    pub missile: Option<crate::missile::Missile>,
 }
 
 /// Who fired (carried by the bolt for damage attribution + friendly fire).
@@ -183,6 +186,36 @@ impl Bolt {
         if self.hit_mult != 1.0 {
             eat(b"HITMULT");
             eat(&self.hit_mult.to_bits().to_le_bytes());
+        }
+        if let Some(m) = self.missile {
+            eat(b"MSL");
+            for v in [
+                m.dir.x,
+                m.dir.y,
+                m.dir.z,
+                m.launch.x,
+                m.launch.y,
+                m.launch.z,
+                m.ramp,
+                m.speed,
+                m.phases[0],
+                m.phases[1],
+            ] {
+                eat(&v.to_bits().to_le_bytes());
+            }
+            match m.target {
+                None => eat(&[0]),
+                Some(crate::missile::MissileTarget::Unit(h)) => {
+                    eat(&[1]);
+                    eat(&h.index.to_le_bytes());
+                    eat(&h.gen.to_le_bytes());
+                }
+                Some(crate::missile::MissileTarget::Vehicle(h)) => {
+                    eat(&[2]);
+                    eat(&h.index.to_le_bytes());
+                    eat(&h.gen.to_le_bytes());
+                }
+            }
         }
     }
 
@@ -356,6 +389,7 @@ impl Bolt {
             hit_mult: 1.0,
             gravity: 0.0,
             charge: 1.0,
+            missile: None,
         }
     }
 
@@ -389,6 +423,46 @@ impl Bolt {
             self.age += dt;
         }
         over
+    }
+
+    /// A `missile` round as its class flies it (card UORD,
+    /// `re-ordnance-kinds.md` §4): no predictive ray - the world is met on
+    /// its own flight each tick (`Sim::fly_missiles`, the shells' path) - no
+    /// gravity, and the steering state of [`crate::missile::Missile`].
+    pub fn as_missile(
+        &mut self,
+        o: &crate::weapon::OrdnanceClass,
+        c: &crate::missile::MissileClass,
+        target: Option<crate::missile::MissileTarget>,
+        lcg: &mut crate::lcg::GameLcg,
+    ) {
+        self.hit = Hit::None;
+        self.gravity = 0.0;
+        self.remaining = o.life_span;
+        self.end = self.pos + self.vel * o.life_span;
+        self.missile = Some(crate::missile::Missile::launch(
+            c, self.vel, o.velocity, target, lcg,
+        ));
+    }
+
+    /// Steer a missile one update (`re-ordnance-kinds.md` §4.3) and write its
+    /// velocity. `aim` is the target's point this tick, `None` when the round
+    /// has no target. Returns whether it still has one.
+    pub fn guide(
+        &mut self,
+        c: &crate::missile::MissileClass,
+        aim: Option<Vec3>,
+        dt: f32,
+        lcg: &mut crate::lcg::GameLcg,
+    ) -> bool {
+        let Some(m) = self.missile.as_mut() else {
+            return false;
+        };
+        if m.target.is_some() && aim.is_none() {
+            m.target = None;
+        }
+        self.vel = m.step(c, aim, self.pos, dt, lcg);
+        m.target.is_some()
     }
 }
 

@@ -75,6 +75,10 @@ pub struct OrdnanceClass {
     /// damage is lerp(Damage, MaxDamage, charge) (B1 `FUN_00278208`
     /// 199074-199075). None: `max_damage` whatever the charge.
     pub min_damage: Option<f32>,
+    /// A `missile` class's steering keys (card UORD,
+    /// [`crate::missile::MissileClass`]); `None` for every other base. Filled
+    /// by the class loader.
+    pub missile: Option<crate::missile::MissileClass>,
 }
 
 impl Default for OrdnanceClass {
@@ -101,6 +105,7 @@ impl Default for OrdnanceClass {
             expire: None,
             knots: Vec::new(),
             min_damage: None,
+            missile: None,
         }
     }
 }

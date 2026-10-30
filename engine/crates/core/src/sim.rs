@@ -47,6 +47,7 @@ mod guns;
 mod input;
 mod look;
 mod mines;
+mod missiles;
 mod ordnance;
 mod pickups;
 mod remotes;

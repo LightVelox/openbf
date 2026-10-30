@@ -221,6 +221,7 @@ fn a_bolt_kill_is_decided_at_the_death_block_deterministically() {
                 hit_mult: 1.0,
                 gravity: 0.0,
                 charge: 1.0,
+                missile: None,
             });
             assert!(!s.units[v.index as usize].alive);
             assert!(s

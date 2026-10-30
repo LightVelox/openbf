@@ -496,6 +496,9 @@ impl Sim {
             let steer = super::input::Steer::of(&p);
             self.acquire_magnet_steering(slot, ph, p.pressed(buttons::FIRE), steer);
         }
+        // 2a. The launchers' dwell locks (card UORD §5): a human's magnet
+        //     target, a bot's combat target, counted against LockTime.
+        self.tick_locks(dt);
 
         // 2b. DOORS (DR2): open or close by who stands in their triggers
         //     now, before anyone moves against their boxes (`crate::door`;
@@ -974,6 +977,7 @@ impl Sim {
         // 5. Bolt flight + impacts (in spawn order): first what each bolt
         //    passes through on this tick's flight (issue #41).
         self.tick_cloaks(dt);
+        self.fly_missiles(dt);
         self.fly_shells(dt);
         self.sweep_bolts(dt);
         let mut done = Vec::new();

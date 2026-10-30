@@ -438,9 +438,9 @@ impl Sim {
                 self.bolt_explodes(b);
             }
             Hit::None => {
-                // A shell out of life bursts in the air with its
-                // ExplosionExpire (re-ordnance-kinds §6).
-                if b.gravity > 0.0 {
+                // A shell or a missile out of life bursts in the air with
+                // its ExplosionExpire (re-ordnance-kinds §4.3, §6).
+                if b.gravity > 0.0 || b.missile.is_some() {
                     if let Some(e) = self.weapon_classes[b.weapon_class].ordnance.expire.clone() {
                         self.explode(&e, b.pos, Some(b.owner), Some(b.team));
                     }
@@ -723,6 +723,7 @@ mod tests {
             hit_mult: 1.0,
             gravity: 0.0,
             charge: 1.0,
+            missile: None,
         };
         s.resolve_bolt(&bolt(old));
         assert_eq!(s.nav_stats.ai_hits, 0, "new AI is not the old idle shooter");
@@ -822,6 +823,7 @@ mod tests {
             hit_mult: 1.0,
             gravity: 0.0,
             charge: 1.0,
+            missile: None,
         };
         let hp = |s: &Sim, h: UnitHandle| s.unit(h).unwrap().health.cur;
         s.resolve_bolt(&bolt(bot, human, false));
@@ -870,6 +872,7 @@ mod tests {
             hit_mult: 1.0,
             gravity: 0.0,
             charge: 1.0,
+            missile: None,
         });
         let u = &s.units[v.index as usize];
         assert!(!u.alive && u.body);
@@ -928,6 +931,7 @@ mod tests {
             hit_mult: 1.0,
             gravity: 0.0,
             charge: 1.0,
+            missile: None,
         };
         let world = || {
             let mut s = Sim::empty(3);
@@ -1664,6 +1668,7 @@ mod tests {
                 hit_mult: 1.0,
                 gravity: 0.0,
                 charge: 1.0,
+                missile: None,
             });
             for _ in 0..3 {
                 s.step(&[]);

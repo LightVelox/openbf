@@ -778,6 +778,16 @@ fn fired_ordnance(db: &ClassDb, ord_name: &str) -> OrdnanceClass {
         .engine_base(ord_name)
         .map_or(OrdKind::Other, OrdKind::from_base);
     charge_points(db, ord_name, &mut ord);
+    if ord.kind == OrdKind::Missile {
+        // Its steering keys (card UORD §4.1): TurnRate, the waver pair, the
+        // ramp period, and BF2's MinSpeed / Acceleration.
+        let mut m = core::missile::MissileClass::from_props(&ClassSrc {
+            db,
+            class: ord_name,
+        });
+        m.ramps = db.is_bf2();
+        ord.missile = Some(m);
+    }
     if ord.kind == OrdKind::Shell {
         // Its fall, and its burst when its life runs out in the air
         // (re-ordnance-kinds §6).
@@ -860,6 +870,16 @@ fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<Wea
             db,
             class: &ord_name,
         });
+    }
+    // The dwell lock (card UORD §5): the PS2 parses `LockTime` in the
+    // launcher setter alone, so a cannon that authors it (the wrist rockets)
+    // never holds a lock. `weapon_stage` holds the replayed stage keys, so a
+    // stage does not inherit its root's.
+    if db.engine_base(weapon) == Some("launcher") {
+        w.lock_time = wsrc
+            .prop("LockTime")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0.0);
     }
     // The offsets: the count key starts a stage's table and its pairs follow
     // (the bowcaster authors one per stage, re-blaster-damage.md §3.3); a
