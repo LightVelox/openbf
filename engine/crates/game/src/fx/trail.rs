@@ -28,10 +28,24 @@ pub(super) struct Rounds {
 impl Rounds {
     /// Match each survivor once using its next age and position, so collinear shots
     /// and identical pellets retain separate visual identities without sim state.
+    /// A missile is the exception: the steering law turns it BEFORE it moves
+    /// (`Sim::fly_missiles`, card UORD), so `pos + vel dt` is not where the
+    /// next tick's read finds it. Its
+    /// [`key`](crate::bolt_vis::key) is stable for the whole flight and its
+    /// own (the launch line and the ctor's waver phases), so it is matched on
+    /// that alone — one trail per missile, not one per tick of its curve.
     fn bolt_ids(&mut self, sim: &Sim) -> Vec<u64> {
         let mut previous: HashMap<_, VecDeque<u64>> = HashMap::new();
+        let mut steering: HashMap<crate::bolt_vis::Key, VecDeque<u64>> = HashMap::new();
         if self.tick.and_then(|t| t.checked_add(1)) == Some(sim.tick) {
             for (b, id) in &self.bolts {
+                if b.missile.is_some() {
+                    steering
+                        .entry(crate::bolt_vis::key(b))
+                        .or_default()
+                        .push_back(*id);
+                    continue;
+                }
                 let pos = b.pos + b.vel * core::TICK_DT.min(b.remaining.max(0.0));
                 previous
                     .entry((
@@ -47,18 +61,24 @@ impl Rounds {
             .bolts
             .iter()
             .map(|b| {
-                previous
-                    .get_mut(&(
-                        crate::bolt_vis::key(b),
-                        b.age.to_bits(),
-                        b.pos.to_array().map(f32::to_bits),
-                    ))
-                    .and_then(VecDeque::pop_front)
-                    .unwrap_or_else(|| {
-                        let id = self.next;
-                        self.next += 1;
-                        id
-                    })
+                let flown = if b.missile.is_some() {
+                    steering
+                        .get_mut(&crate::bolt_vis::key(b))
+                        .and_then(VecDeque::pop_front)
+                } else {
+                    previous
+                        .get_mut(&(
+                            crate::bolt_vis::key(b),
+                            b.age.to_bits(),
+                            b.pos.to_array().map(f32::to_bits),
+                        ))
+                        .and_then(VecDeque::pop_front)
+                };
+                flown.unwrap_or_else(|| {
+                    let id = self.next;
+                    self.next += 1;
+                    id
+                })
             })
             .collect();
         self.bolts = sim.bolts.iter().cloned().zip(ids.iter().copied()).collect();
@@ -301,5 +321,75 @@ mod tests {
             assert_eq!(attached[0].round, Some(ids[1]));
             assert_eq!(attached[0].frame.pos, sim.bolts[0].pos);
         }
+    }
+
+    /// A missile steers before it moves (`Sim::fly_missiles`), so its next
+    /// place is not `pos + vel dt`: matched that way it would be a new round
+    /// every tick and spawn a trail emitter per tick of its curve. Its
+    /// key alone identifies it (card UORD).
+    #[test]
+    fn a_steered_missiles_trail_identity_survives_its_turns() {
+        let mut sim = Sim::empty(1);
+        let mut w = WeaponClass::bf1_rifle();
+        let o = &mut w.ordnance;
+        o.kind = core::weapon::OrdKind::Missile;
+        o.velocity = 40.0;
+        o.life_span = 4.0;
+        o.missile = Some(core::missile::MissileClass {
+            turn_rate: 2.0,
+            ..core::missile::MissileClass::default()
+        });
+        let wc = sim.add_weapon_class(w);
+        let mut bolt = Bolt {
+            pos: Vec3::ZERO,
+            vel: Vec3::NEG_Z * 40.0,
+            remaining: 4.0,
+            age: 0.0,
+            owner: UnitHandle { index: 0, gen: 0 },
+            team: 0,
+            weapon_class: wc,
+            hit: Hit::None,
+            end: Vec3::NEG_Z * 160.0,
+            shooter_is_player: true,
+            hulls: core::collision::HullFilter::All,
+            hit_mult: 1.0,
+            gravity: 0.0,
+            charge: 1.0,
+            missile: None,
+        };
+        let ord = sim.weapon_classes[wc].ordnance.clone();
+        let mc = *ord.missile.as_ref().unwrap();
+        bolt.as_missile(&ord, &mc, None, &mut sim.lcg);
+        let start = bolt.vel;
+        sim.bolts = vec![bolt];
+        let mut rounds = Rounds::default();
+        let mut first: Option<Vec<u64>> = None;
+        for tick in 0..10 {
+            // `follow_rounds`' bookkeeping: read this tick, then mark it.
+            let ids = rounds.bolt_ids(&sim);
+            rounds.tick = Some(sim.tick);
+            match &first {
+                None => {
+                    assert_eq!(ids.len(), 1);
+                    first = Some(ids);
+                }
+                Some(f) => assert_eq!(ids, *f, "tick {tick}: one missile, one trail"),
+            }
+            let lcg = &mut sim.lcg;
+            for b in &mut sim.bolts {
+                // The tick's order: turn toward the target, then move.
+                b.guide(&mc, Some(Vec3::new(30.0, 0.0, 0.0)), core::TICK_DT, lcg);
+                b.advance(core::TICK_DT);
+            }
+            sim.tick += 1;
+        }
+        assert!(
+            sim.bolts[0]
+                .vel
+                .normalize()
+                .angle_between(start.normalize())
+                > 0.1,
+            "the fixture did turn"
+        );
     }
 }

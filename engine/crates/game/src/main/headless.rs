@@ -272,6 +272,9 @@ fn append_events(csv: &mut String, tick: usize, events: &[core::sim::Event]) {
             Event::Shot {
                 unit, weapon_class, ..
             } => format!("{tick},shot,{},{weapon_class},\n", unit.index),
+            // An emitter's arc; `game::fx` draws it and the `hit` lines
+            // beside it carry the damage.
+            Event::Emitter { .. } => continue,
             Event::Hit {
                 shooter,
                 victim,

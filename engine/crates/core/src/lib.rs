@@ -12,6 +12,7 @@ pub mod commander;
 pub mod cp;
 pub mod door;
 pub mod droideka;
+pub mod emitter;
 pub mod flash;
 pub mod fmath;
 pub mod guided;

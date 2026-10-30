@@ -180,8 +180,13 @@ fn sbd_fires_bolts_and_rockets_with_identical_gameplay_on_both_map_sets() {
             }));
         }
         let hp = sim.unit(target).unwrap().health.cur;
-        // The hit is a tick younger than its landing update (card SGDMG).
-        assert_eq!(rocket_damage, vec![120.0, 250.0]);
+        // The direct hit is the arming curve at the age its landing update
+        // began with (card SGDMG); the round now really flies, so the curve
+        // has run longer: it leaves at MinSpeed 20 and accelerates at 80 m/s^2
+        // (card UORD), and its 8 m flight bills 100 + 150 x (0.2333 / 0.5).
+        // Both map sets fly the same BF2 donor ordnance (roster::WEAPON_DONORS),
+        // so both discs read the same 170 and the 250 blast.
+        assert_eq!(rocket_damage, vec![170.0, 250.0], "{game}");
         outcomes.push((hp, shots, rocket_shots));
     }
     if outcomes.len() == 2 {
@@ -597,10 +602,11 @@ fn wrist_rockets_leave_one_per_reload_however_the_trigger_is_worked() {
 
 /// The maintainer 2026-10-27: a wrist rocket "square in the chest" seemed to take half
 /// a clone's health. On BF2 Coruscant's own collision, a rocket from 3 m into
-/// a BF2 clone's chest deals its direct hit (100: it lands in its second
-/// update, so a tick old, and the age that raises it toward 250 at 0.5 s
-/// counts only the updates it came through; card SGDMG) and then its
-/// blast's 250 (inner radius 1 m): 350 of his 400.
+/// a BF2 clone's chest deals its direct hit (130: the round leaves at
+/// MinSpeed 20 m/s and accelerates at 80 m/s^2, so the chest takes four
+/// updates, and the arming curve - 100 toward 250 over 0.5 s - is read at
+/// the age the landing update began with, 0.1 s; cards UORD and SGDMG) and
+/// then its blast's 250 (inner radius 1 m): 380 of his 400.
 #[test]
 fn a_wrist_rocket_to_the_chest_on_coruscant_deals_its_hit_and_its_blast() {
     let root = game::assets::baked_root();
@@ -654,8 +660,8 @@ fn a_wrist_rocket_to_the_chest_on_coruscant_deals_its_hit_and_its_blast() {
         }
         let hp = sim.unit(target).unwrap().health.cur;
         println!("cp at {spot:.0?}: hits {dmg:?}, {hp} of 400 left");
-        assert_eq!(dmg, vec![100.0, 250.0], "at {spot:?}");
-        assert_eq!(hp, 50.0);
+        assert_eq!(dmg, vec![130.0, 250.0], "at {spot:?}");
+        assert_eq!(hp, 20.0);
         checked += 1;
     }
     assert_eq!(checked, 2);

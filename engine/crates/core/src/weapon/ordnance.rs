@@ -154,6 +154,17 @@ impl OrdnanceClass {
         self.velocity * self.life_span
     }
 
+    /// Is this ordnance a TRACER - a round that exists only to be drawn? Every
+    /// BF2 class a weapon names as its `SecondaryOrdnanceName` is one
+    /// (`com_weap_inf_shotgun_tracer`, `com_weap_inf_chaingun_tracer`, ...:
+    /// `MaxDamage 0`, no scales; `analysis/re-ordnance-kinds.md` §7). The
+    /// exception on the discs is the probe droid's sonic blaster, whose
+    /// "secondary" is a real 100-damage round, so the spawn is gated on this
+    /// test rather than on the key's presence.
+    pub fn is_tracer(&self) -> bool {
+        self.max_damage <= 0.0
+    }
+
     /// Damage descriptor at impact. `age` = bolt flight time (BF2 falloff);
     /// `team_bonus` = attacker team holds the +bonus (BF2 hash 0xbb03442e).
     /// Charge/NextCharge lerp omitted (rifles have none).

@@ -30,7 +30,7 @@ use core::sim::{DropTable, ItemClass, StationClass};
 use core::soldier::SoldierConstants;
 use core::unit::{SlotSpec, UnitClass};
 use core::weapon::{
-    ExplosionClass, HealthType, OrdKind, OrdnanceClass, PropSource, Thrown, WeaponClass,
+    ExplosionClass, HealthType, OrdKind, OrdnanceClass, PropSource, Secondary, Thrown, WeaponClass,
 };
 use std::path::Path;
 
@@ -799,6 +799,33 @@ fn fired_ordnance(db: &ClassDb, ord_name: &str) -> OrdnanceClass {
     ord
 }
 
+/// A weapon's secondary ordnance (card UORD, `analysis/re-ordnance-kinds.md`
+/// §7): `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod` (B2:324171-324181),
+/// the TRACER spawned beside the primary every `period`-th round. Read from
+/// the stage's replayed keys `src`, as the other weapon keys are. `None` when
+/// the class names no ordnance, names one the db does not hold, or authors a
+/// period under 1 (never); a missing period is the PS2 class default, 1.
+fn secondary_ordnance(db: &ClassDb, src: &ListSrc<'_>) -> Option<Secondary> {
+    let name = src.prop("SecondaryOrdnanceName")?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let period = src
+        .prop("SecondaryOrdnancePeriod")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .unwrap_or(1.0);
+    if period < 1.0 {
+        return None;
+    }
+    let name = db.resolve(name)?;
+    Some(Secondary {
+        name: name.to_owned(),
+        ordnance: fired_ordnance(db, name),
+        period: period as u32,
+        index: usize::MAX,
+    })
+}
+
 /// One charge stage of a weapon (the root: every key before the first
 /// `NextCharge`), from its replayed keys `props` (base first, file order).
 fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<WeaponClass> {
@@ -865,6 +892,17 @@ fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<Wea
     }
     let ord = fired_ordnance(db, &ord_name);
     let mut w = WeaponClass::from_props(weapon, &wsrc, ord);
+    // An emitter's cone-and-chain law (card UORDE): the ordnance class
+    // authors its own keys, so it is read separately from `fired_ordnance`.
+    if db.engine_base(&ord_name) == Some("emitterordnance") {
+        w.emitter = Some(core::weapon::EmitterOrdnance::from_props(
+            &ClassSrc {
+                db,
+                class: &ord_name,
+            },
+            db.is_bf2(),
+        ));
+    }
     if db.is_bf2() && db.engine_base(&ord_name) == Some("emitterordnance") {
         w.ability = core::weapon::Ability::from_props(&ClassSrc {
             db,
@@ -918,6 +956,9 @@ fn weapon_stage(db: &ClassDb, weapon: &str, props: &[(u32, &str)]) -> Result<Wea
             w.ability.is_none() && !NO_FLASH_BASES.iter().any(|n| b.eq_ignore_ascii_case(n))
         })
         .then(|| flash_look(db, weapon));
+    // The tracer that rides this weapon's rounds (BF2's shotgun, chaingun and
+    // award weapons; `analysis/re-ordnance-kinds.md` §7).
+    w.secondary = secondary_ordnance(db, &wsrc);
     Ok(w)
 }
 
@@ -1980,5 +2021,104 @@ impl FactionRoster {
         let b = out.pop().unwrap();
         let a = out.pop().unwrap();
         Ok(([a, b], warnings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The secondary ordnance keys (`SecondaryOrdnanceName` /
+    //! `SecondaryOrdnancePeriod`), without the discs: the data-gated suite
+    //! checks the baked classes' own values.
+
+    use super::*;
+    use crate::classdb::{fnv1a_lowercase, ClassDef};
+
+    /// One in-memory class row: name, base, props (the suite's `gcl16_db`
+    /// shape, without a file).
+    type Row<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    /// A class db from in-memory rows, through the real loader.
+    fn db(rows: &[Row<'_>]) -> ClassDb {
+        let defs: Vec<ClassDef> = rows
+            .iter()
+            .map(|(name, base, props)| ClassDef {
+                name: (*name).into(),
+                kind: String::new(),
+                base: (*base).into(),
+                props: props
+                    .iter()
+                    .map(|(k, v)| (fnv1a_lowercase(k), (*v).into()))
+                    .collect(),
+            })
+            .collect();
+        let path = std::env::temp_dir().join(format!(
+            "openbf-secondary-{}-{:?}.ron",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, ron::to_string(&defs).unwrap()).unwrap();
+        let mut db = ClassDb::default();
+        assert_eq!(db.load(&path).unwrap(), rows.len());
+        std::fs::remove_file(&path).unwrap();
+        db
+    }
+
+    const ROUND: Row<'static> = ("test_ord", "bolt", &[("MaxDamage", "65")]);
+    const TRACER: Row<'static> = (
+        "test_tracer",
+        "bolt",
+        &[
+            ("MaxDamage", "0"),
+            ("Velocity", "160"),
+            ("LifeSpan", "0.15"),
+        ],
+    );
+
+    fn gun(props: &[(&str, &str)]) -> WeaponClass {
+        let d = db(&[ROUND, TRACER, ("test_gun", "cannon", props)]);
+        weapon_from_db(&d, "test_gun").unwrap()
+    }
+
+    #[test]
+    fn roster_reads_a_weapons_secondary_tracer_and_its_period() {
+        let w = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "test_tracer"),
+            ("SecondaryOrdnancePeriod", "5"),
+        ]);
+        let s = w.secondary.as_ref().expect("the tracer's keys");
+        assert_eq!(s.name, "test_tracer");
+        assert_eq!(s.period, 5);
+        assert_eq!(s.ordnance.velocity, 160.0);
+        assert_eq!(s.ordnance.life_span, 0.15);
+        assert!(s.ordnance.is_tracer());
+        // The sim registration fills this in; the parse leaves it unset.
+        assert_eq!(s.index, usize::MAX);
+    }
+
+    #[test]
+    fn roster_secondary_needs_a_known_class_and_a_period_of_one() {
+        // No key at all: no secondary.
+        assert!(gun(&[("OrdnanceName", "test_ord")]).secondary.is_none());
+        // No period: the PS2 class default, 1 (every round).
+        let every = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "test_tracer"),
+        ]);
+        assert_eq!(every.secondary.as_ref().map(|s| s.period), Some(1));
+        // A period under 1 never spawns (`tur_weap_spa_cannon` authors 0).
+        let never = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "test_tracer"),
+            ("SecondaryOrdnancePeriod", "0"),
+        ]);
+        assert!(never.secondary.is_none());
+        // A name the db does not hold is dropped, not defaulted.
+        let missing = gun(&[
+            ("OrdnanceName", "test_ord"),
+            ("SecondaryOrdnanceName", "not_a_class"),
+            ("SecondaryOrdnancePeriod", "1"),
+        ]);
+        assert!(missing.secondary.is_none());
     }
 }

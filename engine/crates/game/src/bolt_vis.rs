@@ -39,6 +39,13 @@
 //!   `purplelaser_D`, which no disc holds (the PS2 binds a fallback and
 //!   draws VRAM garbage): the port draws `violetlaser_D` — PROVISIONAL, the
 //!   intended art.
+//! - **Missiles** (card UORD) are their own draw: a `missile` class has no
+//!   `LaserLook` (`roster::laser_look` only replays `bolt` / `laser`), so a
+//!   round of one is drawn as its `ordnance.geometry` model by
+//!   `SoldierVisuals::weapon_draws` — [`missiles_in_flight`] is that path's
+//!   read of `sim.bolts`. This module keeps no ribbon and no light for one,
+//!   but its [`key`] is stable under steering all the same: the trail
+//!   (`crate::fx::trail`) and the hit remnants identify rounds by it.
 
 use crate::bolt_light::OmniLight;
 use crate::walk::WalkSim;
@@ -65,15 +72,66 @@ pub const MUZZLE_RIGHT: f32 = 0.3;
 /// A bolt is known across frames by what never changes in flight.
 pub(crate) type Key = (u32, u32, usize, [u32; 3], [u32; 3]);
 
+/// The round's identity across frames (see [`Key`]). A straight bolt keeps
+/// its end point and its velocity for its whole flight; a missile steers, so
+/// both are new every tick and it is known instead by what its launch fixed:
+/// the line it left on and the two waver phases the class ctor drew for it
+/// (`Missile::launch`, card UORD — an index-free id no other round shares,
+/// and the same fields its replay state carries). Two rounds of one class
+/// from one launcher therefore stay two rounds, however they curve.
 pub(crate) fn key(b: &core::projectile::Bolt) -> Key {
     let bits = |v: Vec3| v.to_array().map(f32::to_bits);
-    (
-        b.owner.index,
-        b.owner.gen,
-        b.weapon_class,
-        bits(b.end),
-        bits(b.vel),
-    )
+    let (end, vel) = match &b.missile {
+        Some(m) => (
+            bits(m.launch),
+            [
+                m.phases[0].to_bits(),
+                m.phases[1].to_bits(),
+                m.top.to_bits(),
+            ],
+        ),
+        None => (bits(b.end), bits(b.vel)),
+    };
+    (b.owner.index, b.owner.gen, b.weapon_class, end, vel)
+}
+
+/// Whether the round draws as its `ordnance.geometry` model instead of a
+/// ribbon: a missile (card UORD; the model path is
+/// `SoldierVisuals::weapon_draws`, fed by [`missiles_in_flight`]). A missile
+/// never has a `LaserLook` off the discs — `roster::laser_look` replays
+/// `bolt` / `laser` alone — but the model is the preferred draw all the same
+/// (the task's order: geometry, then tracer, then nothing).
+fn modelled(walk: &WalkSim, b: &core::projectile::Bolt) -> bool {
+    b.missile.is_some()
+        && walk
+            .sim
+            .weapon_classes
+            .get(b.weapon_class)
+            .is_some_and(|w| w.ordnance.geometry.is_some())
+}
+
+/// The missiles in flight this frame as (their weapon class, the model's
+/// transform): each at its sim place, the model's +Z (`Quat::from_rotation_arc`,
+/// the engine's forward) along the way it flies. `SoldierVisuals::weapon_draws`
+/// draws them with the other ordnance models — the `ordnance.geometry` its
+/// table loads for every missile class. A round with no velocity (a stopped
+/// or degenerate one) is not drawn rather than drawn at a random angle.
+pub fn missiles_in_flight(walk: &WalkSim) -> Vec<(usize, glam::Mat4)> {
+    walk.sim
+        .bolts
+        .iter()
+        .filter(|b| b.missile.is_some())
+        .filter_map(|b| {
+            let dir = b.vel.try_normalize()?;
+            Some((
+                b.weapon_class,
+                glam::Mat4::from_rotation_translation(
+                    glam::Quat::from_rotation_arc(Vec3::Z, dir),
+                    b.pos,
+                ),
+            ))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -344,7 +402,10 @@ impl BoltVis {
         let mut seen = std::collections::HashSet::new();
         let mut struck = Struck::of(sim);
         for b in &sim.bolts {
+            // A missile with a model is `SoldierVisuals`' (card UORD), and a
+            // look-less round has no ribbon: neither is this module's.
             if look(b.weapon_class).is_none()
+                || modelled(walk, b)
                 || crate::walker_shots::style(walk, b.weapon_class)
                     .is_some_and(|s| s.tracer.is_some())
             {
@@ -1576,5 +1637,134 @@ mod tests {
         let centre = walk.sim.turrets[0].centre();
         assert!(start.distance(centre) < 0.5, "{start} vs turret {centre}");
         assert!(start.distance(hand) > 10.0, "{start} at the owner's hand");
+    }
+
+    /// A missile round of a fixture class (the REP torpedo's numbers, card
+    /// UORD): the ctor's two waver phases come from `seed`, as the class's
+    /// `Missile::launch` draws them.
+    fn missile_round(seed: u32) -> (WeaponClass, core::projectile::Bolt) {
+        let mut w = WeaponClass::bf1_rifle();
+        let o = &mut w.ordnance;
+        o.kind = core::weapon::OrdKind::Missile;
+        o.velocity = 40.0;
+        o.life_span = 4.0;
+        o.missile = Some(core::missile::MissileClass {
+            turn_rate: 2.0,
+            ..core::missile::MissileClass::default()
+        });
+        let mut lcg = core::lcg::GameLcg::new(seed);
+        let mut b = core::projectile::Bolt {
+            pos: Vec3::new(1.0, 1.6, -2.0),
+            vel: Vec3::NEG_Z * 40.0,
+            remaining: 4.0,
+            age: 0.0,
+            owner: core::unit::UnitHandle { index: 3, gen: 2 },
+            team: 0,
+            weapon_class: 9,
+            hit: core::projectile::Hit::None,
+            end: Vec3::new(1.0, 1.6, -162.0),
+            shooter_is_player: false,
+            hulls: core::collision::HullFilter::All,
+            hit_mult: 1.0,
+            gravity: 0.0,
+            charge: 1.0,
+            missile: None,
+        };
+        let mc = *o.missile.as_ref().unwrap();
+        b.as_missile(o, &mc, None, &mut lcg);
+        (w, b)
+    }
+
+    /// §4.3: the law turns a missile BEFORE it moves, so its `vel` and `end`
+    /// are new values every tick. One missile must stay one round for the
+    /// whole flight — one trail emitter, not one per tick of its curve — and
+    /// two rounds of one class from one launcher must stay two.
+    #[test]
+    fn one_missile_stays_one_round_while_it_steers() {
+        let (w, mut b) = missile_round(3);
+        let mc = *w.ordnance.missile.as_ref().unwrap();
+        let first = key(&b);
+        let mut lcg = core::lcg::GameLcg::new(11);
+        for tick in 0..20 {
+            b.guide(
+                &mc,
+                Some(Vec3::new(30.0, 0.0, 0.0)),
+                core::TICK_DT,
+                &mut lcg,
+            );
+            b.advance(core::TICK_DT);
+            assert_eq!(key(&b), first, "tick {tick} is the same round");
+        }
+        assert!(
+            b.vel.normalize().angle_between(Vec3::NEG_Z) > 0.2,
+            "the fixture did turn: {}",
+            b.vel
+        );
+        // The end point is the probe's on a hit; the key does not move with
+        // it either.
+        b.end = Vec3::ZERO;
+        assert_eq!(key(&b), first);
+        // A second round of the same class, from the same launcher and the
+        // same launch line, is its own round.
+        let (_, other) = missile_round(4);
+        assert_ne!(key(&other), first);
+        // A straight bolt keeps the old identity: its line is its key.
+        let mut plain = other;
+        plain.missile = None;
+        let k = key(&plain);
+        plain.end += Vec3::X;
+        assert_ne!(key(&plain), k, "a bolt's line is its identity");
+    }
+
+    /// The missile draw (card UORD): a round whose class has an
+    /// `ordnance.geometry` model belongs to `SoldierVisuals` — this module
+    /// keeps no ribbon and no remnant for it — and the model sits at the
+    /// sim's place, its +Z the way the round flies. A round with no model
+    /// still tracks on a class that authored a `LaserLook`, and a stopped
+    /// one is not drawn at all.
+    #[test]
+    fn a_missile_draws_as_its_model_not_as_a_ribbon() {
+        let mut walk = WalkSim::new(42, Vec3::ZERO, None);
+        let (mut w, b) = missile_round(5);
+        w.ordnance.laser = Some(core::laser::LaserLook::default());
+        w.ordnance.geometry = Some("com_weap_missile".into());
+        let class = walk.sim.add_weapon_class(w);
+        let mut b = b;
+        b.weapon_class = class;
+        walk.sim.bolts.push(b);
+
+        let mut vis = BoltVis::default();
+        vis.update(&walk, core::TICK_DT);
+        assert!(vis.tracked.is_empty(), "the model path draws it");
+        assert!(vis.remnant_count() == 0 && vis.omni_lights(&walk).is_empty());
+        let listed = missiles_in_flight(&walk);
+        assert_eq!(listed.len(), 1);
+        let (c, m) = listed[0];
+        assert_eq!(c, class);
+        assert!(m
+            .transform_point3(Vec3::ZERO)
+            .abs_diff_eq(Vec3::new(1.0, 1.6, -2.0), 1e-4));
+        assert!(
+            m.z_axis.truncate().abs_diff_eq(Vec3::NEG_Z, 1e-4),
+            "{:?}",
+            m.z_axis
+        );
+
+        // A stopped round is no draw and no panic (no direction to point).
+        walk.sim.bolts[0].vel = Vec3::ZERO;
+        assert!(missiles_in_flight(&walk).is_empty());
+
+        // The same round with no model: the look this fixture authored gets
+        // the ribbon path (nothing is silently dropped).
+        walk.sim.bolts[0].vel = Vec3::NEG_Z * 40.0;
+        walk.sim.weapon_classes[class].ordnance.geometry = None;
+        let mut vis = BoltVis::default();
+        vis.update(&walk, core::TICK_DT);
+        assert_eq!(
+            vis.tracked.len(),
+            1,
+            "an authored look is the fallback ribbon"
+        );
+        assert_eq!(vis.tracked[0].class, class);
     }
 }

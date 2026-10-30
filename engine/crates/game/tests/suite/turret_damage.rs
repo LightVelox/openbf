@@ -16,7 +16,7 @@
 //! the shooter); the building's bodies are a plain wall after.
 
 use core::collision::{HullFilter, Layers};
-use core::projectile::{Hit, Target};
+use core::impact::Surface;
 use core::sim::{buttons, Event, PadState, Sim};
 use core::unit::{Controller, UnitHandle};
 use core::vehicle::{VehicleHandle, VehicleKind};
@@ -174,6 +174,11 @@ struct Shot {
     drop: f32,
     expected: f32,
     direct: f32,
+    /// The round's age at the impact, s (the one `resolve_bolt` read).
+    age: f32,
+    /// What the sim dealt the turret as the round's DIRECT hit (`Event::
+    /// VehicleHit`), beside `direct`'s reading of the class data at `age`.
+    damage: f32,
     hit_turret: bool,
     destroyed: bool,
     kills: Vec<(UnitHandle, UnitHandle)>,
@@ -193,14 +198,17 @@ fn fire(w: &mut World, me: UnitHandle, vh: VehicleHandle, at: Vec3) -> Shot {
     let before = w.sim.vehicle(vh).unwrap().health.cur;
     let v = w.sim.vehicle(vh).unwrap().clone();
     let (centre, radius) = w.sim.vehicle_blast_sphere(&v);
-    let (mut age, mut hit, mut charge) = (0.0, Hit::None, 1.0);
+    let (mut age, mut charge) = (0.0, 1.0);
     let mut impact = None;
     let mut wc = None;
+    let mut damage = None;
     let mut shot = false;
     let mut out = Shot {
         drop: 0.0,
         expected: 0.0,
         direct: 0.0,
+        age: 0.0,
+        damage: 0.0,
         hit_turret: false,
         destroyed: false,
         kills: Vec::new(),
@@ -215,23 +223,52 @@ fn fire(w: &mut World, me: UnitHandle, vh: VehicleHandle, at: Vec3) -> Shot {
             PadState::default()
         };
         w.sim.step(&[pad]);
+        // The round still in flight: its age and charge. A landing update
+        // does not age it (`Bolt::advance`), so the last update it is drawn
+        // in already carries the age `resolve_bolt` reads.
         if let Some(b) = w.sim.bolts.iter().find(|b| b.owner == me) {
-            (age, hit, charge) = (b.age, b.hit, b.charge);
+            (age, charge) = (b.age, b.charge);
             wc = Some(b.weapon_class);
         }
         for e in &w.sim.events {
             match *e {
+                Event::Shot {
+                    unit, weapon_class, ..
+                } if unit == me => {
+                    shot = true;
+                    wc = Some(weapon_class as usize);
+                }
+                // The round met the turret's building itself. A missile now
+                // carries `Hit::None` and meets the world on its own flight
+                // (card UORD, `Sim::fly_missiles` -> `Sim::probe_flight`):
+                // the hit is set and resolved in the SAME tick, so the live
+                // bolt above never shows it. The impact event names the
+                // surface and the hull, the damage event what it took.
                 Event::Impact {
                     pos,
                     dir,
                     weapon_class,
+                    surface,
+                    vehicle,
                     ..
-                } if impact.is_none() => {
-                    impact = Some((pos, dir));
-                    wc = Some(weapon_class as usize);
+                } if Some(weapon_class as usize) == wc => {
+                    if impact.is_none() {
+                        impact = Some((pos, dir));
+                    }
+                    if vehicle == Some(vh) && surface == Surface::Building {
+                        out.hit_turret = true;
+                    }
                 }
+                // The first damage on the turret in this shot is the round's
+                // own (its blast's on the same hull comes after it, from
+                // `bolt_explodes`).
+                Event::VehicleHit {
+                    shooter: Some(s),
+                    vehicle,
+                    damage: d,
+                    ..
+                } if vehicle == vh && s == me && damage.is_none() => damage = Some(d),
                 Event::Kill { shooter, victim } => out.kills.push((shooter, victim)),
-                Event::Shot { unit, .. } if unit == me => shot = true,
                 Event::VehicleDestroyed { vehicle, .. } if vehicle == vh => out.destroyed = true,
                 _ => {}
             }
@@ -239,7 +276,8 @@ fn fire(w: &mut World, me: UnitHandle, vh: VehicleHandle, at: Vec3) -> Shot {
     }
     let after = w.sim.vehicle(vh).map_or(0.0, |v| v.health.cur.max(0.0));
     out.drop = before - after;
-    out.hit_turret = hit == Hit::Target(Target::Vehicle(vh));
+    out.age = age;
+    out.damage = damage.unwrap_or(0.0);
     let o = &w.sim.weapon_classes[wc.expect("a round")].ordnance;
     let b = HealthType::Building as usize;
     if out.hit_turret {
@@ -328,8 +366,8 @@ fn run(c: &Case) {
     // blast at the wall may kill him first (re-turret-collision 3.4).
     let blasted = s.kills.contains(&(me, gunner));
     eprintln!(
-        "{} {} <- {}: drop {} (direct {}, expected {}), destroyed {}, gunner's seat {seat:.2}, killed {blasted}",
-        c.map, c.turret, c.weapon, s.drop, s.direct, s.expected, s.destroyed
+        "{} {} <- {}: age {:.4} s, drop {} (direct {}, damage {}, expected {}), destroyed {}, gunner's seat {seat:.2}, killed {blasted}",
+        c.map, c.turret, c.weapon, s.age, s.drop, s.direct, s.damage, s.expected, s.destroyed
     );
     assert!(
         s.hit_turret,
@@ -390,9 +428,17 @@ fn run(c: &Case) {
 
 /// The playtest's turret: BF2 Kamino's Minigun Turret (`tur_weap_built_gunturret`,
 /// 800 health) under the jet trooper's EMP launcher: 200 rising to 400 over
-/// 0.5 s of flight (253.33 at 4 updates), building scale 1, plus its blast's
-/// 400 at building scale 0.25 = 100: 353.33. The playtest's 31 EMP rounds
-/// would have destroyed three such turrets.
+/// 0.5 s of flight, building scale 1, plus its blast's 400 at building scale
+/// 0.25 = 100.
+///
+/// The pin moved 353.33 -> 446.67 with card UORD: the round is a missile, so
+/// it has no predictive ray and no longer lands at the press ray's 4 updates
+/// (0.1333 s, 253.33); it flies its own 13 m to the wall and meets it at
+/// **11 updates, 0.3667 s** (the class's 20 m/s `MinSpeed` ramping at 60 m/s²
+/// toward `Velocity` 100 - `assets_baked/classes/bf2_rep.ron`,
+/// `rep_weap_inf_emp_launcher_ord`), where the arming curve reads
+/// 346.67. + 100 of blast = 446.67. The playtest's 31 EMP rounds would have
+/// destroyed three such turrets.
 #[test]
 fn kamino_turret_emp_launcher() {
     run(&Case {
@@ -402,13 +448,15 @@ fn kamino_turret_emp_launcher() {
         gunner: "cis_inf_rifleman",
         shooter: "rep_inf_ep3_jettrooper",
         weapon: "rep_weap_inf_emp_launcher",
-        first: Some(253.333_34 + 100.0),
+        first: Some(346.666_7 + 100.0),
     });
 }
 
-/// The rocket launcher: 500 rising to 1500 (766.67 at 4 updates) and the same
-/// 100 of blast - one rocket from 15 m destroys the turret and kills its
-/// gunner (the playtest: "the bot in the turret didn't die").
+/// The rocket launcher: 500 rising to 1500 over 0.5 s of flight (1233.33 at
+/// the missile's 11 updates, card UORD - it used to be the press ray's 4,
+/// 766.67) and the same 100 of blast; 1233 + 100 empties the 800 pool, so one
+/// rocket from 15 m destroys the turret and kills its gunner (the playtest:
+/// "the bot in the turret didn't die"). The pin is the pool whole.
 #[test]
 fn kamino_turret_rocket_launcher() {
     run(&Case {
@@ -589,8 +637,8 @@ fn geonosis_cannon_stops_a_round_at_its_gun() {
     let s = fire(&mut w, me, vh, gun);
     let look = w.sim.vehicle(vh).unwrap().guns[0].as_ref().map(|g| g.look);
     eprintln!(
-        "geo1 cannon <- EMP from the playtest spot: hit {} drop {} (expected {}), gun look {look:?}",
-        s.hit_turret, s.drop, s.expected
+        "geo1 cannon <- EMP from the playtest spot: hit {} drop {} (age {:.4} s, direct {}, damage {}, expected {}), gun look {look:?}",
+        s.hit_turret, s.drop, s.age, s.direct, s.damage, s.expected
     );
     assert!(s.hit_turret, "the round passed through the cannon's gun");
     assert!(s.drop > 0.0 && (s.drop - s.expected).abs() < 1e-3);
@@ -652,10 +700,13 @@ fn geonosis_cannon_stops_a_round_at_its_turned_gun() {
     let s = fire(&mut w, me, vh, at);
     let g = w.sim.vehicle(vh).unwrap().guns[0].clone().unwrap();
     eprintln!(
-        "geo1 cannon turned {:.0} deg <- EMP: hit {} drop {}, look {:?} aim {:?}",
+        "geo1 cannon turned {:.0} deg <- EMP: hit {} drop {} (age {:.4} s, direct {}, damage {}), look {:?} aim {:?}",
         yaw.to_degrees(),
         s.hit_turret,
         s.drop,
+        s.age,
+        s.direct,
+        s.damage,
         g.look,
         g.aim
     );

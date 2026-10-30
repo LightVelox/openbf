@@ -6,6 +6,8 @@
 //! that steps no tick would start every sound again, and one that steps two
 //! would lose the first tick's.
 
+pub(crate) mod ordnance;
+
 use crate::sounds::Listener;
 use crate::walk::WalkSim;
 use core::sim::Event;

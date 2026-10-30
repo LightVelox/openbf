@@ -42,6 +42,7 @@ mod combat;
 mod doors;
 mod droid_death;
 mod droidekas;
+mod emitter;
 mod guided;
 mod guns;
 mod input;

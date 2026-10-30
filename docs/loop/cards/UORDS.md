@@ -1,22 +1,22 @@
 ---
 id: UORDS
-title: Bolts are swept every tick against units, as on the PS2: the predictive spawn ray tests only terrain and buildings (BF1 0x48 / BF2 0x90), soldiers / vehicles / riders / water / foliage / shields are struck by a prev->current sweep each frame (0x996 / 0x132e) - a soldier who steps out of a bolt's line is missed, one who steps in is hit; the port's one predictive ray against everything is the opposite
+title: Bolts are swept every tick against units, as on the PS2: the predictive spawn ray tests only terrain and buildings (BF1 0x48 / BF2 0x90), soldiers / vehicles / riders / water / foliage / shields are struck by a prev->current sweep each frame (0x996 / 0x132e) - a soldier who steps out of a bolt's line is missed, one who steps in is hit (the port's split landed in main's 0ee5a57; its PS2 evidence is open)
 milestone: M3
 value: 4
 phase: build
 status: blocked
 deps:
-files: engine/crates/core/src/projectile.rs, engine/crates/core/src/sim/combat.rs, engine/crates/core/src/sim/ordnance.rs, engine/crates/core/src/weapon.rs
+files: engine/crates/core/src/projectile.rs, engine/crates/core/src/sim/combat.rs, engine/crates/core/src/sim/ordnance.rs, engine/crates/core/src/sim/missiles.rs, engine/crates/core/src/sim/step.rs, engine/crates/core/src/weapon.rs
 declares: sim; sweep; arena
-needs: environment restoration — PS2 bolt captures/tables, baked maps/classes/vehicles, missions and approved gate device
+needs: the audit-uord PS2 bolt captures and tables (engine/artifacts/lead_tmp/audit-uord/ps2/), a foliage collision body to test against (foliage is render-only today) and an 8 x 32 sweep 256 / 256
 effort:
 branch:
-resume: 2026-10-24 08:56 UTC cloud prerequisite checkpoint: restore audit-uord PS2 bolt captures/tables and probes, real baked maps/classes/vehicles and missions plus approved gate device; then current-main baseline, isolated build and full original acceptance. See engine/artifacts/loop/reports/20261024_0856_card_UORDS.md and lead_tmp/uords_20261024_0854/inventory.json. No implementation or landing.
+resume: 2026-10-30: the behaviour is in the tree from main's 0ee5a57 (2026-10-27), not from this branch. Bolt::fire passes no unit targets (projectile.rs:260), so its spawn ray tests terrain, water and the map's static bodies only, and sweep_bolts (sim/combat.rs:41-199) strikes units, riders, shields, guided rockets and vehicle hulls on each tick's prev->current segment; a_bolt_hits_what_it_passes_through (combat.rs:1244-1272) asserts a dodger is missed and a late entrant is hit. This branch adds only the shared world probe Sim::probe_flight (sim/missiles.rs:20-53) for shells and missiles. Open: the foliage case (foliage is render-only, not a collision body), the mutation check, the PS2 dodge / late-entrant comparison and the 8 x 32 sweep. The PS2 captures are absent (Test-Path false, see Evidence); status stays blocked.
 created: 2026-10-22
 alpha: yes
 ---
 ## Why
-analysis/re-ordnance-kinds.md §2 (card UORD, [O], two verifiers): every class of the bolt family (bolt, laser, bullet; also missile and shell) shares one flight core and one per-frame sweep. B1 FUN_002764c0 casts ONE predictive ray at the first update with mask 0x48 (buildings + terrain only) when class+0x88 = 1; the per-frame sweep FUN_00273128 (called by FUN_00163198 for every moving ordnance) rays prev -> current with 0x9de until that ray ran, 0x996 after: soldiers 2, vehicles 4, riders 0x10, water 0x80, foliage 0x100, shields 0x800. BF2 FUN_00313600 / FUN_0030fad0: 0x90, 0x13be / 0x132e. This corrects re-blaster-damage §5.1 ('targets cannot dodge'), which the port's core/src/projectile.rs transcribes; its test predictive_raycast_hits_dodgers_and_ignores_late_entrants (sim/combat.rs:739) asserts the opposite of the PS2.
+analysis/re-ordnance-kinds.md §2 (card UORD, [O], two verifiers): every class of the bolt family (bolt, laser, bullet; also missile and shell) shares one flight core and one per-frame sweep. B1 FUN_002764c0 casts ONE predictive ray at the first update with mask 0x48 (buildings + terrain only) when class+0x88 = 1; the per-frame sweep FUN_00273128 (called by FUN_00163198 for every moving ordnance) rays prev -> current with 0x9de until that ray ran, 0x996 after: soldiers 2, vehicles 4, riders 0x10, water 0x80, foliage 0x100, shields 0x800. BF2 FUN_00313600 / FUN_0030fad0: 0x90, 0x13be / 0x132e. This corrects re-blaster-damage §5.1 ('targets cannot dodge'), which the port's core/src/projectile.rs transcribed when this card was written; its then-test `predictive_raycast_hits_dodgers_and_ignores_late_entrants` (then at `sim/combat.rs:739`) asserted the opposite of the PS2. Main's 0ee5a57 replaced that path on 2026-10-27 - see What is in the tree.
 
 ## Evidence
 - The doc §2.2 (lines B1:197629-197656, B1:195510-195514, B1:2731-2738; B2:304258-304304, B2:301923-301925); verifier batch 1 C3/C4 SUPPORTED, T2 SUPPORTED by both absence readers.
@@ -30,6 +30,7 @@ analysis/re-ordnance-kinds.md §2 (card UORD, [O], two verifiers): every class o
 
 ## Notes
 - Missiles and shells already need the full-mask per-tick sweep (card UORD): build the shared sweep once; whichever card lands second reuses it.
+- 2026-10-30: the unit / hull sweep is `Sim::sweep_bolts`, which every round already uses; `Sim::probe_flight` (this branch) is the world chord that only falling and steering rounds need per tick.
 ## Note (AUDIT 2026-10-22, lane 2): the PS2 side of the acceptance check exists
 - `analysis/re-ordnance-kinds.md` 2.4 [M], both games: a bolt's line written through a stationary soldier's chest
   after its predictive ray ran stops one update later at the chest (BF1 15 / 15, 0.35-0.59 m short of the chest
@@ -38,3 +39,62 @@ analysis/re-ordnance-kinds.md §2 (card UORD, [O], two verifiers): every class o
   `engine/artifacts/lead_tmp/audit-uord/ps2/` (`bolt_b1.py`, `bolt_b2.py`, `knock_read.py`, `b1_knock2.json`,
   `b2_knock1.json`, `knock2_table.txt`, `knockb2_table.txt`). The port's scene test can mirror this knock-in (late
   entrant hit, 2.5 m aside missed, moving target dodges) and print the PS2 table beside its own.
+
+## What is in the tree (2026-10-30): the split came from main, not this branch
+The behaviour the card asks for is in the ordinary fire path, added by main's 0ee5a57 ("Make hits match what you
+see, and add headshots and vehicle weak spots", 2026-10-27), an ancestor of this branch's 70da755. This branch adds
+nothing to the bolt path; its shared piece is the shells' / missiles' world probe.
+
+- **The spawn ray tests terrain, water and static bodies only.** `Bolt::fire`
+  (`engine/crates/core/src/projectile.rs:228-265`) calls `spawn_past` with `std::iter::empty()` (`l.260`) and
+  `HullFilter::Static` (`l.258`): the terrain crossing (`l.336-345`), the water crossing (`l.346-351`) and the map's
+  static bodies (`l.355-363`) are tested; the unit-capsule loop (`l.364-371`) is reachable only through `Bolt::spawn`
+  (`l.299-314`), which no shot uses - its one runtime caller is the bot's own-blast query
+  (`ai/gunner_foot.rs:713-744`), the rest are tests. So no soldier is a predictive-ray candidate.
+- **The per-tick sweep.** `sweep_bolts` (`sim/combat.rs:41-199`) takes each round's prev->current segment
+  (`from` / `to`, `l.79-80`) and tests every alive unit's `BoltPrims` (`l.102-110`, with the human meet lag and the
+  headshot multiplier), droideka bodies and shields (`l.112-140`), mines, droids and turrets (`l.141-164`), guided
+  rockets (`l.165-182`) and the vehicle hulls (`l.183-191`); the nearest writes `hit`, `end` and `remaining` (`l.192-197`).
+  It runs at step 5 after `fly_missiles` and `fly_shells` (`sim/step.rs:980-982`), so shells and missiles get it too.
+- **The outcome is tested.** `a_bolt_hits_what_it_passes_through` (`sim/combat.rs:1244-1272`) teleports the target
+  10 m aside after the shot and asserts it is missed (`l.1254`), then moves a unit into an unaimed bolt's path and
+  asserts it is hit (`l.1264-1271`). `terrain_blocks_bolts` (`l.1276`), `water_stops_bolts_and_names_the_surface`
+  (`l.1306`) and `world_model_blocks_bolts` (`l.1379`) cover the spawn ray's stops.
+- **This branch's piece.** `Sim::probe_flight` (`sim/missiles.rs:20-53`) is the per-tick world chord for a shell or
+  a missile: it calls `Bolt::fire` with this tick's step (`l.38-48`) and copies the hit, end and remaining
+  (`l.49-52`); `fly_shells` (`sim/ordnance.rs:128-138`) and `fly_missiles` (`sim/missiles.rs:70-93`) run it at
+  step 5 before `sweep_bolts`. A bolt keeps its one spawn probe plus the sweep.
+
+## What is open (the acceptance, not the build)
+- **The PS2 dodge / late-entrant comparison** (the card's second acceptance item): not run. The probes and rows
+  are absent (below), so the port's table cannot be printed beside the PS2's.
+- **The mutation check** on the scene tests: not run. `lead_tmp/audit-uord/mut/M1` is false.
+- **The 8 x 32 sweep 256 / 256**: not run; the run is missing.
+- **Foliage**: the port draws foliage as render-only model instances (`engine/crates/game/src/viewer/foliage.rs`),
+  not as collision bodies; `Layers` has no foliage bit (`collision/shape.rs:429-439`), so a bolt cannot meet one
+  and the acceptance case cannot be exercised. The code path is "passes" by construction, not by a test.
+- **A shared `probe_flight` for bolts**: not done and the behaviour does not depend on it. The card's Notes asked
+  for the sweep to be built once; that is `sweep_bolts` for units, hulls and the rest, which every round already
+  uses, while `probe_flight` is the world chord only the falling / steering rounds need per tick.
+
+## Evidence (2026-10-30)
+- Source: `projectile.rs` and `sim/combat.rs` are at HEAD (70da755), not modified by this branch; the bolt path
+  above is main's 0ee5a57. Run from `engine/`: `cargo test -p core --lib a_bolt_hits_what_it_passes_through` ->
+  1 passed, 0 failed (1,410 filtered).
+- **The PS2 bolt captures are ABSENT.** `Test-Path` false for
+  `engine/artifacts/lead_tmp/audit-uord/ps2/bolt_b1.py`, `bolt_b2.py`, `b1_knock2.json`, `knock2_table.txt`, and
+  for `lead_tmp/uord/ps2/missile_b1.py`; `engine/artifacts/lead_tmp/` has no `audit-uord` directory. The doc's
+  table survives (`analysis/re-ordnance-kinds.md:104-125`: 15 / 15, 14 / 15, 15 / 15, 13 / 15, 0 of 661, 0 of
+  409); the probes behind it do not.
+- Acceptance, item by item:
+  | item | status |
+  |---|---|
+  | a soldier who steps out is missed | MET - `sim/combat.rs:1244-1254` |
+  | a soldier who steps in is hit | MET - `sim/combat.rs:1256-1271` |
+  | a wall / terrain hit ends the bolt | MET - `terrain_blocks_bolts` (`sim/combat.rs:1276`) asserts the hit; the end point is `origin + dir * best_t` (`projectile.rs:386`) |
+  | water stops a bolt | MET - `water_stops_bolts_and_names_the_surface`, `sim/combat.rs:1306` |
+  | foliage does not stop a bolt | NOT TESTABLE - foliage is render-only |
+  | mutation check | NOT RUN |
+  | PS2 dodge / late entrant printed beside the port | NOT RUN - captures absent |
+  | 8 x 32 sweep 256 / 256 | NOT RUN |
+- Status stays `blocked` for the missing captures and the unrun checks, not for missing bolt code.

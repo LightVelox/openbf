@@ -25,6 +25,9 @@
 //! blast at or below the water + 0.3 m spawns `WaterEffect` instead of
 //! `Effect`; a round in flight carries its `TrailEffect` (`trail.rs`); a
 //! soldier in a jet stance carries his class's `JetEffect` (`jet.rs`).
+//! An emitter shot's links (`Event::Emitter`) draw their class's
+//! `LightningEffect` as the PS2's short-lived lightning strip (`arc.rs`,
+//! card UORDE); the flamethrowers name none and draw no arc.
 //! Cosmetic droid and vehicle chunks launch separately (`chunks`, named deviations
 //! in FEEL_NOTES). Still to come: vehicle Damage / ChunkTrail / Thrust / Wake / Stomp
 //! effects.
@@ -40,6 +43,7 @@
 //! Visual only — driven by sim events, never feeding back into the sim.
 
 mod abilities;
+mod arc;
 mod children;
 mod chunks;
 pub mod draw;
@@ -658,6 +662,10 @@ pub struct Fx {
     chunks: chunks::Chunks,
     attached: Vec<props::Attached>,
     beams: Vec<props::Glow>,
+    /// Emitter shots' lightning links (`Event::Emitter`, `arc.rs`).
+    arcs: Vec<arc::Arc>,
+    /// The sim tick last ingested; the arcs' clock.
+    tick: u64,
 }
 
 impl std::fmt::Debug for Fx {
@@ -666,6 +674,7 @@ impl std::fmt::Debug for Fx {
             .field("puffs", &self.puffs.len())
             .field("effects", &self.library.as_ref().map_or(0, Library::len))
             .field("live", &self.live.len())
+            .field("arcs", &self.arcs.len())
             .finish()
     }
 }
@@ -868,6 +877,10 @@ impl Fx {
         };
         let mut names: Vec<String> = Vec::new();
         let mut models: Vec<String> = self.chunks.models().map(str::to_ascii_lowercase).collect();
+        // The emitter arcs' sheets are not in the effect table (no
+        // `LightningBolt` is baked), so the record's class name is not
+        // reached by the loop below (card UORDE, `arc.rs`).
+        names.push(arc::TEXTURES[usize::from(lib.era == Era::Bf2)].to_owned());
         for def in lib.effects.values() {
             let mut next: Vec<&FxEmitter> = def.emitters.iter().collect();
             while let Some(em) = next.pop() {
@@ -948,6 +961,12 @@ impl Fx {
             }
             let sheet = assets.texture(ripple::TEXTURE);
             self.water.draws(camera.position, lift, sheet, &mut out);
+            // The emitter shots' links: the class's `LightningEffect` arc
+            // (card UORDE, `arc.rs`).
+            for a in &self.arcs {
+                let tex = assets.texture(a.class());
+                a.draws(self.tick, camera, tex, &mut out);
+            }
         }
         out.extend(self.beams.iter().map(props::Glow::draw));
         r.set_particles(out);
@@ -969,6 +988,11 @@ impl Fx {
     /// [`Fx::ingest`] over the sim itself.
     pub fn ingest_sim(&mut self, sim: &Sim) {
         use core::sim::Event;
+        self.tick = sim.tick;
+        // A link lives the record's FadeTime (18 ticks); its clock is the
+        // sim tick, so a pause freezes it (card UORDE, `arc.rs`).
+        self.arcs.retain(|a| a.alive(sim.tick));
+        let mut arcs_this_tick = 0usize;
         // Riding effects follow their hull; a hull gone leaves them where
         // they are.
         for e in &mut self.live {
@@ -1214,6 +1238,32 @@ impl Fx {
                         age: 0.0,
                     });
                 }
+                // An emitter shot's link (card UORDE): the effect its
+                // class's `LightningEffect` names. Render-only — the damage
+                // is already in `Event::Hit` — and a class that names none
+                // (the flamethrowers) draws no arc.
+                Event::Emitter {
+                    weapon_class,
+                    from,
+                    to,
+                    ..
+                } => {
+                    let class = sim
+                        .weapon_classes
+                        .get(*weapon_class as usize)
+                        .and_then(|w| w.emitter.as_ref())
+                        .and_then(|e| e.lightning.as_deref());
+                    if let Some(class) = class {
+                        self.arcs.push(arc::Arc::new(
+                            *from,
+                            *to,
+                            class,
+                            sim.tick,
+                            arcs_this_tick as u32,
+                        ));
+                        arcs_this_tick += 1;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1239,6 +1289,7 @@ impl Fx {
     pub fn len(&self) -> usize {
         self.puffs.len()
             + self.live.len()
+            + self.arcs.len()
             + self.chunks.len()
             + self.attached.iter().filter(|a| a.live.is_some()).count()
     }
@@ -1256,6 +1307,7 @@ impl Fx {
         self.chunks.clear();
         self.attached.clear();
         self.beams.clear();
+        self.arcs.clear();
     }
 
     /// Camera-facing quads for the live effects. `quad` is the unit quad from
@@ -1959,5 +2011,67 @@ mod tests {
             s => panic!("{s:?}"),
         }
         assert!(out.iter().all(|d| d.additive));
+    }
+
+    fn emitter_ord(lightning: Option<&str>) -> core::weapon::EmitterOrdnance {
+        core::weapon::EmitterOrdnance {
+            cone_length: 30.0,
+            cone_angle: 50.0 * core::weapon::DEG,
+            max_targets: 4,
+            jump_deduction: 75.0,
+            damage_threshold: 75.0,
+            max_jump_distance: 20.0,
+            first_radius: 0.6,
+            push: 0.0,
+            lightning: lightning.map(str::to_owned),
+            affect_friends: true,
+            affect_enemies: true,
+            hit_all: false,
+            radius: 0.0,
+            bf2: false,
+        }
+    }
+
+    /// Card UORDE: an `Event::Emitter` link with a `LightningEffect` starts
+    /// an arc named by it; a class that names none (the flamethrowers)
+    /// starts nothing. The arc dies after the record's 18 ticks.
+    #[test]
+    fn emitter_links_draw_their_lightning_and_only_those() {
+        use core::sim::Event;
+        use core::unit::UnitHandle;
+        use core::weapon::WeaponClass;
+        let mut fx = Fx::default();
+        let mut sim = Sim::empty(1);
+        sim.tick = 5;
+        let arc = sim.add_weapon_class(WeaponClass {
+            emitter: Some(emitter_ord(Some("arccaster_lightning"))),
+            ..Default::default()
+        }) as u32;
+        let flame = sim.add_weapon_class(WeaponClass {
+            emitter: Some(emitter_ord(None)),
+            ..Default::default()
+        }) as u32;
+        let unit = UnitHandle { index: 0, gen: 0 };
+        let link = |weapon_class| Event::Emitter {
+            unit,
+            weapon_class,
+            from: Vec3::ZERO,
+            to: Vec3::new(6.0, 0.0, 0.0),
+        };
+        sim.events = vec![link(arc), link(arc)];
+        fx.ingest_sim(&sim);
+        assert_eq!(fx.arcs.len(), 2, "one arc per link");
+        assert!(fx.arcs.iter().all(|a| a.class() == "arccaster_lightning"));
+        assert_eq!(fx.len(), 2);
+        sim.tick = 22;
+        sim.events.clear();
+        fx.ingest_sim(&sim);
+        assert_eq!(fx.arcs.len(), 2, "still inside its 18 ticks");
+        sim.tick = 23;
+        fx.ingest_sim(&sim);
+        assert!(fx.arcs.is_empty(), "the record's FadeTime is over");
+        sim.events = vec![link(flame)];
+        fx.ingest_sim(&sim);
+        assert!(fx.arcs.is_empty(), "a class with no LightningEffect");
     }
 }

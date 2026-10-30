@@ -94,10 +94,12 @@ pub fn floats<const N: usize>(v: &str) -> Option<[f32; N]> {
 
 mod ability;
 mod dispenser;
+mod emitter;
 mod ordnance;
 mod repair;
 pub use ability::Ability;
 pub use dispenser::Dispenser;
+pub use emitter::EmitterOrdnance;
 pub use ordnance::{
     blast_falloff, DamageDesc, ExplosionClass, Falloff, Health, HealthType, OrdBlend, OrdKind,
     OrdKnot, OrdnanceClass, EXPLOSION_OFFSET, HASH_FALLOFF_DURATION, HASH_FALLOFF_END_DAMAGE,
@@ -135,6 +137,40 @@ pub struct ChargeStage {
     pub threshold: f32,
     pub class: Box<WeaponClass>,
     pub index: usize,
+}
+
+/// A weapon's secondary ordnance (card UORD, `analysis/re-ordnance-kinds.md`
+/// §7): BF2's `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod` (key hashes
+/// 0xdddb253a / 0x82e86218, B2:324171-324181), a round spawned BESIDE the
+/// primary shot. On the discs the class it names is the TRACER (a 0-damage
+/// bolt: `com_weap_inf_shotgun_tracer`, `com_weap_inf_chaingun_tracer`,
+/// `com_weap_award_shotgun_tracer`, `com_weap_award_pistol_tracer`), and the
+/// port spawns it as [`crate::projectile::Bolt`] of its own class every
+/// `period`-th round. Every other class a `SecondaryOrdnanceName` names is a
+/// real round (the probe droid's sonic blaster) and spawns nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Secondary {
+    /// The ordnance class's name as the db spells it, for reports and tests.
+    pub name: String,
+    /// Its ordnance data: velocity, LifeSpan, MaxDamage 0 and the laser look.
+    pub ordnance: OrdnanceClass,
+    /// `SecondaryOrdnancePeriod`: rounds per tracer; 1 = every round.
+    pub period: u32,
+    /// Its entry in `Sim::weapon_classes` (`usize::MAX` until
+    /// [`crate::sim::Sim::add_weapon_class`] registers it) - the class index
+    /// its bolts carry for their damage and their look.
+    pub index: usize,
+}
+
+impl Secondary {
+    /// Does round `n` (1-based: the weapon's rounds fired since it was made)
+    /// carry the secondary? The note's "every Nth shot" (a chaingun's tracer
+    /// every 5th, B2:324171-324181) says nothing about the first round or a
+    /// reset, so the port counts from 1 and spawns on each multiple of
+    /// `period`: the 5th, 10th, ... with a period of 5.
+    pub fn on_round(&self, n: u32) -> bool {
+        self.period > 0 && n.is_multiple_of(self.period)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -252,6 +288,10 @@ pub struct WeaponClass {
     pub spread_threshold: f32,
     pub spread_limit: f32,
     pub ordnance: OrdnanceClass,
+    /// BF2's `SecondaryOrdnanceName` / `SecondaryOrdnancePeriod`: the TRACER
+    /// round fired beside the primary ([`Secondary`]). `None` on every class
+    /// that authors neither key (every BF1 weapon).
+    pub secondary: Option<Secondary>,
     /// Sound property names (FireSound / ReloadSound / FireEmptySound /
     /// WeaponChangeSound).
     pub fire_sound: Option<String>,
@@ -277,6 +317,10 @@ pub struct WeaponClass {
     pub dispenser: Option<Dispenser>,
     pub mine: Option<Dispenser<crate::mine::MineClass>>,
     pub ability: Option<Ability>,
+    /// An `emitterordnance` class's data (the arc casters, the incinerator,
+    /// the flamethrowers; `analysis/re-ordnance-kinds.md` §8). `None` = the
+    /// class is not an emitter.
+    pub emitter: Option<EmitterOrdnance>,
     pub cloak: Option<crate::cloak::CloakClass>,
     pub guided: Option<Box<crate::guided::GuidedWeapon>>,
     pub remote: Option<Box<crate::remote::RemoteWeapon>>,
@@ -415,6 +459,7 @@ impl Default for WeaponClass {
             spread_threshold: 0.0,
             spread_limit: 0.0,
             ordnance: OrdnanceClass::default(),
+            secondary: None,
             fire_sound: None,
             fire_loop_sound: None,
             muzzle_effect: None,
@@ -429,6 +474,7 @@ impl Default for WeaponClass {
             dispenser: None,
             mine: None,
             ability: None,
+            emitter: None,
             cloak: None,
             guided: None,
             remote: None,
@@ -589,6 +635,7 @@ impl WeaponClass {
                     ..Default::default()
                 }),
             },
+            secondary: None,
             fire_sound: Some("all_weap_inf_rifle_fire".into()),
             fire_loop_sound: None,
             muzzle_effect: None,
@@ -603,6 +650,7 @@ impl WeaponClass {
             dispenser: None,
             mine: None,
             ability: None,
+            emitter: None,
             cloak: None,
             guided: None,
             remote: None,
@@ -1170,6 +1218,12 @@ pub struct WeaponState {
     /// blocks triggering; held channel slots draw and holster their weapons.
     pub active: bool,
     pub shots_fired: u64,
+    /// Rounds fired since the weapon was made, 1-based (the first round is 1),
+    /// counted only on a class that carries a [`Secondary`]. Its multiple of
+    /// `Secondary::period` is the round that spawns the tracer
+    /// ([`Secondary::on_round`]). Hashed only when non-zero, so every weapon
+    /// without a secondary keeps the old feed.
+    pub secondary_rounds: u32,
     pub tilt_index: u32,
     /// The charge stage this trigger fires ([`WeaponClass::stage_for`]).
     pub stage: u8,
@@ -1213,6 +1267,7 @@ impl WeaponState {
             ai_dispersion: None,
             active: true,
             shots_fired: 0,
+            secondary_rounds: 0,
             tilt_index: 0,
             issued: class
                 .rounds_per_clip
@@ -1631,6 +1686,10 @@ impl WeaponState {
         if self.tilt_index != 0 {
             eat(b"tilt");
             eat(&self.tilt_index.to_le_bytes());
+        }
+        if self.secondary_rounds != 0 {
+            eat(b"SEC");
+            eat(&self.secondary_rounds.to_le_bytes());
         }
         if let Some(t) = self.lock_target {
             eat(b"LOCK");

@@ -10,8 +10,10 @@ use crate::projectile::{Bolt, Shooter};
 use crate::sticky::{self, Anchor, Contact, Sticky, Surface};
 use crate::unit::Controller;
 use crate::vehicle::VehicleKind;
-use crate::weapon::{shot_direction, FireInput, FireState, ShotSpec};
+use crate::weapon::{shot_direction, FireInput, FireState, OrdKind, ShotSpec};
 use glam::Vec3;
+
+mod tracers;
 
 /// How long a grenade that has touched down is expected to keep bouncing
 /// before its fuse starts (s) — the bots' warning needs an end time at the
@@ -189,6 +191,18 @@ impl Sim {
                 self.fire_ability(i, stage);
                 continue;
             }
+            // An emitter (card UORDE, `analysis/re-ordnance-kinds.md` §8):
+            // an arc caster, incinerator or flamethrower spends its shot as
+            // one instant cone-and-chain query, never a bolt. A zero-damage
+            // emitter (the Force push / pull) keeps the old bolt-and-blast
+            // path until its own card; a cone with no damage would only
+            // early-out of the query.
+            let wc = &self.weapon_classes[stage];
+            if wc.emitter.as_ref().is_some_and(|e| e.is_cone()) && wc.ordnance.max_damage > 0.0 {
+                self.units[i].last_shot_tick = self.tick;
+                self.fire_emitter(i, stage, spec.charge);
+                continue;
+            }
             if self.weapon_classes[stage].mine.is_some() {
                 self.place_mine(i, stage, spec.charge);
                 continue;
@@ -209,6 +223,20 @@ impl Sim {
                 self.launch(i, stage);
                 continue;
             }
+            // BF2's secondary ordnance (`SecondaryOrdnanceName`): count the
+            // round here, after every path that is not a bolt has gone, so
+            // the counter is the weapon's rounds and not its trigger pulls.
+            let secondary = self.weapon_classes[stage].secondary.is_some();
+            let round = if secondary {
+                let st = match held_slot {
+                    Some(k) => &mut self.units[i].held[k].state,
+                    None => &mut self.units[i].weapon,
+                };
+                st.secondary_rounds = st.secondary_rounds.wrapping_add(1);
+                st.secondary_rounds
+            } else {
+                0
+            };
             let dir = shot_direction(
                 &mut self.lcg,
                 fwd,
@@ -219,6 +247,18 @@ impl Sim {
                 spec.tilt,
             );
             let wc = &self.weapon_classes[stage];
+            // The grenade family's launch (§3.3, B1 `FUN_0028ef70`
+            // 215847-215862): a HUMAN owner's round is lifted by the class's
+            // `ShotElevate`, added to the direction's y and renormalised; a
+            // bot's aim is used as it is (§7.3). The mortar is a `grenade`
+            // class and its `_ord1` shell leaves through the same launcher,
+            // so the shell takes the lift too (issue #29).
+            let dir = match wc.thrown {
+                Some(t) if wc.ordnance.kind == OrdKind::Shell && who.is_player => {
+                    sticky::throw_dir(dir, t.shot_elevate)
+                }
+                _ => dir,
+            };
             let who = Shooter {
                 weapon_class: stage,
                 ..who
@@ -274,6 +314,11 @@ impl Sim {
                 dir,
             });
             self.bolts.push(bolt);
+            // The tracer rides the SAME ray the primary round took - it draws
+            // no extra LCG step (the PS2 spawns both from one packet).
+            if secondary {
+                self.fire_secondary(who, stage, round, origin, dir);
+            }
         }
     }
 
@@ -1575,5 +1620,151 @@ mod tests {
         assert!(s.bolts.is_empty(), "the shell is gone");
         let now = s.unit(under).unwrap().health.cur;
         assert!(now < hp, "the air burst hurt him: {hp} -> {now}");
+    }
+
+    /// The BF1 mortar launcher's classes as the disc authors them
+    /// (re-weapon-charge §3: a `grenade` class, ShotElevate 0.1,
+    /// MaxPressedTime 0.75; its `_ord1` shell 40 m/s, Gravity 1.75, 3 s).
+    fn mortar_shell() -> WeaponClass {
+        let mut w = WeaponClass::bf1_rifle();
+        w.name = "mortar".into();
+        w.trigger_single = true;
+        w.max_pressed_time = 0.75;
+        (
+            w.spread_per_shot,
+            w.posture_spread,
+            w.spread_threshold,
+            w.spread_limit,
+        ) = (0.0, [[0.0; 3]; 3], 0.0, 0.0);
+        w.shot_delay = [1.4, 1.4];
+        w.reload_time = 2.0;
+        w.initial_salvo_delay = 0.3;
+        w.ai_range = [10.0, 32.0, 48.0];
+        w.thrown = Some(Thrown {
+            shot_elevate: 0.1,
+            hide_on_fire: true,
+            hand: None,
+        });
+        w.ordnance = OrdnanceClass {
+            velocity: 40.0,
+            life_span: 3.0,
+            max_damage: 150.0,
+            kind: OrdKind::Shell,
+            gravity: 1.75,
+            ..OrdnanceClass::default()
+        };
+        w
+    }
+
+    /// Issue #29, the shell's launch (re-grenades §3.3, B1
+    /// `FUN_0028ef70` 215847-215862): the direction is the aimer's aim, with
+    /// `ShotElevate` added to y and renormalised for a HUMAN owner only - "a
+    /// bot's direction is used as it is" (§7.3). The mortar is a `grenade`
+    /// class and its shell leaves through the same launcher.
+    #[test]
+    fn a_shell_is_lifted_by_shot_elevate_for_a_human_only() {
+        let spec = ShotSpec {
+            tilt: (0.0, 0.0),
+            charge: 0.0,
+            stage: 0,
+            pitch_spread: 0.0,
+            yaw_spread: 0.0,
+        };
+        let dir = |human: bool| {
+            let mut s = Sim::empty(3);
+            s.heightfield = Some(flat_ground());
+            let wc = s.add_weapon_class(mortar_shell());
+            // The SAME bot path both ways (the muzzle and the aim frame);
+            // only the owner's player flag differs, which is what the PS2's
+            // launcher asks (a proxy human is no slotted player either).
+            let u = s
+                .spawn(&UnitSpec {
+                    controller: crate::unit::Controller::Ai,
+                    weapon_class: wc,
+                    ..UnitSpec::trooper(0, Vec3::ZERO)
+                })
+                .unwrap();
+            s.units[u.index as usize].is_player = human;
+            s.units[u.index as usize].soldier.pitch = 0.0;
+            s.soldier_shots(u.index as usize, None, &[spec]);
+            s.events
+                .iter()
+                .find_map(|e| match *e {
+                    Event::Shot { dir, .. } => Some(dir),
+                    _ => None,
+                })
+                .expect("the shell left")
+        };
+        // normalise((0, 0, -1) + (0, 0.1, 0)): y = 0.1 / sqrt(1.01).
+        let want = 0.1 / 1.01f32.sqrt();
+        let human = dir(true);
+        assert!((human.length() - 1.0).abs() < 1e-5, "{human}");
+        assert!(
+            (human.y - want).abs() < 1e-4,
+            "a human's shell carries ShotElevate: {human} against {want}"
+        );
+        // The same class in a bot's hands: the aim, no lift.
+        let bot = dir(false);
+        assert!(bot.y.abs() < 1e-6, "a bot's shell is not lifted: {bot}");
+    }
+
+    /// Issue #29: the mortar's charge-stage swap still separates the two
+    /// ordnance classes - a tap fires the root's `_ord1` SHELL, a hold past
+    /// 0.9 x MaxPressedTime fires the stage's `_ord` sticky
+    /// (`analysis/re-ordnance-kinds.md` §6, `FUN_00285108`).
+    #[test]
+    fn the_mortar_taps_a_shell_and_holds_a_sticky() {
+        use crate::weapon::ChargeStage;
+        for (hold, shell) in [(1u32, true), (40, false)] {
+            let mut s = Sim::empty(5);
+            s.heightfield = Some(flat_ground());
+            let mut stage = mortar_shell();
+            stage.ordnance = OrdnanceClass {
+                velocity: 40.0,
+                life_span: 0.5,
+                ..thermal(false).ordnance
+            };
+            assert!(stage.ordnance.sticky.is_some());
+            let stage_index = s.add_weapon_class(stage.clone());
+            let mut root = mortar_shell();
+            root.stages = vec![ChargeStage {
+                threshold: 0.9,
+                class: Box::new(stage),
+                index: stage_index,
+            }];
+            let wc = s.add_weapon_class(root);
+            let p = s
+                .spawn(&UnitSpec {
+                    weapon_class: wc,
+                    ..UnitSpec::player_in_slot(0, 0, Vec3::ZERO)
+                })
+                .unwrap();
+            s.units[p.index as usize].soldier.pitch = 0.0;
+            let (mut shots, mut thrown) = (Vec::new(), Vec::new());
+            for t in 0..hold + 12 {
+                s.step(&[pad(if t < hold { buttons::FIRE } else { 0 })]);
+                for e in &s.events {
+                    match *e {
+                        Event::Shot { weapon_class, .. } => shots.push(weapon_class as usize),
+                        Event::Throw { weapon_class, .. } => thrown.push(weapon_class as usize),
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(
+                shots.len() + thrown.len(),
+                1,
+                "hold {hold}: {shots:?} {thrown:?}"
+            );
+            if shell {
+                assert_eq!((shots[0], thrown.len()), (wc, 0), "a tap fires the shell");
+            } else {
+                assert_eq!(
+                    (thrown[0], shots.len()),
+                    (stage_index, 0),
+                    "a hold fires the sticky stage"
+                );
+            }
+        }
     }
 }

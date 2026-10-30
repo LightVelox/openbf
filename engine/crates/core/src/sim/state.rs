@@ -185,6 +185,18 @@ pub enum Event {
         origin: Vec3,
         dir: Vec3,
     },
+    /// An emitter shot's lightning link (card UORDE,
+    /// `analysis/re-ordnance-kinds.md` §8): the instant query drew an arc
+    /// from `from` to `to`. Render-only; the damage is already in
+    /// [`Event::Hit`] / [`Event::VehicleHit`]. `weapon_class` indexes
+    /// [`Sim::weapon_classes`] (its emitter's `LightningEffect` names the
+    /// arc).
+    Emitter {
+        unit: UnitHandle,
+        weapon_class: u32,
+        from: Vec3,
+        to: Vec3,
+    },
     Hit {
         shooter: UnitHandle,
         victim: UnitHandle,
@@ -1374,6 +1386,26 @@ impl Sim {
         }
         if let Some(t) = wc.turret.as_mut() {
             t.item.gun_index = self.item_weapon_class(&t.item.gun);
+        }
+        // A secondary ordnance (a BF2 tracer) gets a class entry of its own, so
+        // its bolts carry its own damage (0), LaserTexture and LifeSpan
+        // (`analysis/re-ordnance-kinds.md` §7). Only a TRACER is registered: a
+        // real second round (the sonic blaster's) spawns nothing, so its
+        // `Secondary::index` stays `usize::MAX` and `fire_secondary` skips it.
+        let tracer = wc
+            .secondary
+            .as_ref()
+            .filter(|s| s.ordnance.is_tracer())
+            .map(|sec| WeaponClass {
+                name: sec.name.clone(),
+                ordnance: sec.ordnance.clone(),
+                ..WeaponClass::default()
+            });
+        if let Some(tracer) = tracer {
+            let index = self.add_weapon_class(tracer);
+            if let Some(sec) = wc.secondary.as_mut() {
+                sec.index = index;
+            }
         }
         self.weapon_classes.push(wc);
         self.weapon_classes.len() - 1

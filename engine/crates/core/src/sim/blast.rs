@@ -284,7 +284,14 @@ impl Sim {
     ///   nothing). A droid class rolls its `ChunkFrequency` first
     ///   ([`Sim::chunk_push_roll`], card DROIDDEATH): won, it is marked and
     ///   not pushed.
-    fn kick_and_push(&mut self, h: UnitHandle, e: &ExplosionClass, pos: Vec3, c: Vec3, w: f32) {
+    pub(super) fn kick_and_push(
+        &mut self,
+        h: UnitHandle,
+        e: &ExplosionClass,
+        pos: Vec3,
+        c: Vec3,
+        w: f32,
+    ) {
         let Some(u) = self
             .units
             .get(h.index as usize)

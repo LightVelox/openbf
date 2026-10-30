@@ -120,9 +120,9 @@ impl Sim {
                     .get(slot as usize)
                     .copied()
                     .flatten()
-                    .and_then(|t| match t {
-                        AimTarget::Unit(h) => Some(MissileTarget::Unit(h)),
-                        AimTarget::Vehicle(h) => Some(MissileTarget::Vehicle(h)),
+                    .map(|t| match t {
+                        AimTarget::Unit(h) => MissileTarget::Unit(h),
+                        AimTarget::Vehicle(h) => MissileTarget::Vehicle(h),
                     }),
                 _ => ai_target.and_then(|f| f.unit()).map(MissileTarget::Unit),
             };
@@ -138,3 +138,6 @@ impl Sim {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

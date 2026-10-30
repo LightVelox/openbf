@@ -34,11 +34,15 @@ impl SoldierVisuals {
             .weapon_classes
             .iter()
             .map(|w| {
+                // Every ordnance with a model of its own: the thrown and
+                // placed kinds, and a missile in flight (card UORD — its
+                // class has no `LaserLook`, so this is how it is drawn).
                 if w.ordnance.sticky.is_none()
                     && w.mine.is_none()
                     && w.remote.is_none()
                     && w.turret.is_none()
                     && w.guided.is_none()
+                    && w.ordnance.missile.is_none()
                 {
                     return None;
                 }
@@ -856,6 +860,10 @@ impl SoldierVisuals {
                 let m = Mat4::from_rotation_translation(r.drawn_rotation(), r.pos);
                 (r.weapon_class, m)
             }))
+            // Missiles in flight (card UORD) draw as their class's
+            // `ordnance.geometry`, the way a thrown grenade does; the bolt's
+            // own module says where they are and which way they point.
+            .chain(crate::bolt_vis::missiles_in_flight(walk))
             .chain(sim.mines.iter().map(|m| {
                 let at = Mat4::from_rotation_translation(m.rotation, m.flight.pos);
                 (m.flight.weapon_class, at)

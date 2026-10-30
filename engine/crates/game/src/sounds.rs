@@ -466,6 +466,9 @@ enum LoopSource {
     /// A jet soldier's engine layer (card JETP2), by unit index.
     Jet(u32, u8),
     Guided(u64, u8),
+    /// A round's flight hum (card WHUM), by the round's across-frames key
+    /// (`crate::bolt_vis::key`).
+    Ordnance(crate::bolt_vis::Key),
     Repair(core::unit::UnitHandle, usize),
     Shield(core::unit::UnitHandle),
     WalkerFire(core::unit::UnitHandle, usize),
@@ -1081,6 +1084,41 @@ impl SoundLib {
         }
         self.loops
             .retain(|k, _| !matches!(k, LoopSource::Guided(..)) || live.contains(k));
+        // Card WHUM: the round's own flight hum is the other loop it owns.
+        self.ordnance_hums(audio, sim, listener);
+    }
+
+    /// Card WHUM (`re-weapon-sounds.md` 0.5, 5.2-5.4): every round in
+    /// flight whose class authors `OrdnanceSound` hums on a looping voice
+    /// that follows it, pitched by the PS2's doppler
+    /// ([`crate::event_sounds::ordnance::doppler`]). The voice is asked on
+    /// every tick - a start out of the property's range is refused and a
+    /// looping sound is retried - and stops the tick its round leaves
+    /// `sim.bolts`. Render-only: `sim` is read, never written.
+    pub fn ordnance_hums(
+        &mut self,
+        audio: &mut audio::Audio,
+        sim: &core::sim::Sim,
+        listener: &Listener,
+    ) {
+        let (hums, n) = crate::event_sounds::ordnance::hums(sim, listener);
+        for h in hums[..n].iter().flatten() {
+            let request = LoopRequest {
+                source: LoopSource::Ordnance(h.key),
+                sound: h.sound,
+                pos: h.pos,
+                gain: 1.0,
+                pitch: h.pitch,
+            };
+            self.play_loop_voice(audio, &request, listener);
+        }
+        // A round still in `sim.bolts` keeps its voice; one that left (hit,
+        // expired, recycled) stops it, and `play_loop_voice` retries any
+        // round the property's range refused.
+        self.loops.retain(|k, _| match k {
+            LoopSource::Ordnance(key) => hums[..n].iter().flatten().any(|h| h.key == *key),
+            _ => true,
+        });
     }
 
     /// Stop every engine layer's voice (the pause menu, the battle's end);
