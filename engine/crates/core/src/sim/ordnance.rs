@@ -193,12 +193,15 @@ impl Sim {
             }
             // An emitter (card UORDE, `analysis/re-ordnance-kinds.md` §8):
             // an arc caster, incinerator or flamethrower spends its shot as
-            // one instant cone-and-chain query, never a bolt. A zero-damage
-            // emitter (the Force push / pull) keeps the old bolt-and-blast
-            // path until its own card; a cone with no damage would only
-            // early-out of the query.
+            // one instant cone-and-chain query, never a bolt. The CLASS
+            // dispatches (`ConeLength > 0`, the PS2's own shot test), not its
+            // damage: a zero-damage cone (the Force push / pull family) still
+            // runs its query, and its links are pure shoves. A radius
+            // `emitterordnance` (ConeLength 0) is not a cone and stays on the
+            // `Ability` path above, and a class with an ability never reaches
+            // here.
             let wc = &self.weapon_classes[stage];
-            if wc.emitter.as_ref().is_some_and(|e| e.is_cone()) && wc.ordnance.max_damage > 0.0 {
+            if wc.emitter.as_ref().is_some_and(|e| e.is_cone()) {
                 self.units[i].last_shot_tick = self.tick;
                 self.fire_emitter(i, stage, spec.charge);
                 continue;

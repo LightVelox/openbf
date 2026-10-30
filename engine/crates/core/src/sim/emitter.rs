@@ -90,41 +90,53 @@ impl Sim {
         for hit in &shot.hits {
             let body = targets[hit.index];
             let victim = victims[hit.index];
-            let desc = DamageDesc {
-                damage: hit.damage,
-                scales,
-                shield_scale,
-            };
-            match victim {
-                Victim::Unit(h) => {
-                    let Some(friendly) = self.unit(h).map(|u| u.team == team) else {
-                        continue;
-                    };
-                    let mult = self.buff_scale(Some(unit), h);
-                    let Some(v) = self.unit_mut(h) else { continue };
-                    let damage = v.health.take_damage(&desc, mult, friendly, ff);
-                    if self
-                        .units
-                        .get(unit.index as usize)
-                        .is_some_and(|o| o.gen == unit.gen && o.controller == Controller::Ai)
-                    {
-                        self.nav_stats.ai_hits += 1;
+            // A zero-damage link is a pure shove (the Force push family:
+            // `Damage` 0 with `Push` / `ConeLength` / `MaxTargets`
+            // authored). It takes no health, so it also takes no TakeDamage,
+            // no `Event::Hit` and no per-hit blast: the push and the arc
+            // below are its whole effect. `analysis/re-ordnance-kinds.md` §8
+            // does not state the zero-damage case; the class's own query
+            // (ConeLength > 0) is what dispatches, and `Push` is its knob.
+            if hit.damage > 0.0 {
+                let desc = DamageDesc {
+                    damage: hit.damage,
+                    scales,
+                    shield_scale,
+                };
+                match victim {
+                    Victim::Unit(h) => {
+                        let Some(friendly) = self.unit(h).map(|u| u.team == team) else {
+                            continue;
+                        };
+                        let mult = self.buff_scale(Some(unit), h);
+                        let Some(v) = self.unit_mut(h) else { continue };
+                        let damage = v.health.take_damage(&desc, mult, friendly, ff);
+                        if self
+                            .units
+                            .get(unit.index as usize)
+                            .is_some_and(|o| o.gen == unit.gen && o.controller == Controller::Ai)
+                        {
+                            self.nav_stats.ai_hits += 1;
+                        }
+                        self.nav_stats.bolt_hits += 1;
+                        if friendly && unit != h {
+                            self.nav_stats.friend_hits += 1;
+                        }
+                        self.finish_unit_damage(h, Some(unit), damage, 0.0, aim);
                     }
-                    self.nav_stats.bolt_hits += 1;
-                    if friendly && unit != h {
-                        self.nav_stats.friend_hits += 1;
+                    Victim::Vehicle(h) => {
+                        self.damage_vehicle_by(h, &desc, 1.0, Some(unit), Some(team), Some(aim));
                     }
-                    self.finish_unit_damage(h, Some(unit), damage, 0.0, aim);
                 }
-                Victim::Vehicle(h) => {
-                    self.damage_vehicle_by(h, &desc, 1.0, Some(unit), Some(team), Some(aim));
-                }
-            }
-            // BF2's `Explosion` goes off at each body hit (the Imperial arc
-            // caster's chassis shock).
-            if em.bf2 {
-                if let Some(e) = &ord.explosion {
-                    self.explode(e, body.pos, Some(unit), Some(team));
+                // BF2's `Explosion` goes off at each body hit (the Imperial
+                // arc caster's chassis shock). A zero-damage link skips it:
+                // the Force push's `Explosion` class (`com_weap_inf_force_
+                // push_exp`) authors Damage 0 and Push 0, so in this sim a
+                // zero-damage blast would only add 0-damage `Event::Hit`s.
+                if em.bf2 {
+                    if let Some(e) = &ord.explosion {
+                        self.explode(e, body.pos, Some(unit), Some(team));
+                    }
                 }
             }
             // The shove (`Push`; 0 = none, and then no LCG draw either).
@@ -242,6 +254,42 @@ mod tests {
         }
     }
 
+    /// `com_weap_inf_force_push_ord` (bf2_all.ron): Damage 0 / MaxDamage 0,
+    /// ConeLength 20, ConeAngle 120, MaxTargets 4, hit-all, Push 15.
+    fn force_push() -> EmitterOrdnance {
+        EmitterOrdnance {
+            cone_length: 20.0,
+            cone_angle: 120.0 * DEG,
+            max_targets: 4,
+            jump_deduction: 0.0,
+            damage_threshold: 0.0,
+            max_jump_distance: 0.0,
+            first_radius: 0.0,
+            push: 15.0,
+            lightning: None,
+            affect_friends: true,
+            affect_enemies: true,
+            hit_all: true,
+            radius: 0.0,
+            bf2: true,
+        }
+    }
+
+    /// The Force powers' ordnance authors no damage at all (`Damage` 0).
+    fn no_damage() -> OrdnanceClass {
+        OrdnanceClass::default()
+    }
+
+    fn shot() -> ShotSpec {
+        ShotSpec {
+            tilt: (0.0, 0.0),
+            charge: 1.0,
+            stage: 0,
+            pitch_spread: 0.0,
+            yaw_spread: 0.0,
+        }
+    }
+
     /// A player at `at` aiming +X (yaw -π/2).
     fn shooter(s: &mut Sim, at: Vec3) -> UnitHandle {
         let h = s.spawn(&UnitSpec::player(0, at)).unwrap();
@@ -266,6 +314,16 @@ mod tests {
             .iter()
             .filter_map(|e| match e {
                 Event::Hit { victim, damage, .. } => Some((victim.index, *damage)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn emitter_links(s: &Sim) -> Vec<(Vec3, Vec3)> {
+        s.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Emitter { from, to, .. } => Some((*from, *to)),
                 _ => None,
             })
             .collect()
@@ -426,32 +484,103 @@ mod tests {
         assert_eq!(s.vehicle(h).unwrap().health.cur, 200.0);
     }
 
-    /// A zero-damage cone (the Force push / pull) stays on the bolt path:
-    /// the instant query would early-out and drop its blast.
+    /// A zero-damage cone (the Force push) is still an emitter: the class
+    /// dispatches on its cone, the query shoves the body and spawns no bolt.
     #[test]
-    fn a_zero_damage_emitter_keeps_its_bolt() {
-        let (mut s, class) = sim_with(
-            flame(),
-            OrdnanceClass {
-                max_damage: 0.0,
-                ..Default::default()
-            },
-        );
+    fn a_zero_damage_cone_pushes_and_spawns_no_bolt() {
+        let (mut s, class) = sim_with(force_push(), no_damage());
         let unit = shooter(&mut s, Vec3::ZERO);
         s.units[unit.index as usize].weapon_class = class;
-        s.soldier_shots(
-            unit.index as usize,
-            None,
-            &[ShotSpec {
-                tilt: (0.0, 0.0),
-                charge: 1.0,
-                stage: 0,
-                pitch_spread: 0.0,
-                yaw_spread: 0.0,
-            }],
+        let target = s
+            .spawn(&UnitSpec::trooper(1, Vec3::new(6.0, 0.0, 0.0)))
+            .unwrap();
+        s.soldier_shots(unit.index as usize, None, &[shot()]);
+        assert!(s.bolts.is_empty(), "an emitter spawns no bolt");
+        assert!(hits(&s).is_empty(), "a zero-damage link deals no damage");
+        assert_eq!(s.unit(target).unwrap().health.cur, 300.0);
+        let vel = s.units[target.index as usize].soldier.vel;
+        assert!(vel.x > 1.0, "pushed along the aim: {vel}");
+        assert_eq!(s.nav_stats.knocks, 1);
+        assert_eq!(emitter_links(&s).len(), 1);
+    }
+
+    /// BF1 has no team test: a zero-damage BF1 cone shoves an ally too.
+    #[test]
+    fn bf1_zero_damage_cone_pushes_an_ally() {
+        let mut em = bf1();
+        em.push = 15.0;
+        let (mut s, class) = sim_with(em, no_damage());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        let ally = s
+            .spawn(&UnitSpec::trooper(0, Vec3::new(6.0, 0.0, 0.0)))
+            .unwrap();
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        let vel = s.units[ally.index as usize].soldier.vel;
+        assert!(vel.x > 1.0, "the ally is pushed: {vel}");
+        assert_eq!(s.unit(ally).unwrap().health.cur, 300.0);
+        assert_eq!(emitter_links(&s).len(), 1);
+    }
+
+    /// BF2's `AffectFriends = 0` keeps the ally out of the gather: no push,
+    /// no link, while the enemy behind him is shoved.
+    #[test]
+    fn bf2_affect_friends_false_does_not_push_the_ally() {
+        let mut em = force_push();
+        em.affect_friends = false;
+        let (mut s, class) = sim_with(em, no_damage());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        let ally = s
+            .spawn(&UnitSpec::trooper(0, Vec3::new(6.0, 0.0, 0.0)))
+            .unwrap();
+        let enemy = s
+            .spawn(&UnitSpec::trooper(1, Vec3::new(9.0, 0.0, 0.0)))
+            .unwrap();
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        assert_eq!(s.units[ally.index as usize].soldier.vel, Vec3::ZERO);
+        let vel = s.units[enemy.index as usize].soldier.vel;
+        assert!(vel.x > 1.0, "the enemy is pushed: {vel}");
+        assert_eq!(emitter_links(&s), vec![(s.unit(unit).unwrap().muzzle(), Vec3::new(9.0, 1.0, 0.0))]);
+    }
+
+    /// The line of sight gates a push as it gates a damaging link.
+    #[test]
+    fn a_wall_stops_a_push() {
+        let (mut s, class) = sim_with(force_push(), no_damage());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        let target = s
+            .spawn(&UnitSpec::trooper(1, Vec3::new(6.0, 0.0, 0.0)))
+            .unwrap();
+        s.collision.push_body(Body::new(
+            Mat4::from_translation(Vec3::new(3.0, 1.0, 0.0)),
+            Shape::Box {
+                half: Vec3::new(0.2, 2.0, 0.6),
+            },
+        ));
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        assert_eq!(s.units[target.index as usize].soldier.vel, Vec3::ZERO);
+        assert_eq!(s.unit(target).unwrap().health.cur, 300.0);
+        assert!(emitter_links(&s).is_empty());
+    }
+
+    /// A push link emits its arc record like a damaging one: one record per
+    /// body in the cone, from the muzzle to the body point.
+    #[test]
+    fn a_push_emits_one_arc_per_link() {
+        let (mut s, class) = sim_with(force_push(), no_damage());
+        let unit = shooter(&mut s, Vec3::ZERO);
+        s.spawn(&UnitSpec::trooper(1, Vec3::new(6.0, 0.0, 0.0)))
+            .unwrap();
+        s.spawn(&UnitSpec::trooper(1, Vec3::new(9.0, 0.0, 0.0)))
+            .unwrap();
+        s.fire_emitter(unit.index as usize, class, 1.0);
+        let muzzle = s.units[unit.index as usize].muzzle();
+        assert_eq!(
+            emitter_links(&s),
+            vec![
+                (muzzle, Vec3::new(6.0, 1.0, 0.0)),
+                (muzzle, Vec3::new(9.0, 1.0, 0.0)),
+            ]
         );
-        assert_eq!(s.bolts.len(), 1);
-        assert!(!s.events.iter().any(|e| matches!(e, Event::Emitter { .. })));
     }
 
     /// The weapon path routes an emitter class here, not to a bolt.

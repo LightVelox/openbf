@@ -67,6 +67,13 @@ pub struct Shot {
 /// `floor_damage` is its base `Damage` key, the hit-all mode's per-body
 /// floor. `los(from, to)` must be true when `to` is visible from `from`
 /// (the sim passes [`crate::perception::los`]).
+///
+/// The query is selected by the CLASS, not by the damage: the PS2's shot
+/// runs the cone whenever `ConeLength > 0` (`re-officer-abilities.md`'s
+/// reading of `FUN_00315f78`), so a zero-damage class (the Force push /
+/// pull family: `Damage` 0 with `Push` / `ConeLength` / `MaxTargets`
+/// authored) still gathers and links its bodies. Its links deal 0 and the
+/// sim turns them into pure shoves.
 #[allow(clippy::too_many_arguments)]
 pub fn query(
     e: &EmitterOrdnance,
@@ -83,7 +90,7 @@ pub fn query(
         hits: Vec::new(),
     };
     let aim = aim.normalize_or_zero();
-    if !e.is_cone() || aim == Vec3::ZERO || damage <= 0.0 {
+    if !e.is_cone() || aim == Vec3::ZERO {
         return shot;
     }
     // The gather: BF1's mask has soldiers, riders and shields only; BF2 adds
