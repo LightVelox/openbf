@@ -213,8 +213,12 @@ if want side; then
   # First person (card FPA): every FPM LVL's arm model (the soldier class's
   # `FirstPerson` key; cockpit models carry no hp_camera and are skipped) with
   # the 11-column clip table's clips, and every `HighResGeometry` weapon.
-  "$BAKE" fpm "$A1" "$OUT/side_bf1" "$B1"/FPM/*/*.LVL
-  "$BAKE" fpm "$B2/INGAME.LVL" "$OUT/side_bf2" "$B2"/FPM/*/*.LVL
+  shopt -s nocaseglob nullglob
+  FPM1=("$B1"/FPM/*/*.LVL)
+  FPM2=("$B2"/FPM/*/*.LVL)
+  shopt -u nocaseglob nullglob
+  "$BAKE" fpm "$A1" "$OUT/side_bf1" "${FPM1[@]}"
+  "$BAKE" fpm "$B2/INGAME.LVL" "$OUT/side_bf2" "${FPM2[@]}"
   W1ST=fusioncutter,launcher,pistol,rifle,sniperrifle
   for g in 1 2; do
     eval "G=\$B$g"
