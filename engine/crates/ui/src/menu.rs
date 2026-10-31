@@ -30,6 +30,7 @@ pub struct MenuModel {
     pub music_volume: f32,
     pub mouse_sensitivity: f32,
     pub invert_y: bool,
+    pub first_person: bool,
     pub cursor: usize,
     /// Pending pause-menu Respawn confirmation (re-spawn-flow §7).
     pub respawn_confirm: bool,
@@ -57,6 +58,7 @@ pub enum MenuAction {
     SetMusic(f32),
     SetMouseSensitivity(f32),
     ToggleInvertY,
+    ToggleViewpoint,
     Quit,
 }
 
@@ -140,6 +142,7 @@ pub enum Row {
     Assist,
     AiCap,
     Reinforcements,
+    Viewpoint,
     Fov,
     Music,
     MouseSensitivity,
@@ -162,6 +165,7 @@ pub fn rows(m: &MenuModel) -> Vec<Row> {
     v.push(Row::Music);
     v.push(Row::MouseSensitivity);
     v.push(Row::InvertY);
+    v.push(Row::Viewpoint);
     if m.in_shell.is_none() {
         if m.respawn_label.is_some() {
             v.push(Row::Respawn);
@@ -271,6 +275,9 @@ pub fn navigate(m: &MenuModel, input: MenuInput) -> (usize, Vec<MenuAction>) {
         }
         Row::InvertY if input.confirm || input.left || input.right => {
             actions.push(MenuAction::ToggleInvertY)
+        }
+        Row::Viewpoint if input.confirm || input.left || input.right => {
+            actions.push(MenuAction::ToggleViewpoint)
         }
         Row::Quit if input.confirm => actions.push(MenuAction::Quit),
         _ => {}
@@ -385,6 +392,19 @@ pub fn draw_menu(ctx: &egui::Context, m: &MenuModel) -> Vec<MenuAction> {
                                 let (label, value) = population_row(m, *row).unwrap();
                                 row_label(ui, sel, label.into(), Some(value))
                             }
+                            Row::Viewpoint => row_label(
+                                ui,
+                                sel,
+                                "Viewpoint".into(),
+                                Some(
+                                    if m.first_person {
+                                        "1st Person"
+                                    } else {
+                                        "3rd Person"
+                                    }
+                                    .into(),
+                                ),
+                            ),
                             Row::Fov => row_label(
                                 ui,
                                 sel,
@@ -424,6 +444,7 @@ pub fn draw_menu(ctx: &egui::Context, m: &MenuModel) -> Vec<MenuAction> {
                                 Row::Resume => actions.push(MenuAction::Resume),
                                 Row::Cheat(k) => actions.push(MenuAction::ToggleCheat(*k)),
                                 Row::InvertY => actions.push(MenuAction::ToggleInvertY),
+                                Row::Viewpoint => actions.push(MenuAction::ToggleViewpoint),
                                 Row::Quit => actions.push(MenuAction::Quit),
                                 _ => {}
                             }
@@ -627,6 +648,7 @@ mod tests {
             music_volume: 1.0,
             mouse_sensitivity: 1.0,
             invert_y: false,
+            first_person: false,
             cursor: 0,
             respawn_confirm: false,
             respawn_label: Some("Respawn".into()),

@@ -167,6 +167,11 @@ fn team_templates(
                     let mut visual = game::walk::ClassVisual::from_roster(c);
                     visual.held_hud = c.held.iter().map(|h| (h.slot, h.hud.clone())).collect();
                     visual.held_models = c.held.iter().map(|h| (h.slot, h.geometry.clone())).collect();
+                    visual.first_person_held = c
+                        .held
+                        .iter()
+                        .map(|h| (h.slot, h.first_person.clone()))
+                        .collect();
                     visuals.push(visual);
                 }
                 sim.classes[team] = table;

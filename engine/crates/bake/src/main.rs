@@ -112,6 +112,7 @@ fn main() -> Result<()> {
             Path::new(&args[5]),
             args.get(6).map(String::as_str),
         ),
+        Some("fpm") if args.len() >= 5 => bake::fpm::bake_fpms(&args[4..], &args[2], &args[3]),
         Some("weapon") if args.len() == 5 || args.len() == 6 => {
             let pc = args.get(5).map(String::as_str);
             for model in args[3].split(',') {
@@ -343,6 +344,7 @@ fn main() -> Result<()> {
                  \x20 bake heroes     <BF2 DATA/_LVL_PS2> <side_bf2 outdir>\n\
                  \x20 bake combos     <side.lvl> <out.ron>\n\
                  \x20 bake weapon     <side.lvl[,lvl]> <model[,model]> <outdir> [pc.lvl]\n\
+                 \x20 bake fpm        <anim.lvl> <outdir> <fpm.lvl>...\n\
                  \x20 bake droid-chunks <bf1-cis.lvl> <bf2-cis.lvl> <bf1-common.lvl> <outroot> [pc-cis.lvl]\n\
                  \x20 bake vehicle    <side.lvl> <outdir> [pc.lvl]     every vehicle class: models, chunks, collision\n\
                  \x20 bake effects    <side.lvl> <outdir> bf1|bf2   fx__ particle effects + their textures/models\n\
